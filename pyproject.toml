@@ -1,0 +1,39 @@
+[project]
+name = "odoo-sheller"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "httpx2>=2",
+    "mcp[cli]>=1.0",
+    "uvicorn[standard]>=0.30",
+]
+
+[project.optional-dependencies]
+# httpx2, not httpx: starlette>=1.0 imports httpx2 in starlette.testclient and
+# warns that httpx is deprecated there.
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "httpx2>=2", "ruff>=0.6"]
+
+# uv sync installs the `dev` group by default. Keep in sync with the extra above
+# so `pip install -e ".[dev]"` still works.
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "httpx2>=2",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["odoo_sheller*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = ["e2e: needs a running Odoo 19 container"]
+
+[tool.ruff]
+line-length = 100

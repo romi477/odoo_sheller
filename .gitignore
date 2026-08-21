@@ -1,0 +1,9 @@
+.venv/
+.vscode/
+.superpowers/
+__pycache__/
+
+docs_/
+
+*.egg-info/
+.pytest_cache/

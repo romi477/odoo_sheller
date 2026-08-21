@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>odoo-sheller</title>
+  <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/vendor/codemirror.min.css">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app">
+    <nav id="top">
+      <a class="brand" href="https://github.com/romi477/odoo_sheller" target="_blank" rel="noopener noreferrer" title="odoo-sheller on GitHub">
+        <img class="logo" src="/static/logo.svg" alt="" width="18" height="18">
+        <span class="wordmark">odoo-sheller.<sub>v1.0.0</sub></span>
+      </a>
+      <div class="nav-tabs">
+        <button data-screen="connect" class="active" title="Running containers. Probe and start a session. ⇧←/→ switches tabs.">Connect</button>
+        <span class="nav-divider" aria-hidden="true"></span>
+        <button data-screen="sessions" title="Live sessions. Type and run ORM code. ⇧←/→ switches tabs.">Sessions · <span id="session-count">0</span></button>
+        <span class="nav-divider" aria-hidden="true"></span>
+        <button data-screen="journals" title="Past sessions, kept as files after close. ⇧←/→ switches tabs.">Journals</button>
+      </div>
+      <div class="nav-end">
+        <a id="api-docs" href="/docs" title="Swagger UI for the HTTP API.">swagger</a>
+        <span id="offline" hidden>daemon unreachable</span>
+      </div>
+    </nav>
+    <main class="shell">
+
+    <section id="screen-connect" class="screen">
+      <header class="screen-head">
+        <div>
+          <h1>Containers</h1>
+          <p>Pick one to probe it and start a session.</p>
+        </div>
+        <button id="refresh" title="Re-run docker ps and probe every container again.">Refresh</button>
+      </header>
+      <ul id="containers"></ul>
+      <template id="container-card">
+        <li class="card">
+          <div class="row">
+            <div class="identity">
+              <span class="name-line">
+                <span class="name mono"></span>
+                <span class="badge connected" hidden></span>
+              </span>
+            </div>
+            <button class="open" title="Pick a database and start a session on this container.">Open session</button>
+            <button class="close-connected" hidden title="Close the session on this container. Uncommitted work is discarded.">Close session</button>
+            <button class="reprobe" title="Looks for odoo-bin on PATH or at a few common locations (/opt/odoo/odoo-bin, /usr/bin/odoo, /odoo/odoo-bin, /mnt/odoo/odoo-bin, /usr/lib/python3/dist-packages/odoo-bin) — first one found wins, exact layout doesn't matter. A config file is optional, only used for the default database and Postgres credentials; checked at $ODOO_RC, /etc/odoo/odoo.conf, /etc/odoo.conf, /opt/odoo.conf, next to odoo-bin, or ~/.odoorc. Re-run this after a restart or a config change.">re-probe</button>
+          </div>
+          <div class="card-facts">
+            <span class="meta"></span>
+            <p class="probe-note">probing container…</p>
+          </div>
+          <div class="picker" hidden>
+            <select class="databases"></select>
+            <input class="database-manual mono" placeholder="database name" hidden>
+            <button class="start primary" title="Open the session. Odoo loads its registry once; then commands are cheap.">Start</button>
+          </div>
+          <div class="startup-log" hidden></div>
+        </li>
+      </template>
+    </section>
+
+    <section id="screen-sessions" class="screen" hidden>
+      <div id="session-tabs"></div>
+      <div id="session-panels"></div>
+      <template id="session-panel">
+        <article class="session">
+          <header class="session-head">
+            <div class="session-identity">
+              <span class="identity-line">
+                <span class="target mono"></span>
+                <span class="badges">
+                  <span class="state badge"></span>
+                  <span class="owner-badge badge" hidden></span>
+                </span>
+              </span>
+              <span class="meta-line">
+                <span class="odoo"></span>
+                <span class="meta-slash" aria-hidden="true">/</span>
+                <button type="button" class="session-id mono" title="Copy this session id for the API."></button>
+              </span>
+            </div>
+            <div class="session-keys" role="toolbar" aria-label="Session controls">
+              <button type="button" class="session-key grant-commit" role="switch" aria-pressed="false" aria-label="Grant commit" title="Grant commit — Let this agent write to the database, or take the right away again.">Grant commit</button>
+              <button type="button" class="session-key grant-access" role="switch" aria-pressed="false" aria-label="Grant access" title="Grant access — Hand this session to an agent. You keep watching; you stop typing.">Grant access</button>
+              <button type="button" class="session-key close" aria-label="Close" title="Close — End the session. Uncommitted work is discarded.">Close</button>
+              <button type="button" class="session-key kill" aria-label="Force kill" title="Force kill — SIGKILL now, no Odoo teardown. Use when Close is not enough.">Kill</button>
+              <button type="button" class="session-key interrupt" aria-label="Interrupt" title="Interrupt — Send SIGINT to the running command. The session stays alive.">Interrupt</button>
+              <button type="button" class="session-key rollback" aria-label="Rollback" title="Rollback — Discard the open transaction. Nothing is written.">Rollback</button>
+              <button type="button" class="session-key commit" aria-label="Commit" title="Commit — Write the open transaction to the database. Asks for confirmation.">Commit</button>
+              <button type="button" class="session-key new" aria-label="New" title="New — Open another session on the same container and database. Stay on this tab.">New</button>
+            </div>
+          </header>
+          <div class="socket-offline" hidden>Live updates unavailable — reconnecting when the daemon is reachable again.</div>
+          <div class="dead-cause" hidden>
+            <strong>Process died</strong>
+            <p class="dead-cause-label">Last stderr lines (likely cause):</p>
+            <pre class="dead-cause-lines"></pre>
+          </div>
+          <section class="editor-pane">
+            <div class="editor-label">
+              <span>EDITOR</span>
+              <span class="editor-label-actions">
+                <span class="hint">⌘+Enter to run · ↑↓ history</span>
+                <button class="editor-height">taller</button>
+              </span>
+            </div>
+            <div class="editor"></div>
+          </section>
+          <section class="feed">
+            <header class="feed-head" hidden>
+              <span>CELLS</span>
+              <button class="feed-fold fold-mark collapse" type="button" title="Collapse all" aria-label="Collapse all cells"></button>
+            </header>
+            <div class="feed-cards"><p class="empty">No commands yet — press ⌘+Enter to run</p></div>
+          </section>
+          <footer class="logs">
+            <div class="logs-head">
+              <button type="button" class="logs-toggle" title="Show or hide Odoo’s stderr tail.">Logs (odoo stderr)</button>
+              <div class="logs-head-end">
+                <select class="log-filter" hidden aria-label="Log level" title="Show only lines that include this log level.">
+                  <option value="">All levels</option>
+                  <option value="ERROR">Errors</option>
+                  <option value="WARNING">Warnings</option>
+                  <option value="INFO">Info</option>
+                  <option value="DEBUG">Debug</option>
+                </select>
+                <span class="log-count">0 new</span>
+                <button type="button" class="logs-focus fold-mark expand" hidden title="Hide the editor and cell feed so the log fills the pane." aria-label="Expand logs"></button>
+                <button type="button" class="logs-close" hidden title="Hide Odoo’s stderr tail." aria-label="Close logs">×</button>
+              </div>
+            </div>
+            <pre class="log-lines" hidden></pre>
+          </footer>
+        </article>
+      </template>
+    </section>
+
+    <section id="screen-journals" class="screen" hidden>
+      <h1>Journals <span class="journal-index-count" hidden></span></h1>
+      <p>One journal file per session, grouped by container and database.</p>
+      <p class="warning">Journals are unmasked and may contain credentials read from the database.</p>
+      <div id="journal-index">
+        <div id="journal-groups"></div>
+      </div>
+      <section id="journal-view" hidden>
+        <header class="journal-view-head">
+          <span class="journal-view-title mono"></span>
+          <div class="journal-view-actions">
+            <button type="button" class="journal-focus fold-mark expand" title="Hide the list and give the transcript the whole pane." aria-label="Expand journal"></button>
+            <button type="button" class="journal-close" title="Close the transcript and return to the list." aria-label="Close journal">×</button>
+          </div>
+        </header>
+        <pre id="journal-preview" class="journal-preview"></pre>
+      </section>
+    </section>
+    </main>
+  </div>
+
+  <script src="/vendor/codemirror.min.js"></script>
+  <script src="/vendor/python.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
