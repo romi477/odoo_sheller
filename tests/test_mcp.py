@@ -241,7 +241,7 @@ def test_the_module_never_writes_to_stdout():
 
 def test_tools_declare_their_nature():
     names = {tool.name for tool in server.mcp._tool_manager.list_tools()}
-    assert {"os_exec", "os_commit", "os_open_session", "os_journal"} <= names
+    assert {"os_exec", "os_commit", "os_open_session", "os_journal", "os_session"} <= names
 
 
 async def test_history_answers_in_the_same_shape_as_exec(wired, monkeypatch):
@@ -400,3 +400,34 @@ def test_the_instructions_mention_set_operators_and_ensure_one():
     assert "intersection" in text and "difference" in text
     assert "self.ensure_one()" in text
     assert "one-record recordsets" in text
+
+
+async def test_os_session_reports_whether_commit_is_granted(wired):
+    """A grant happens in the UI; the agent has to read it, not wait to be told."""
+    described = await server.os_session()
+    assert described["id"] == "s1"
+    assert described["allow_commit"] is False
+    assert described["state"] == "ready"
+    wired.session.allow_commit = True
+    assert (await server.os_session())["allow_commit"] is True
+
+
+def test_the_instructions_say_to_poll_os_session_for_a_grant():
+    """'Wait' without a tool leaves the agent asking the human if they granted it."""
+    text = server.INSTRUCTIONS
+    assert "os_session" in text
+    assert "allow_commit" in text
+    assert "will not be told in chat" in text.lower()
+
+
+def test_the_instructions_say_to_close_a_finished_session():
+    text = server.INSTRUCTIONS
+    assert "os_close_session" in text
+    assert "more steps" in text
+
+
+def test_the_instructions_say_how_to_run_with_delay_inline():
+    text = server.INSTRUCTIONS
+    assert "queue_job__no_delay" in text
+    assert "with_delay()" in text
+    assert "env = env(context=dict(env.context, queue_job__no_delay=True))" in text

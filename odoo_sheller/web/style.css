@@ -632,6 +632,23 @@ input {
   color: var(--muted-low);
 }
 
+.session-opened {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5em;
+  min-width: 0;
+}
+
+.session-opened[hidden] {
+  display: none;
+}
+
+.session-age {
+  color: var(--muted-low);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
 .socket-offline,
 .dead-cause {
   flex: 0 0 auto;
@@ -1035,7 +1052,7 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
   gap: 8px;
   min-height: 0;
   padding: 6px 0 12px;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .session.logs-open .feed {
@@ -1080,9 +1097,16 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
 .feed-cards {
   display: grid;
   align-content: start;
+  grid-auto-rows: min-content;
   gap: 10px;
-  flex: 0 0 auto;
-  min-height: min-content;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: none;
+}
+
+.feed-cards::-webkit-scrollbar {
+  display: none;
 }
 
 .feed-cards > .empty {

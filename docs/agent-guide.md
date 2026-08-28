@@ -34,6 +34,7 @@ no way for an agent to grant itself write access.
 | `os_open_session` | `container`, `database`, `odoo_bin`, `replace=None` | opens as `agent`, `allow_commit=False`; stores the write key for you |
 | `os_attach_session` | `session_id`, `write_key` | adopts a session a human handed over |
 | `os_list_sessions` | — | every session with its owner and state (read-only) |
+| `os_session` | `session_id=None` | one session's state, including `allow_commit` (read-only) |
 | `os_exec` | `code`, `session_id=None` | blocks; returns stdout, result, error, duration |
 | `os_rollback` | `session_id=None` | discards the open transaction |
 | `os_commit` | `session_id=None` | fails unless the human has granted commit |
@@ -67,7 +68,14 @@ The MCP server ships its own instructions text, which an agent using it will
 see directly. In short:
 
 - Commit writes to a real database — only call `os_commit` after the human
-  has granted it, and if it's refused, ask again rather than retrying blind.
+  has granted it. A grant happens in the UI and is not announced in chat:
+  poll `os_session` until `allow_commit` is true, then commit. Once granted,
+  later commits in that session need no further check-in.
+- `with_delay()` enqueues a job; this session will not run the queue. Put
+  `queue_job__no_delay=True` on the environment context to run delayed
+  methods inline.
+- Close a session with `os_close_session` when the work is finished and you
+  do not plan to continue. Leaving it open across many steps is fine.
 - Work only in sessions you opened yourself or were explicitly handed. Never
   attach with a write key you weren't given.
 - Never touch `~/.odoo-sheller/` directly and never call the daemon's admin

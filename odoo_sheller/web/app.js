@@ -39,6 +39,7 @@ function newSessionRecord(info) {
     duplicating: false,
     hydrated: false,
     awaitingInFlight: false,
+    openedAt: null,
   };
 }
 
@@ -716,6 +717,9 @@ function attachSession(info, reattached = false) {
   }
   const record = newSessionRecord(info);
   record.reattached = reattached;
+  if (!reattached) {
+    record.openedAt = Date.now();
+  }
   state.sessions.set(info.id, record);
   state.activeSession ||= info.id;
   connectSocket(info.id);
@@ -765,6 +769,13 @@ function cellsFromHistory(data, previous) {
 }
 
 function applyHistory(record, data) {
+  const opened = data.session && data.session.opened_at;
+  if (opened) {
+    const start = Date.parse(opened);
+    if (!Number.isNaN(start)) {
+      record.openedAt = start;
+    }
+  }
   record.history = data.history || [];
   record.historyIndex = record.history.length;
   const execs = (data.entries || []).filter((entry) => entry.kind === 'exec');
@@ -962,6 +973,7 @@ function bindSessionPanel(panel, id, record) {
   if (sessionId.dataset.flash !== 'copied') {
     sessionId.textContent = `session ${id}`;
   }
+  paintSessionAge(record);
   const badge = panel.querySelector('.state');
   badge.textContent = record.socketOffline ? `${record.info.state} · socket offline` : record.info.state;
   const badgeClasses = ['state', 'badge', record.info.state];
@@ -2176,6 +2188,37 @@ function formatStamp(value) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function formatClock(date) {
+  const pad = (part) => String(part).padStart(2, '0');
+
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function paintSessionAge(record) {
+  const wrap = record.panel?.querySelector('.session-opened');
+  const age = record.panel?.querySelector('.session-age');
+  if (!wrap || !age) {
+
+    return;
+  }
+  if (!record.openedAt) {
+    wrap.hidden = true;
+
+    return;
+  }
+  wrap.hidden = false;
+  const date = new Date(record.openedAt);
+  const seconds = Math.max(0, Math.floor((Date.now() - record.openedAt) / 1000));
+  age.textContent = `${formatClock(date)} (${seconds}s)`;
+  age.title = formatStamp(date.toISOString());
+}
+
+function tickSessionAges() {
+  for (const record of state.sessions.values()) {
+    paintSessionAge(record);
+  }
+}
+
 // The registry socket is how a session opened by someone else — an agent, or
 // another tab — shows up here without a reload.
 function connectRegistrySocket() {
@@ -2295,4 +2338,5 @@ function restoreScreen() {
 
 connectRegistrySocket();
 restoreScreen();
+setInterval(tickSessionAges, 1000);
 Promise.allSettled([loadContainers(), reattachSessions()]);

@@ -52,6 +52,12 @@ one tool a dead session still answers: it returns the transcript, and says so in
 `session.state` and `session.gone`. Read the transcript, treat the session as
 over.
 
+A session may stay open for as long as you have more steps to run in it —
+that is what a workspace is. When the work is finished and you do not plan
+to continue, close it with os_close_session. An idle session still holds a
+process inside the container. Closing discards uncommitted work, the same
+as rollback.
+
 ## Ownership
 
 Every session has one owner. Yours are owned by you; the human's are owned by
@@ -82,12 +88,13 @@ ready session; the only question is whether persisting it is allowed yet.
 Your sessions open with the right off, and os_commit answers
 `commit_not_allowed` until it is granted. The first time that happens:
 
-1. Stop. Do not retry the commit — the answer will not change by itself.
+1. Stop. Do not retry os_commit — spinning on it will not see the grant.
 2. Tell the human, in plain words, what you want to write and why: which records,
    how many, and what would be wrong if it were rolled back instead.
-3. Wait. They read the session's feed — they see every command you ran — and
-   grant the right in the UI (session header keyboard, Grant commit).
-4. Only then call os_commit again.
+3. They grant the right in the UI (session header keyboard, Grant commit).
+   You will not be told in chat: call os_session and look at allow_commit.
+   Repeat until it is true, then call os_commit.
+4. Do not ask them whether they have granted it. os_session is how you know.
 
 Once granted, the right stays granted — call os_commit directly for any later
 commit in this same session, with no need to repeat this ritual first. It
@@ -144,6 +151,19 @@ out of a dict. A helper that is only meant to run against a single record
 should open with `self.ensure_one()` rather than assuming — it raises
 immediately and clearly instead of the ambiguous behavior of reading a
 multi-record field.
+
+## Delayed jobs
+
+`with_delay()` enqueues a job; this session will not run the queue for you.
+To run a delayed method inline instead of enqueueing it, put
+`queue_job__no_delay` on the environment context. Nested `with_delay()`
+calls inherit it, so the whole chain runs on the spot:
+
+    env = env(context=dict(env.context, queue_job__no_delay=True))
+    record.with_delay().do_work()
+
+A recordset you already hold still has the old context: call
+`.with_context(queue_job__no_delay=True)` on it before `with_delay()`.
 
 ## Being watched
 
@@ -293,6 +313,23 @@ async def os_open_session(
 
 @mcp.tool(
     description=(
+        "Current state of a session: owner, whether it is ready, and whether "
+        "commit has been granted. Read-only. After asking for Grant commit, "
+        "call this until allow_commit is true — do not wait for a chat message."
+    ),
+    annotations=ToolAnnotations(read_only_hint=True),
+)
+async def os_session(session_id: str | None = None) -> Any:
+    target = _default_session(session_id)
+    if isinstance(target, dict):
+
+        return target
+
+    return await _call("GET", f"/api/sessions/{target}", target)
+
+
+@mcp.tool(
+    description=(
         "Adopt a session a human handed over, using the id and write key they gave "
         "you. The id alone grants nothing; never attach with a key you were not given."
     ),
@@ -365,7 +402,8 @@ async def os_rollback(session_id: str | None = None) -> Any:
         "Write the open transaction to the database — the only tool here that "
         "persists anything. Refused with commit_not_allowed unless a human has "
         "granted this session the right: if refused, say what you want to write "
-        "and why, and wait for them to grant it. Retrying will not help."
+        "and why, then poll os_session until allow_commit is true. Retrying "
+        "os_commit will not see the grant."
     ),
     annotations=ToolAnnotations(destructive_hint=True),
 )

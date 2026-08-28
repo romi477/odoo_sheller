@@ -69,6 +69,13 @@ on the registry itself, not only on sessions it opened. A session someone
 else owns opens in **observer mode**: you see its feed and its Odoo log tail
 live, but the editor is hidden and there's nothing to type into.
 
+Under the title, the meta line is Odoo version, the session id (click to
+copy), then the local start time and how many seconds the session has been
+open — `14:42:07 (18s)`. The seconds tick in place; the rest of the header
+does not redraw. Hover the clock for the same date stamp the Journals screen
+uses. A session this tab opened stamps itself immediately; one that arrived
+from a reload or from someone else waits for the journal's `opened_at`.
+
 ### Ownership
 
 The header shows who owns the session: yours has the editor, someone else's
@@ -138,7 +145,8 @@ with its traceback, and how long it took.
 - Click a card's header (not just the small fold dot) to collapse it to just
   that header, or expand it again. A card an *agent* ran starts collapsed;
   one you ran yourself starts open. The `CELLS` heading folds or unfolds
-  every card at once.
+  every card at once. The feed scrolls without a visible scrollbar, so that
+  fold control stays clickable.
 - A running cell shows a spinner and a live elapsed-seconds counter — output
   for this version arrives in one piece at the end, so the counter is the
   only progress signal there is while it's still running.

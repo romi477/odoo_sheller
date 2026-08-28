@@ -72,7 +72,7 @@ def test_page_makes_no_external_requests():
 
 
 def test_wordmark_carries_the_package_version(markup):
-    """Version sits after odoo-sheller., as v1.0.0, not a second brand mark."""
+    """Version sits after odoo-sheller., as vX.Y.Z from pyproject, not a second brand mark."""
     html = (WEB / "index.html").read_text(encoding="utf-8")
     pyproject = tomllib.loads((WEB.parent.parent / "pyproject.toml").read_text(encoding="utf-8"))
     version = pyproject["project"]["version"]
@@ -142,6 +142,27 @@ def test_cell_timer_updates_without_a_full_rerender(app_js):
     assert body is not None
     assert "updateCellDuration" in body.group(0)
     assert "renderSessions" not in body.group(0)
+
+
+def test_session_age_ticks_without_a_full_rerender(app_js):
+    """A 1s header tick that called renderSessions would fight the editor the same way."""
+    body = re.search(r"function tickSessionAges\(.*?\n\}", app_js, re.DOTALL)
+    assert body is not None
+    assert "paintSessionAge" in body.group(0)
+    assert "renderSessions" not in body.group(0)
+    assert "setInterval(tickSessionAges" in app_js
+
+
+def test_session_age_uses_history_or_a_local_stamp(app_js):
+    """GET /api/sessions has no opened_at; history does, and a tab that opened it knows when."""
+    history = re.search(r"function applyHistory\(.*?\n\}", app_js, re.DOTALL)
+    assert history is not None
+    assert "opened_at" in history.group(0)
+    assert "openedAt" in history.group(0)
+    attach = re.search(r"function attachSession\(.*?\n\}", app_js, re.DOTALL)
+    assert attach is not None
+    assert "openedAt" in attach.group(0)
+    assert "reattached" in attach.group(0)
 
 
 def test_editor_is_refreshed_after_being_reattached(app_js):
@@ -981,6 +1002,24 @@ def test_journal_list_hides_its_scrollbar():
     assert "display: none" in webkit.group(1)
 
 
+def test_cell_feed_hides_its_scrollbar():
+    """Trackpad still scrolls; a visible bar sits on Collapse all."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    feed = re.search(r"\.feed\s*\{([^}]*)\}", css)
+    assert feed is not None
+    assert "overflow: auto" not in feed.group(1)
+    cards = re.search(r"\.feed-cards\s*\{([^}]*)\}", css)
+    assert cards is not None
+    assert "overflow: auto" in cards.group(1)
+    assert "scrollbar-width: none" in cards.group(1)
+    assert "grid-auto-rows: min-content" in cards.group(1), (
+        "a definite-height grid shrinks overflow:hidden cells; unfold then shows nothing"
+    )
+    webkit = re.search(r"\.feed-cards::-webkit-scrollbar\s*\{([^}]*)\}", css)
+    assert webkit is not None
+    assert "display: none" in webkit.group(1)
+
+
 def test_closing_the_journal_preview_returns_to_the_list(app_js, markup):
     assert "journal-close" in markup.classes
     body = re.search(r"function closeJournalPreview\(.*?\n\}", app_js, re.DOTALL)
@@ -1210,6 +1249,8 @@ def test_session_keyboard_is_a_fixed_two_row_grid(markup, app_js):
     assert identity.group(1).find("target") < identity.group(1).find("badges")
     assert 'class="meta-line"' in identity.group(1)
     assert identity.group(1).find("odoo") < identity.group(1).find("session-id")
+    assert identity.group(1).find("session-id") < identity.group(1).find("session-age")
+    assert 'class="session-opened"' in identity.group(1)
     assert 'class="meta-slash"' in identity.group(1)
     assert "grant-commit" not in block.split('class="session-keys"', 1)[0]
     assert 'class="session-keys"' in block

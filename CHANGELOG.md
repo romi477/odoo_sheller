@@ -9,6 +9,38 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 Nothing yet.
 
+## [1.1.0] — 2026-08-28
+
+The MCP server now spells out the working habits that were left as guesswork:
+how to run delayed jobs in the shell, when to close a session, and how to
+notice Grant commit without being told in chat. A new read-only tool carries
+the last of those. The web UI is unchanged at the protocol: a session clock
+on the header, and a cell feed that scrolls without a visible bar.
+
+### Agent access
+
+- Instructions: put `queue_job__no_delay=True` on the environment context so
+  `with_delay()` (and nested delays) run inline instead of enqueueing. This
+  session still does not run the job queue for you.
+- Instructions: a session may stay open across many steps; call
+  `os_close_session` when the work is finished and you do not plan to
+  continue.
+- Instructions: after `commit_not_allowed`, explain the write, then poll
+  `os_session` until `allow_commit` is true. Do not wait for a chat
+  confirmation, and do not spin on `os_commit`. Once granted, later commits
+  in that session need no further check-in.
+- `os_session` — GET of the current session, including `allow_commit`. That
+  is how an agent sees a grant flipped in the UI.
+
+### Web UI
+
+- Session header meta line: local start time and a live age in seconds
+  (`14:42:07 (18s)`). The tick updates that span only. A session this tab
+  opened is stamped immediately; any other uses history `opened_at`.
+- Cell feed hides its scrollbar (same pattern as the journal list). The
+  CELLS heading stays put; cards size to their content so unfold still
+  works when the feed is long.
+
 ## [1.0.0] — 2026-08-21
 
 A persistent Odoo 19 REPL behind an HTTP/WebSocket API: the daemon keeps
@@ -168,5 +200,6 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
-[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/romi477/odoo_sheller/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/romi477/odoo_sheller/releases/tag/v1.0.0
