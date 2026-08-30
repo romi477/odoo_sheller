@@ -61,13 +61,20 @@ restart or a config change.
 A tab strip of open sessions (`odoo19-dev / acme_dev`), each closable. A
 second session on the same container and database opens from the session
 keyboard's **New** key without leaving the current tab — the twin shows up as
-another tab.
+another tab. Idle tabs are cyan; the selected one is amber. While a test is
+running, the session badge reads `testing` in Journals-warning rose, and that
+session's tab grows a blinking lamp — a small rose dot, like a status light
+(no blink if the OS asks for reduced motion). A short run still holds the
+badge and the lamp for one pulse so they are readable. Ordinary `exec` does
+not light the lamp and stays cyan `busy`.
 
 Sessions opened by *anyone* — an agent through MCP, another browser tab —
 appear here as they're opened, with no reload needed: the page keeps a socket
 on the registry itself, not only on sessions it opened. A session someone
 else owns opens in **observer mode**: you see its feed and its Odoo log tail
-live, but the editor is hidden and there's nothing to type into.
+live, but the editor is hidden and there's nothing to type into. Opening the
+log keeps the same gap under the session keyboard that the editor would have
+left — it does not sit flush against the keys.
 
 Under the title, the meta line is Odoo version, the session id (click to
 copy), then the local start time and how many seconds the session has been
@@ -75,6 +82,12 @@ open — `14:42:07 (18s)`. The seconds tick in place; the rest of the header
 does not redraw. Hover the clock for the same date stamp the Journals screen
 uses. A session this tab opened stamps itself immediately; one that arrived
 from a reload or from someone else waits for the journal's `opened_at`.
+
+The state badge follows the session: `ready`, `busy`, `starting`, `dead`,
+`closed`. While a test is running it reads `testing` instead of `busy`, in
+the same rose as the Journals unmasked-warning banner. The blink lives on
+the tab lamp, not on the badge. An ordinary `exec` stays cyan `busy`.
+`watching · mcp-agent` is unchanged.
 
 ### Ownership
 
@@ -149,7 +162,9 @@ with its traceback, and how long it took.
   fold control stays clickable.
 - A running cell shows a spinner and a live elapsed-seconds counter — output
   for this version arrives in one piece at the end, so the counter is the
-  only progress signal there is while it's still running.
+  only progress signal there is while it's still running. An empty feed
+  during a test run does not offer `⌘+Enter`: it says to open Logs and
+  watch them live instead.
 - A command restored from the journal whose original run blew its timeout is
   marked as a **late result**, so an abandoned command never quietly reads as
   an ordinary success.

@@ -9,8 +9,10 @@ daemon started as a child of this process would take every live session down
 with it on each restart.
 """
 
+import asyncio
 import logging
 import os
+import secrets
 from typing import Any
 
 import httpx2 as httpx
@@ -22,6 +24,21 @@ logger = logging.getLogger(__name__)
 DAEMON_URL = os.environ.get("ODOO_SHELLER_URL", "http://127.0.0.1:8765")
 AGENT_LABEL = "mcp-agent"
 EXEC_TIMEOUT = 30.0  # MCP clients give up long before the API's five minutes
+# `Session.start` waits this long for the bootstrap's hello. Giving up on the
+# open call any earlier strands a session the daemon then goes on to register,
+# whose write key was only ever in the response we stopped waiting for.
+SESSION_START_CEILING = 90.0
+MAX_TEST_TIMEOUT = 3600.0  # matches the API's own ceiling on RunTestBody
+# How long one tool call may block. MCP hosts cut a call off at around a
+# minute, and nothing we set on our side changes that — so a long run has to
+# be handed back as "still going" rather than held onto until the host kills
+# it. Override for a host with a different patience.
+MCP_CALL_BUDGET = float(os.environ.get("ODOO_SHELLER_MCP_BUDGET", "40"))
+# The floor for the run leg. If opening the session already ate the budget we
+# still have to send the request — otherwise nothing runs at all and the
+# session id we hand back points at an idle session.
+RUN_START_GRACE = 5.0
+TEST_RESULT_POLL = 2.0  # how often os_test_result looks while it waits
 MAX_STDOUT = 4000
 MAX_RESULT = 2000
 
@@ -165,6 +182,45 @@ calls inherit it, so the whole chain runs on the spot:
 A recordset you already hold still has the old context: call
 `.with_context(queue_job__no_delay=True)` on it before `with_delay()`.
 
+## Running a test
+
+os_run_test runs one Odoo test method or a whole test class:
+`module.TestClass` or `module.TestClass.test_method`. Unlike os_exec, it always
+opens its own brand-new session first — it never reuses a session you already
+have — so there is nothing of yours it can discard. That session closes itself
+the moment the run settles: do not call os_close_session on it, and do not
+count it against yourself in os_list_sessions. Run several classes by calling
+os_run_test once per class, in turn.
+
+When the class name is unknown, call os_list_tests(module) rather than inventing
+names. Prefer running module.TestClass (one class, one os_run_test, one close).
+Do not open a session per method unless a single method is the point. Do not
+fire the whole list as parallel os_run_test calls.
+
+Odoo's own test runner rolls back whatever transaction a session's cursor is
+holding before it runs tests. This only matters if you call os_run_test's
+underlying session a second time after using os_exec in it — the response's
+`discarded_pending` field says whether that happened, so watch it rather than
+assume nothing was lost.
+
+The default timeout is short (30s) because a single test usually is. Pass a
+larger `timeout` yourself when you deliberately run a whole class, which can
+take minutes — pad your estimate: Odoo's own test framework can add up to 10
+extra seconds per test class if one leaves a subprocess running.
+
+A run longer than about a minute cannot be answered in one call: the host
+cuts a tool call off well before that, whatever timeout you passed. So
+os_run_test hands back `{"status": "running", "session_id": ...}` instead —
+that is not a failure, and the run is still going in the container.
+
+When you see it, call os_test_result(session_id). That waits too, and answers
+either with the finished outcome or with `status: "running"` again — in which
+case call it again straight away. There is nothing to pause between calls,
+and nothing to clean up afterwards: the session closes itself.
+
+Never answer a `status: "running"` by calling os_run_test again. That starts
+a second, duplicate run on top of the first.
+
 ## Being watched
 
 Everything is journalled with its author: every command, its output, every
@@ -189,6 +245,20 @@ def _clip(text: str | None, limit: int) -> tuple[str | None, bool]:
     return text[:limit], True
 
 
+def _clip_tail(text: str | None, limit: int) -> tuple[str | None, bool]:
+    """Keep the end, not the beginning.
+
+    For a test run's log the last line is the one worth having — the summary,
+    or the failure that ended it. Clipping from the front hands back the test
+    framework's boot chatter and drops the answer.
+    """
+    if text is None or len(text) <= limit:
+
+        return text, False
+
+    return text[-limit:], True
+
+
 def _default_session(session_id: str | None) -> str | Any:
     if session_id:
 
@@ -210,13 +280,35 @@ def _default_session(session_id: str | None) -> str | Any:
     }
 
 
-async def _call(method: str, path: str, session_id: str | None = None, **kwargs) -> Any:
+async def _call(
+    method: str,
+    path: str,
+    session_id: str | None = None,
+    client_timeout: float | None = None,
+    **kwargs,
+) -> Any:
     headers = {}
     if session_id and session_id in _keys:
         headers["X-OS-Session-Key"] = _keys[session_id]
     try:
-        async with httpx.AsyncClient(base_url=DAEMON_URL, timeout=EXEC_TIMEOUT + 10) as client:
+        async with httpx.AsyncClient(
+            base_url=DAEMON_URL, timeout=client_timeout or (EXEC_TIMEOUT + 10)
+        ) as client:
             response = await client.request(method, path, headers=headers, **kwargs)
+    except httpx.TimeoutException:
+        # The daemon is still working — it never stopped answering. Telling
+        # the agent to go start it would be wrong, and a retry would kick off
+        # a brand-new run instead of checking on the slow one already going.
+        logger.warning("request timed out waiting for the daemon")
+
+        return {
+            "error": "request_timed_out",
+            "recovery": (
+                "the daemon is still working, not down — call os_history or "
+                "os_journal on the session to see whether it finished, rather "
+                "than retrying this call"
+            ),
+        }
     except Exception as exc:  # noqa: BLE001 - any transport failure means the same thing
         logger.warning("daemon unreachable: %s", exc)
 
@@ -269,6 +361,12 @@ async def os_list_sessions() -> Any:
     if isinstance(sessions, dict):
 
         return sessions
+
+    # Test sessions close themselves, so keys outlive the sessions they were
+    # for. Drop the ones the daemon no longer has rather than reporting them.
+    live = {session["id"] for session in sessions}
+    for lost in [held for held in _keys if held not in live]:
+        del _keys[lost]
 
     listed = [{**session, "yours": session["id"] in _keys} for session in sessions]
 
@@ -372,6 +470,230 @@ async def os_exec(code: str, session_id: str | None = None) -> Any:
     }
 
 
+@mcp.tool(
+    description=(
+        "List test classes and methods in one addon, already shaped as "
+        "os_run_test specs (module.TestClass / module.TestClass.test_method). "
+        "One module per call. This is files on disk, not 'installed in this "
+        "database'. Read-only; does not open a session."
+    ),
+    annotations=ToolAnnotations(read_only_hint=True),
+)
+async def os_list_tests(module: str, container: str | None = None) -> Any:
+    target = container
+    if not target:
+        session_id = _default_session(None)
+        if isinstance(session_id, dict):
+            refusal = dict(session_id)
+            if refusal.get("error") == "no_session":
+                refusal["recovery"] = "pass container, or open a session first"
+            elif refusal.get("error") == "ambiguous_session":
+                refusal["recovery"] = (
+                    "pass container explicitly: this server owns more than one session"
+                )
+
+            return refusal
+        described = await _call("GET", f"/api/sessions/{session_id}", session_id)
+        if described.get("error"):
+
+            return described
+        target = described["container"]
+
+    return await _call(
+        "GET",
+        f"/api/containers/{target}/tests",
+        params={"module": module},
+    )
+
+
+@mcp.tool(
+    description=(
+        "Run one Odoo test method or a whole test class by name: "
+        "'module.TestClass' or 'module.TestClass.test_method'. Always opens its "
+        "own brand-new session (owner agent, allow_commit false) rather than "
+        "reusing one you already have, so there is never anything pending to "
+        "lose, and that session closes itself once the run settles — there is "
+        "nothing to clean up. stdout and the Odoo log lines produced during "
+        "the run come back separated. A run too long to answer in one call "
+        "comes back as {\"status\": \"running\", \"session_id\": ...}, which is "
+        "not a failure: call os_test_result(session_id) to wait for it, and "
+        "never call this tool again for the same run. The default timeout is "
+        "short (a single test is usually fast) — pass a larger one for a whole "
+        "class; it is the ceiling for the run itself, not for this call."
+    ),
+)
+async def os_run_test(
+    test: str,
+    container: str | None = None,
+    database: str | None = None,
+    odoo_bin: str | None = None,
+    timeout: float = 30.0,
+) -> Any:
+    if not 0 < timeout <= MAX_TEST_TIMEOUT:
+        # Checked before anything is opened: a doomed ceiling would otherwise
+        # cost a whole session start to earn a raw validation error.
+        return {
+            "error": "invalid_timeout",
+            "timeout": timeout,
+            "recovery": (
+                f"pass a timeout between 0 and {MAX_TEST_TIMEOUT:.0f} seconds; "
+                "a whole class usually wants a few hundred"
+            ),
+        }
+
+    # The host times the whole tool call, so the budget has to cover opening
+    # the session as well as waiting for the run. Spending it on the run alone,
+    # after a registry load that already took seconds, overshoots and the call
+    # is killed before it can hand back the session id.
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + MCP_CALL_BUDGET
+
+    # Container and database do not identify a session — several may be
+    # opening on the same target at once — so the token is what finds this one
+    # again if the open call is the thing that times out.
+    client_token = f"{AGENT_LABEL}-{secrets.token_urlsafe(8)}"
+    opened = await _call(
+        "POST",
+        "/api/sessions",
+        # Bounded by the same budget as everything else: waiting out the
+        # daemon's full ceiling only means the host kills the call first, and
+        # then even the client_token below never reaches the caller.
+        client_timeout=min(SESSION_START_CEILING + 10, MCP_CALL_BUDGET),
+        json={
+            "container": container,
+            "database": database,
+            "odoo_bin": odoo_bin,
+            "owner": {"kind": "agent", "label": AGENT_LABEL},
+            "allow_commit": False,
+            "client_token": client_token,
+            # It exists to run one test. Nobody has to remember to close it.
+            "autoclose": True,
+        },
+    )
+    if opened.get("error"):
+        if opened.get("error") == "request_timed_out":
+
+            return {
+                **opened,
+                "client_token": client_token,
+                "recovery": (
+                    "the session may still have opened — find it with "
+                    "os_list_sessions by this client_token before opening "
+                    "another, and ask the human to close it: this server never "
+                    "received its write key"
+                ),
+            }
+
+        return opened
+    session_id = opened["id"]
+    _keys[session_id] = opened.pop("write_key")
+
+    # Whatever is left of the budget, and never more: a margin added on top of
+    # a cap defeats the cap. The daemon still gets the full ceiling the caller
+    # asked for — only our own waiting is capped, so the run is never cut short.
+    # Two seconds over the daemon's own ceiling keeps a short run from racing
+    # its 504 against our timeout.
+    run_leg = max(min(timeout + 2, deadline - loop.time()), RUN_START_GRACE)
+    result = await _call(
+        "POST", f"/api/sessions/{session_id}/run_test", session_id,
+        client_timeout=run_leg,
+        json={"test": test, "timeout": timeout},
+    )
+    if result.get("error") == "request_timed_out":
+
+        return {
+            "status": "running",
+            "session_id": session_id,
+            "test": test,
+            "recovery": (
+                "the run is still going in the container — call "
+                f'os_test_result("{session_id}") to wait for it; that session '
+                "closes itself when the run ends, so there is nothing to clean up"
+            ),
+        }
+    if result.get("error") and "stdout" not in result:
+
+        return {"session_id": session_id, **result}
+
+    test_info = result.get("test") or {}
+    stdout, stdout_clipped = _clip(result.get("stdout"), MAX_STDOUT)
+    stderr, stderr_clipped = _clip_tail("\n".join(result.get("stderr") or []), MAX_STDOUT)
+    truncated = stdout_clipped or stderr_clipped
+
+    return {
+        "session_id": session_id,
+        "tests_run": test_info.get("tests_run"),
+        "failures": test_info.get("failures"),
+        "errors": test_info.get("errors"),
+        "skipped": test_info.get("skipped"),
+        "success": test_info.get("success"),
+        "stdout": stdout,
+        "stderr": stderr,
+        "error": result.get("error"),
+        "duration": result.get("duration"),
+        "discarded_pending": result.get("discarded_pending"),
+        # Two different losses: the daemon dropping whole lines past its own
+        # ceiling, and this server clipping characters to spare your context.
+        "stderr_truncated": bool(result.get("stderr_truncated")),
+        "truncated": truncated,
+        "journal": f"/api/journals/{session_id}" if truncated else None,
+    }
+
+
+@mcp.tool(
+    description=(
+        "Wait for a test run started by os_run_test and return its outcome. "
+        "Blocks while the run is still going, then answers with tests_run, "
+        "failures, errors, skipped and success — or says the run is still "
+        "going, in which case call it again straight away. Works after the "
+        "session has closed itself, and needs no write key. Read-only."
+    ),
+    annotations=ToolAnnotations(read_only_hint=True),
+)
+async def os_test_result(session_id: str) -> Any:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + MCP_CALL_BUDGET
+    while True:
+        feed = await _call("GET", f"/api/sessions/{session_id}/history")
+        if feed.get("error"):
+
+            return feed
+
+        runs = [
+            entry for entry in (feed.get("entries") or [])
+            if entry.get("kind") == "run_test"
+        ]
+        if runs and (runs[-1].get("result") is not None):
+
+            return {"status": "done", **_history_run_test_entry(runs[-1])}
+
+        gone = (feed.get("session") or {}).get("state") == "gone"
+        if gone:
+            # The session ended without the run ever settling: the process
+            # died mid-run. Saying "running" here would be a poll forever.
+
+            return {
+                "status": "lost",
+                "session_id": session_id,
+                "journal": f"/api/journals/{session_id}",
+                "recovery": (
+                    "the run died with its container process — read the "
+                    "journal for the log tail, then start it again"
+                ),
+            }
+        if loop.time() >= deadline:
+
+            return {
+                "status": "running",
+                "session_id": session_id,
+                "recovery": (
+                    "still going — call os_test_result again straight away; "
+                    "each call waits, so there is no need to pause between them"
+                ),
+            }
+        await asyncio.sleep(TEST_RESULT_POLL)
+
+
 def _boundary_result(answer: Any) -> Any:
     """Wire frames are for the daemon; an agent needs the outcome."""
     if answer.get("error") and "stdout" not in answer:
@@ -451,12 +773,56 @@ def _actor(actor: dict | None) -> str | None:
     return f"{actor['kind']}:{actor['label']}" if actor else None
 
 
+def _history_run_test_entry(entry: dict) -> dict:
+    """A run_test entry, in the shape os_run_test answers with.
+
+    Journaled precisely so a transport timeout on a long class doesn't lose
+    the outcome — the agent recovers it from here instead of nowhere.
+    """
+    result = entry.get("result") or {}
+    test = result.get("test") or {}
+    spec = f"{entry.get('module')}.{entry.get('test_class')}"
+    if entry.get("test_method"):
+        spec += f".{entry['test_method']}"
+    stdout, out_clipped = _clip(result.get("stdout"), MAX_STDOUT)
+    # The same tail rule os_run_test uses: on a long run the last line is the
+    # summary, and clipping from the front would drop it.
+    stderr, stderr_clipped = _clip_tail("\n".join(result.get("stderr") or []), MAX_STDOUT)
+    shaped = {
+        "n": entry.get("ordinal"),
+        "test": spec,
+        "status": entry.get("status"),
+        "tests_run": test.get("tests_run"),
+        "failures": test.get("failures"),
+        "errors": test.get("errors"),
+        "skipped": test.get("skipped"),
+        "success": test.get("success"),
+        "stdout": stdout or None,
+        "stderr": stderr or None,
+        # Whole lines the daemon dropped, as opposed to the characters clipped
+        # just above. Absent from journals written before it existed.
+        "stderr_truncated": result.get("stderr_truncated"),
+        "error": result.get("error"),
+        "duration": round(result["duration"], 3) if result.get("duration") is not None else None,
+        "actor": _actor(entry.get("actor")),
+    }
+    if out_clipped or stderr_clipped:
+        shaped["truncated"] = True
+    if entry.get("abandoned"):
+        shaped["abandoned"] = True
+
+    return {key: value for key, value in shaped.items() if value is not None}
+
+
 def _history_entry(entry: dict) -> dict:
     """One past command, in the shape os_exec answers with.
 
     The journal keeps wire fields the daemon needs; an agent reading its own
     history needs the command and what came back, and pays for every other byte.
     """
+    if entry.get("kind") == "run_test":
+
+        return _history_run_test_entry(entry)
     if entry.get("kind") != "exec":
 
         return {"kind": entry.get("kind"), "actor": _actor(entry.get("actor"))}

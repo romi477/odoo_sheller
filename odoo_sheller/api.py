@@ -2,13 +2,14 @@
 
 import asyncio
 import json
+import re
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from odoo_sheller import discovery, journal
 from odoo_sheller.registry import Registry, load_admin_key
@@ -41,8 +42,19 @@ def _export_headers(path: Path, suffix: str) -> dict:
     return {"content-disposition": f'attachment; filename="{path.stem}.{suffix}"'}
 
 
+TEST_SPEC_RE = re.compile(r"^(\w+)\.(\w+)(?:\.(\w+))?$")
+
+
 class ExecBody(BaseModel):
     code: str
+
+
+class RunTestBody(BaseModel):
+    test: str
+    # A zero or negative ceiling would send the frame and abandon it in the
+    # same breath: the run really starts, and the session stays busy for its
+    # whole length with nobody waiting. An hour is past any sane test class.
+    timeout: float | None = Field(default=None, gt=0, le=3600)
 
 
 class OpenBody(BaseModel):
@@ -53,6 +65,9 @@ class OpenBody(BaseModel):
     allow_commit: bool | None = None
     replace: str | None = None
     client_token: str | None = None
+    # A session opened to run one test and then close itself. Never for a
+    # human: the browser's session is theirs until they end it.
+    autoclose: bool = False
 
 
 class ProbeBody(BaseModel):
@@ -176,6 +191,46 @@ def create_app(registry: Registry | None = None) -> FastAPI:
 
         return await discovery.probe(body.container)
 
+    @app.get("/api/containers/{container}/tests")
+    async def container_tests(container: str, module: str | None = Query(None)):
+        result = await discovery.list_tests(container, module or "")
+        if result.get("error_code") == "invalid_module_name":
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_module_name",
+                    "module": module,
+                    "recovery": result.get("recovery")
+                    or (
+                        "pass an addon technical name (letters, digits, underscore), "
+                        "not a test spec"
+                    ),
+                },
+            )
+        if result.get("error_code") == "module_not_found":
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "module_not_found",
+                    "module": result.get("module") or module,
+                    "recovery": (
+                        "check the addon technical name; this catalogue is "
+                        "files on disk, not installed modules"
+                    ),
+                },
+            )
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=502,
+                detail=result.get("error") or "list tests failed",
+            )
+
+        return {
+            "module": result["module"],
+            "path": result["path"],
+            "classes": result["classes"],
+        }
+
     @app.post("/api/sessions")
     async def open_session(body: OpenBody):
         try:
@@ -187,6 +242,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
                 allow_commit=body.allow_commit,
                 replace=body.replace,
                 client_token=body.client_token,
+                autoclose=body.autoclose,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from None
@@ -286,6 +342,32 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         try:
 
             return await session.execute(body.code)
+        except Exception as exc:  # noqa: BLE001 - API boundary maps failures to HTTP.
+            raise translate(exc, session_id) from None
+
+    @app.post("/api/sessions/{session_id}/run_test")
+    async def run_test(
+        session_id: str,
+        body: RunTestBody,
+        x_os_session_key: str | None = Header(None),
+    ):
+        session = session_or_404(session_id)
+        require_owner(session, x_os_session_key)
+        match = TEST_SPEC_RE.match(body.test)
+        if not match:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_test_spec",
+                    "test": body.test,
+                    "recovery": "use 'module.TestClass' or 'module.TestClass.test_method'",
+                },
+            )
+        module, test_class, test_method = match.groups()
+        kwargs = {"timeout": body.timeout} if body.timeout is not None else {}
+        try:
+
+            return await session.run_test(module, test_class, test_method, **kwargs)
         except Exception as exc:  # noqa: BLE001 - API boundary maps failures to HTTP.
             raise translate(exc, session_id) from None
 

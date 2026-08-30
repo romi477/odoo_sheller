@@ -262,6 +262,101 @@ def test_feed_from_records_timeout_without_result_matches_live_504_cell():
     }
 
 
+def test_feed_from_records_pairs_run_test_with_result():
+    feed = journal.feed_from_records([
+        {"kind": "run_test", "ts": "t1", "id": 1, "module": "sale",
+         "test_class": "TestSaleOrder", "test_method": "test_x", "actor": None},
+        {"kind": "result", "ts": "t2", "id": 1, "stdout": "", "error": None,
+         "duration": 1.2, "test": {"tests_run": 1, "failures": 0, "errors": 0,
+         "skipped": 0, "success": True}, "stderr": [], "discarded_pending": False},
+    ])
+    assert feed["history"] == []  # not code, must not pollute editor recall
+    assert len(feed["entries"]) == 1
+    entry = feed["entries"][0]
+    assert entry["kind"] == "run_test"
+    assert entry["module"] == "sale"
+    assert entry["test_class"] == "TestSaleOrder"
+    assert entry["test_method"] == "test_x"
+    assert entry["status"] == "done"
+    assert entry["result"]["test"]["success"] is True
+
+
+def test_feed_from_records_numbers_exec_and_run_test_on_one_counter():
+    """Two counters drift: run_test counted entries (which commit also grows),
+    exec counted history (which run_test never grows), so numbers collided."""
+    feed = journal.feed_from_records([
+        {"kind": "exec", "id": 1, "code": "a"},
+        {"kind": "result", "id": 1, "stdout": "", "error": None, "duration": 0.1},
+        {"kind": "run_test", "id": 2, "module": "m", "test_class": "T"},
+        {"kind": "result", "id": 2, "stdout": "", "error": None, "duration": 0.1},
+        {"kind": "exec", "id": 3, "code": "b"},
+        {"kind": "result", "id": 3, "stdout": "", "error": None, "duration": 0.1},
+    ])
+    assert [e["ordinal"] for e in feed["entries"]] == [1, 2, 3]
+
+
+def test_feed_ordinals_ignore_entries_that_are_not_commands():
+    """A commit between two commands must not push the next number along."""
+    feed = journal.feed_from_records([
+        {"kind": "exec", "id": 1, "code": "a"},
+        {"kind": "result", "id": 1, "error": None},
+        {"kind": "commit", "id": 2, "error": None},
+        {"kind": "run_test", "id": 3, "module": "m", "test_class": "T"},
+        {"kind": "result", "id": 3, "error": None},
+    ])
+    numbered = [e["ordinal"] for e in feed["entries"] if "ordinal" in e]
+    assert numbered == [1, 2]
+
+
+def test_feed_and_markdown_agree_on_command_numbers():
+    """The transcript and the rebuilt feed must not disagree about the same run."""
+    records = [
+        {"kind": "exec", "ts": "t1", "id": 1, "code": "a"},
+        {"kind": "result", "ts": "t2", "id": 1, "error": None, "duration": 0.1},
+        {"kind": "commit", "ts": "t3", "id": 2, "error": None},
+        {"kind": "run_test", "ts": "t4", "id": 3, "module": "m", "test_class": "T"},
+        {"kind": "result", "ts": "t5", "id": 3, "error": None, "duration": 0.1},
+    ]
+    text = journal.to_markdown(records)
+    feed = journal.feed_from_records(records)
+    run_test_entry = next(e for e in feed["entries"] if e["kind"] == "run_test")
+    assert f"## Test {run_test_entry['ordinal']} " in text
+
+
+def test_feed_from_records_run_test_timeout_reads_as_still_running():
+    feed = journal.feed_from_records([
+        {"kind": "run_test", "id": 5, "module": "sale", "test_class": "Slow"},
+        {"kind": "timeout", "id": 5, "seconds": 300},
+    ])
+    entry = feed["entries"][0]
+    assert entry["kind"] == "run_test"
+    assert entry["status"] == "error"
+    assert entry["result"]["error"]["type"] == "TimeoutError"
+
+
+def test_session_meta_counts_run_test_as_a_command():
+    records = [
+        {"kind": "session_open", "ts": "t0", "container": "c", "database": "db"},
+        {"kind": "run_test", "ts": "t1", "id": 1, "module": "sale", "test_class": "T"},
+        {"kind": "result", "ts": "t2", "id": 1, "error": None},
+    ]
+    assert journal.session_meta(records)["commands"] == 1
+
+
+def test_to_markdown_renders_a_run_test_heading_and_summary():
+    records = [
+        {"kind": "run_test", "ts": "t1", "id": 1, "module": "sale",
+         "test_class": "TestSaleOrder", "test_method": "test_x"},
+        {"kind": "result", "ts": "t2", "id": 1, "stdout": "", "error": None,
+         "duration": 1.2, "test": {"tests_run": 1, "failures": 0, "errors": 0,
+         "skipped": 0, "success": True}},
+    ]
+    text = journal.to_markdown(records)
+    assert "sale.TestSaleOrder.test_x" in text
+    assert "1 run" in text
+    assert "PASS" in text
+
+
 def test_feed_from_records_ignores_unmatched_result():
     feed = journal.feed_from_records([
         {"kind": "result", "id": 99, "stdout": "orphan"},

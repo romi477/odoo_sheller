@@ -195,8 +195,9 @@ A dead session has no Reconnect — press **New** for another session on the sam
 target, then Close or Kill this tab.
 
 The state badge is the thing to read before acting: `ready` / `busy` /
-`starting` / `dead`. Close and Force kill still warn if uncommitted commands
-are pending.
+`testing` / `starting` / `dead`. A test run shows `testing` (rose) instead of
+cyan `busy`, and that session's tab grows a blinking rose lamp. Close and
+Force kill still warn if uncommitted commands are pending.
 
 ### Session tabs
 
@@ -204,6 +205,10 @@ are pending.
 |---|---|
 | Tab **×** | Ordinary Close, same as Close on the keyboard |
 | **⌥**-click on **×** | Force kill |
+
+While a test is running, the tab keeps its cyan/amber color and shows a
+blinking rose lamp next to the name (no blink if the OS asks for reduced
+motion). A short run still holds the lamp for one pulse.
 
 While the request is in flight the tab reads `closing…` or `killing…` and its `×`
 stops responding; a close already under way can still be escalated with **Force
@@ -328,10 +333,12 @@ answers `409` until that command's result finally arrives. Use `interrupt`, or
 |---|---|---|
 | `GET` | `/api/containers` | running containers |
 | `POST` | `/api/probe` | probe one container |
+| `GET` | `/api/containers/{container}/tests` | test classes/methods in one addon (`?module=`) |
 | `POST` | `/api/sessions` | open a session, wait for `hello`. Optional `client_token` is echoed back in the session description, so a client recognises its own `session_starting` among several |
 | `GET` | `/api/sessions` | live sessions |
 | `GET` | `/api/sessions/{id}` | one session |
 | `POST` | `/api/sessions/{id}/exec` | run code |
+| `POST` | `/api/sessions/{id}/run_test` | run one test method or a whole class (`{"test": "module.TestClass[.test_method]"}`, optional `timeout`); stdout and Odoo's log lines come back separated |
 | `POST` | `/api/sessions/{id}/commit` | keep the transaction |
 | `POST` | `/api/sessions/{id}/rollback` | discard the transaction |
 | `POST` | `/api/sessions/{id}/interrupt` | `SIGINT` |
@@ -343,8 +350,8 @@ answers `409` until that command's result finally arrives. Use `interrupt`, or
 | `GET` | `/api/journals` | past sessions |
 | `GET` | `/api/journals/{id}` | export (`?fmt=jsonl` or `markdown`) |
 | `DELETE` | `/api/journals/{id}` | unlink the file (admin); `409` if the session is still live. The id is matched exactly, never globbed |
-| `WS` | `/ws/sessions` | `session_starting` (id assigned, still waiting for `hello`), `session_failed` (with `reason` — a start that never reached `hello`), `session_opened`, `session_closed`, plus owner/policy/state |
-| `WS` | `/ws/sessions/{id}` | state changes, process death, stderr |
+| `WS` | `/ws/sessions` | `session_starting` (id assigned, still waiting for `hello`), `session_failed` (with `reason` — a start that never reached `hello`), `session_opened`, `session_closed`, plus owner/policy/state (`activity` on state events) |
+| `WS` | `/ws/sessions/{id}` | state changes (`activity` names `exec` / `run_test` / `null`), process death, stderr |
 
 Example (after the daemon is up and a session exists):
 

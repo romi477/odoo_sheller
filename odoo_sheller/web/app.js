@@ -18,6 +18,35 @@ const state = {
   startups: new Map(),
 };
 
+const TESTING_HOLD_MS = 1200;
+
+function sessionIsTesting(record) {
+  return record.info.activity === 'run_test'
+    || Date.now() < (record.testingUntil || 0);
+}
+
+function noteTesting(record, activity) {
+  if (activity !== 'run_test') {
+
+    return;
+  }
+  record.testingUntil = Date.now() + TESTING_HOLD_MS;
+  if (record.testingTimer) {
+    clearTimeout(record.testingTimer);
+  }
+  record.testingTimer = setTimeout(() => {
+    record.testingTimer = null;
+    renderSessions();
+  }, TESTING_HOLD_MS + 20);
+}
+
+function dropTestingTimer(record) {
+  if (record?.testingTimer) {
+    clearTimeout(record.testingTimer);
+    record.testingTimer = null;
+  }
+}
+
 function newSessionRecord(info) {
   return {
     info,
@@ -40,6 +69,8 @@ function newSessionRecord(info) {
     hydrated: false,
     awaitingInFlight: false,
     openedAt: null,
+    testingUntil: 0,
+    testingTimer: null,
   };
 }
 
@@ -710,6 +741,7 @@ function attachSession(info, reattached = false) {
   const existing = state.sessions.get(info.id);
   if (existing) {
     existing.info = {...existing.info, ...info};
+    noteTesting(existing, existing.info.activity);
     renderContainers();
     renderSessions();
 
@@ -722,6 +754,7 @@ function attachSession(info, reattached = false) {
   }
   state.sessions.set(info.id, record);
   state.activeSession ||= info.id;
+  noteTesting(record, info.activity);
   connectSocket(info.id);
   renderContainers();
   renderSessions();
@@ -755,7 +788,12 @@ function cellsFromHistory(data, previous) {
         abandoned: Boolean(entry.abandoned),
         actor: entry.actor,
       });
-    } else {
+    } else if (
+      entry.kind === 'commit'
+      || entry.kind === 'rollback'
+      || entry.kind === 'owner_changed'
+      || entry.kind === 'policy_changed'
+    ) {
       cells.push({
         boundary: entry.kind,
         from: entry.from,
@@ -857,6 +895,8 @@ function connectSocket(id) {
     }
     if (message.kind === 'state') {
       current.info.state = message.state;
+      current.info.activity = message.activity ?? null;
+      noteTesting(current, current.info.activity);
       if (message.state === 'dead') {
         maybeLoadDeadCause(id, current);
       }
@@ -901,6 +941,12 @@ function renderSessions() {
     tab.className = `session-tab mono${id === state.activeSession ? ' active' : ''}`;
     tab.title = 'Show this session.';
     tab.append(`${record.info.container} / ${record.info.database}`);
+    if (sessionIsTesting(record)) {
+      const lamp = document.createElement('span');
+      lamp.className = 'tab-lamp';
+      lamp.title = 'A test is running.';
+      tab.append(lamp);
+    }
     if (record.closing) {
       // Closing waits for the bootstrap to read the frame, which it only does
       // between commands — say so instead of leaving a tab that ignores clicks.
@@ -974,9 +1020,11 @@ function bindSessionPanel(panel, id, record) {
     sessionId.textContent = `session ${id}`;
   }
   paintSessionAge(record);
+  const testing = sessionIsTesting(record);
   const badge = panel.querySelector('.state');
-  badge.textContent = record.socketOffline ? `${record.info.state} · socket offline` : record.info.state;
-  const badgeClasses = ['state', 'badge', record.info.state];
+  const label = testing ? 'testing' : record.info.state;
+  badge.textContent = record.socketOffline ? `${label} · socket offline` : label;
+  const badgeClasses = ['state', 'badge', testing ? 'testing' : record.info.state];
   if (record.socketOffline) {
     badgeClasses.push('offline');
   }
@@ -1256,6 +1304,12 @@ function renderFeed(feed, id, record) {
   fold.title = allFolded ? 'Expand all' : 'Collapse all';
   fold.setAttribute('aria-label', allFolded ? 'Expand all cells' : 'Collapse all cells');
   cards.replaceChildren();
+  if (sessionIsTesting(record) && execCount === 0) {
+    cards.innerHTML =
+      '<p class="empty">Tests are running — open Logs to watch them live.</p>';
+
+    return;
+  }
   if (record.reattached && !record.hydrated && !record.cells.length) {
     const note = document.createElement('p');
     note.className = 'history-note';
@@ -1590,6 +1644,7 @@ async function closeSession(id, force) {
       await request(send);
     }
     record.socket?.close();
+    dropTestingTimer(record);
     state.sessions.delete(id);
     forgetKey(id);
     forgetCloseKey(id);
@@ -2252,6 +2307,7 @@ function connectRegistrySocket() {
     if (message.kind === 'session_closed' && state.sessions.has(message.session)) {
       const record = state.sessions.get(message.session);
       record.socket?.close();
+      dropTestingTimer(record);
       state.sessions.delete(message.session);
       forgetKey(message.session);
       if (state.activeSession === message.session) {
@@ -2273,6 +2329,8 @@ function connectRegistrySocket() {
       record.info.allow_commit = message.allow_commit;
     } else if (message.kind === 'state') {
       record.info.state = message.state;
+      record.info.activity = message.activity ?? null;
+      noteTesting(record, record.info.activity);
     }
     renderSessions();
   });

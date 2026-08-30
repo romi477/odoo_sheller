@@ -91,7 +91,7 @@ def session_meta(records: list[dict], session_id: str | None = None) -> dict:
         "closed_at": closed.get("ts"),
         "ended_as": closed.get("kind"),
         "duration": _duration_seconds(records),
-        "commands": sum(1 for r in records if r.get("kind") == "exec"),
+        "commands": sum(1 for r in records if r.get("kind") in ("exec", "run_test")),
         "committed": any(r.get("kind") == "commit" for r in records),
         "unmasked": True,
     }
@@ -175,6 +175,15 @@ def to_markdown(records: list[dict], meta: dict | None = None) -> str:
             by = f" by {actor.get('kind')} ({actor.get('label')})" if actor else ""
             lines.append(f"## Command {next_ordinal}{by} — {stamp}\n")
             lines.append(f"```python\n{record.get('code', '').rstrip()}\n```\n")
+        elif kind == "run_test":
+            next_ordinal += 1
+            ordinals[record.get("id")] = next_ordinal
+            actor = record.get("actor") or {}
+            by = f" by {actor.get('kind')} ({actor.get('label')})" if actor else ""
+            spec = f"{record.get('module', '')}.{record.get('test_class', '')}"
+            if record.get("test_method"):
+                spec += f".{record['test_method']}"
+            lines.append(f"## Test {next_ordinal}{by} — `{spec}` — {stamp}\n")
         elif kind in ("result", "abandoned_result"):
             if kind == "abandoned_result":
                 n = ordinals.get(record.get("id"), record.get("id"))
@@ -186,6 +195,13 @@ def to_markdown(records: list[dict], meta: dict | None = None) -> str:
                 lines.append(f"```\n{record['stdout'].rstrip()}\n```\n")
             if record.get("result"):
                 lines.append(f"Result: `{record['result']}`\n")
+            if record.get("test"):
+                t = record["test"]
+                lines.append(
+                    f"Tests: {t.get('tests_run')} run, {t.get('failures')} failed, "
+                    f"{t.get('errors')} errors, {t.get('skipped')} skipped — "
+                    f"{'PASS' if t.get('success') else 'FAIL'}\n"
+                )
             if record.get("error"):
                 lines.append(f"```\n{record['error'].get('traceback', '').rstrip()}\n```\n")
             lines.append(f"_{record.get('duration', 0):.3f}s_\n")
@@ -262,6 +278,10 @@ def feed_from_records(
     entries = []
     logs = []
     pending = {}
+    # One counter for both command kinds. Counting `history` (exec only) and
+    # `entries` (which commit and handovers also grow) separately let the two
+    # drift into duplicate numbers, and disagree with `to_markdown`.
+    commands = 0
     for record in records:
         kind = record.get("kind")
         if kind == "stderr":
@@ -272,10 +292,11 @@ def feed_from_records(
             continue
         if kind == "exec":
             request_id = record.get("id")
+            commands += 1
             entry = {
                 "kind": "exec",
                 "id": request_id,
-                "ordinal": len(history) + 1,
+                "ordinal": commands,
                 "code": record.get("code", ""),
                 "status": "running",
                 "result": None,
@@ -283,6 +304,25 @@ def feed_from_records(
             }
             entries.append(entry)
             history.append(entry["code"])
+            pending[request_id] = entry
+            continue
+        if kind == "run_test":
+            # Not code, so it never joins `history` — only exec buffers feed
+            # the editor's up/down recall.
+            request_id = record.get("id")
+            commands += 1
+            entry = {
+                "kind": "run_test",
+                "id": request_id,
+                "ordinal": commands,
+                "module": record.get("module"),
+                "test_class": record.get("test_class"),
+                "test_method": record.get("test_method"),
+                "status": "running",
+                "result": None,
+                "actor": record.get("actor"),
+            }
+            entries.append(entry)
             pending[request_id] = entry
             continue
         if kind in ("result", "abandoned_result"):

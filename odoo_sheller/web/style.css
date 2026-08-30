@@ -395,6 +395,11 @@ a.brand:hover .wordmark {
   color: var(--cyan);
 }
 
+.badge.testing {
+  background: color-mix(in oklch, var(--red) 12%, var(--panel));
+  color: color-mix(in oklch, var(--red) 58%, var(--text));
+}
+
 .badge.dead,
 .badge.closed {
   background: var(--red-dark);
@@ -522,15 +527,16 @@ input {
   position: relative;
   z-index: 1;
   margin-bottom: -1px;
+  --tab-fill: var(--pane);
   border-color: var(--chrome-edge);
-  border-bottom: 1px solid var(--pane);
-  background: var(--pane);
+  border-bottom: 1px solid var(--tab-fill);
+  background: var(--tab-fill);
   color: var(--amber);
 }
 
 .session-tab.active:hover:not(:disabled) {
   border-color: var(--chrome-edge);
-  border-bottom-color: var(--pane);
+  border-bottom-color: var(--tab-fill);
   color: var(--amber);
 }
 
@@ -546,12 +552,12 @@ input {
 
 .session-tab.active::before {
   left: -8px;
-  background: radial-gradient(circle at 0 0, transparent 8px, var(--pane) 8.5px);
+  background: radial-gradient(circle at 0 0, transparent 8px, var(--tab-fill) 8.5px);
 }
 
 .session-tab.active::after {
   right: -8px;
-  background: radial-gradient(circle at 100% 0, transparent 8px, var(--pane) 8.5px);
+  background: radial-gradient(circle at 100% 0, transparent 8px, var(--tab-fill) 8.5px);
 }
 
 .tab-close {
@@ -563,6 +569,29 @@ input {
   margin-left: 8px;
   color: var(--amber);
   font-size: 12px;
+}
+
+.tab-lamp {
+  display: block;
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: color-mix(in oklch, var(--red) 78%, var(--text));
+  box-shadow: 0 0 6px color-mix(in oklch, var(--red) 55%, transparent);
+  animation: testing-lamp 1.2s ease-in-out infinite;
+}
+
+@keyframes testing-lamp {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.18; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-lamp {
+    animation: none;
+  }
 }
 
 #session-panels {
@@ -1080,6 +1109,14 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
    it to absorb once flex-grow has claimed all of it. Restate the editor's own
    top margin here, so the log's top border lines up where the editor's did. */
 .session.logs-focused .logs {
+  margin-top: var(--session-stack);
+}
+
+/* Watching hides the editor the same way focus does. First open of the log
+   (empty feed is also gone) would otherwise sit on the keyboard; expand then
+   "fixes" it only because it adds `.logs-focused`. Restack on open, not only
+   on focus. */
+.observer.logs-open .logs {
   margin-top: var(--session-stack);
 }
 

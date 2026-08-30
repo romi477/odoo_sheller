@@ -86,6 +86,7 @@ Daemon → bootstrap:
 | `t` | Fields | Meaning |
 |---|---|---|
 | `exec` | `id`, `code` | run this code |
+| `run_test` | `id`, `module`, `test_class`, `test_method` | run one Odoo test method or a whole class |
 | `commit` | `id` | end the transaction, keep it |
 | `rollback` | `id` | end the transaction, discard it |
 | `close` | `id` | leave the loop |
@@ -95,7 +96,7 @@ Bootstrap → daemon:
 | `t` | Fields |
 |---|---|
 | `hello` | `protocol`, `odoo`, `python`, `db`, `uid`, `pid` |
-| `result` | `id`, `stdout`, `result`, `error`, `duration` |
+| `result` | `id`, `stdout`, `result`, `error`, `duration`, `test` (only for `run_test`) |
 | `bye` | `id` |
 
 Unknown frame types are ignored on both sides, so a future addition (a
@@ -144,6 +145,55 @@ through the regular web UI would stay invisible to the shell. Skipping this
 step doesn't fail loudly — it just quietly lies about the state of the
 database.
 
+### Running a test
+
+`run_test` reuses Odoo's own shell-native test runner,
+`odoo.tests.shell.run_tests` — built for exactly this, checking
+`odoo.cli.COMMAND == 'shell'` before it runs. `module`/`test_class`/
+`test_method` become Odoo's own tag-filter spec (`*/module:Class.method`,
+`tag_selector.py`), not a reimplementation of test discovery. The bootstrap
+redirects `sys.stdout` the same way `exec` does; anything Odoo logs during the
+run (failures, tracebacks) goes out through the normal stderr/log stream. The
+daemon already tails that per session, but `Session._stderr` is a *bounded*
+tail (2000 lines) — a real test class logs far more than that, so an index
+taken into it before the run means nothing by the time the result lands, and
+the window would come back empty. `Session.run_test` instead registers a
+`_StderrWindow` that `_read_stderr` feeds as lines arrive, keeping the run's
+own output up to `RUN_STDERR_LIMIT` and reporting `stderr_truncated` past
+that. The window is removed in a `finally`, so a run that times out or dies
+does not leave a collector filling for the rest of the session.
+
+Odoo's runner rolls back the session's own cursor before it tests if that
+cursor is mid-transaction (`odoo/tests/shell.py`), to avoid a lock. Across
+sessions this is a non-issue — each session is its own process, its own
+cursor — but calling `run_test` twice in the *same* session, with `exec` work
+left pending in between, silently discards it. `Session.run_test` checks
+`pending_commands` before sending the frame and reports
+`discarded_pending` in its result rather than let that pass unnoticed.
+
+`run_tests()` also has one non-obvious failure mode: if the container's Odoo
+config has `workers != 0`, it returns `None` instead of raising. The bootstrap
+treats a `None` report as a structured `error`, not a crash.
+
+The container's own Odoo is normally already listening on `http_port` (8069
+by default) — `run_tests()` unconditionally spawns a *second* HTTP daemon in
+this process the first time any test runs (`if not server.httpd:
+server.http_spawn()`, `odoo/tests/shell.py`), on that same configured port,
+because some tests need it available. Binding fails with "address already in
+use" and takes the whole session down with it. The bootstrap picks a free
+port (`_os_free_port`) before the first `run_tests()` call in a session and
+sets **both** `server.port` and `config['http_port']` to it — `server.port`
+is what `http_spawn()` actually reads, and it is already fixed from whatever
+`config['http_port']` was back when this shell process started
+(`odoo/cli/shell.py` calls `server.start()` before our own command loop ever
+runs), so mutating the config dict alone at test-run time has no effect on
+it; the object's own attribute has to change too. Neither is touched again
+after the first spawn in a process — `run_tests()` itself only spawns once,
+and a second write would desync the port from the daemon already listening.
+Because the chosen port is session-private and freed the moment that
+session's process ends, the httpd thread it starts is left running for the
+rest of the session's life without needing an explicit shutdown.
+
 ### Interrupting a command
 
 `docker exec -i` without a TTY does not forward signals to the process inside
@@ -174,7 +224,13 @@ starting ──(hello)──> ready ──(exec)──> busy ──(result)─�
 - One command at a time, full stop: one process, one namespace, one open
   transaction. A second command arriving while `busy` is refused outright,
   never queued — a queue would misrepresent to the caller when their command
-  actually ran.
+  actually ran. `busy` does not say *what* is running: `describe()` and every
+  WebSocket `state` event carry `activity` (`exec`, `run_test`, or `null`
+  when the session is not busy) so the UI can tell a test from an ordinary
+  command. A timeout leaves the session `busy` and leaves `activity` set
+  until the late result arrives. The web UI maps `activity: run_test` to a
+  rose `testing` badge and a blinking lamp on that session's tab (see
+  [ui-guide.md](ui-guide.md)); ordinary `exec` stays cyan `busy`.
 - **A command that hits its timeout does not free the session.** `SIGINT` is a
   request, not a guarantee: the code on the other end can catch
   `KeyboardInterrupt`, or be blocked in a C call that ignores signals
@@ -193,6 +249,16 @@ starting ──(hello)──> ready ──(exec)──> busy ──(result)─�
   pipe moves a session straight to `dead`, and anything still waiting on a
   result fails with the tail of stderr attached, so the cause is visible
   without digging through logs.
+- **A session opened to run one test closes itself.** `autoclose` is asked
+  for at open time and is never set for a human's session. The session
+  announces itself finished once the run has really settled *and* been
+  journalled — not on the state change, which happens first and would put
+  `session_close` ahead of the result in the transcript — and the registry
+  closes it on that. A run that blew its ceiling is deliberately not settled:
+  it still owns the container, so the announcement waits for the late result.
+  A process that died announces too, so a dead entry does not linger in the
+  registry. The result stays readable afterwards: `/api/sessions/{id}/history`
+  answers from the journal long after the session is gone.
 - Sessions cannot outlive the daemon. The daemon owns the pipes; when it
   exits, the container-side process loses its stdin and exits too.
 
@@ -229,6 +295,11 @@ list (read via `psycopg2`, which any Odoo container already has installed —
 nothing extra to add). The probe process exits the moment it has answered.
 Odoo versions other than 19 are refused right here, with a specific message,
 rather than accepted and left to fail on the first real command.
+
+A second one-shot, `GET /api/containers/{container}/tests?module=`, lists
+test classes and methods for one addon technical name. It walks files on
+disk (`tests/test_*.py`), not "installed in this database", and does not
+open a session. The MCP tool is `os_list_tests`.
 
 ## Journal
 

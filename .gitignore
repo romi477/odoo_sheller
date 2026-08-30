@@ -3,6 +3,7 @@
 .superpowers/
 __pycache__/
 
+docs/superpowers/
 docs_/
 
 *.egg-info/

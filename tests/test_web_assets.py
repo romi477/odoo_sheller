@@ -352,6 +352,20 @@ def test_open_logs_fill_to_the_editor_when_the_feed_is_empty():
     assert "display: none" in empty.group(1)
 
 
+def test_observer_open_logs_clear_the_keyboard():
+    """Watching hides the editor; the first log open must not sit on the keyboard."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    hidden = re.search(r"\.observer \.editor-pane\s*\{([^}]*)\}", css)
+    assert hidden is not None
+    assert "display: none" in hidden.group(1)
+    # Same collapse of `margin-top: auto` as `.session.logs-focused .logs`:
+    # with the editor gone and logs growing, auto is 0. Focus restacks; the
+    # first open in observer mode has to, too.
+    observer = re.search(r"\.observer\.logs-open \.logs\s*\{([^}]*)\}", css)
+    assert observer is not None
+    assert "margin-top: var(--session-stack)" in observer.group(1)
+
+
 def test_ui_help_lives_in_the_markup(app_js, markup):
     """One place per control: no parallel table of titles in the script."""
     assert "BUTTON_HELP" not in app_js
@@ -617,6 +631,25 @@ def test_session_tabs_are_chrome_islands(app_js):
     assert "tabs.replaceChildren(list, add)" not in app_js
     assert "new-session" not in app_js
     assert ".new-session" not in css
+    # A test run does not recolor the tab. Idle stays cyan, selected stays
+    # amber; the signal is a lamp on the tab, not a rose wash.
+    assert re.search(r"\.session-tab\.testing\s*\{", css) is None
+    assert "tab-lamp" in app_js
+    lamp = re.search(r"\.tab-lamp\s*\{([^}]*)\}", css)
+    assert lamp is not None
+    assert "border-radius: 50%" in lamp.group(1)
+    assert "var(--red)" in lamp.group(1)
+    assert "animation:" in lamp.group(1)
+    assert re.search(r"@keyframes\s+testing-lamp\s*\{", css)
+    assert re.search(
+        r"@media\s+\(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*"
+        r"\.tab-lamp[^}]*animation:\s*none",
+        css,
+        re.DOTALL,
+    )
+    assert "sessionIsTesting" in app_js
+    assert "TESTING_HOLD_MS" in app_js
+    assert "info.activity = message.activity" in app_js
 
 
 def test_the_cells_heading_folds_every_card_to_its_header(app_js):
@@ -1368,6 +1401,37 @@ def test_session_keyboard_is_a_fixed_two_row_grid(markup, app_js):
         r"button:active:not\(:disabled\)\s*\{([^}]*)\}", css
     ).group(1)
     assert re.search(r"\.run\s*\{", css) is None
+
+
+def test_a_running_test_shows_a_rose_testing_badge(app_js):
+    """Pink `testing` badge on the session; the tab lamp is what blinks."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    testing = re.search(r"\.badge\.testing\s*\{([^}]*)\}", css)
+    assert testing is not None
+    assert "var(--red)" in testing.group(1)
+    assert "animation:" not in testing.group(1)
+    assert "sessionIsTesting" in app_js
+    assert "label = testing ? 'testing'" in app_js or 'label = testing ? "testing"' in app_js
+
+
+def test_an_empty_feed_during_a_test_run_points_at_the_live_log(app_js):
+    """⌘+Enter is a lie while a test is running; the log is what to watch.
+
+    History already has a `run_test` entry while the class is in flight. That
+    must not become a 'Transaction run_test' marker and hide this copy.
+    """
+    restore = re.search(r"function cellsFromHistory\(.*?\n\}", app_js, re.DOTALL)
+    assert restore is not None
+    history = restore.group(0)
+    assert "} else {" not in history
+    assert "entry.kind === 'commit'" in history
+    render = re.search(r"function renderFeed\(.*?\n\}", app_js, re.DOTALL)
+    assert render is not None
+    body = render.group(0)
+    assert "sessionIsTesting(record)" in body
+    assert "execCount === 0" in body
+    assert "Tests are running — open Logs to watch them live." in body
+    assert "No commands yet — press ⌘+Enter to run" in body
 
 
 def test_new_key_spins_while_a_session_is_opening(app_js):

@@ -29,7 +29,9 @@ for line in sys.stdin:
         break
     if frame.get("code") == "SLEEP":
         time.sleep(3)
-    if frame.get("code") == "DIE":
+    if frame["t"] == "run_test" and frame.get("test_class") == "SLEEP":
+        time.sleep(3)
+    if frame.get("code") == "DIE" or frame.get("test_class") == "DIE":
         sys.stderr.write("odoo exploded\n")
         sys.stderr.flush()
         break
@@ -51,7 +53,7 @@ for line in sys.stdin:
         sys.stdout.write(json.dumps({"t":"bye","id":frame["id"]}) + "\n")
         sys.stdout.flush()
         break
-    if frame.get("code") == "FIRST":
+    if frame.get("code") == "FIRST" or frame.get("test_class") == "Slow":
         time.sleep(0.2)
     sys.stdout.write(json.dumps({"t":"result","id":frame["id"],"stdout":"",
                                  "stdout_truncated":False,"result":frame.get("code"),
@@ -76,6 +78,54 @@ for line in sys.stdin:
                                  "stdout_truncated":False,"result":payload,
                                  "result_truncated":False,"error":None,
                                  "duration":0.01}) + "\n")
+    sys.stdout.flush()
+"""
+
+RUN_TEST_STDERR_FAKE = r"""
+import json, sys, time
+sys.stdout.write(json.dumps({"t":"hello","protocol":1,"odoo":"19.0","python":"3.12.0",
+                             "db":"db","uid":1,"pid":4242}) + "\n")
+sys.stdout.flush()
+for line in sys.stdin:
+    frame = json.loads(line)
+    if frame["t"] == "close":
+        sys.stdout.write(json.dumps({"t":"bye","id":frame["id"]}) + "\n")
+        sys.stdout.flush()
+        break
+    sys.stderr.write("ERROR: FAIL TestSaleOrder.test_x\n")
+    sys.stderr.flush()
+    time.sleep(0.1)
+    sys.stdout.write(json.dumps({"t":"result","id":frame["id"],"stdout":"",
+                                 "stdout_truncated":False,"result":None,
+                                 "result_truncated":False,"error":None,"duration":0.01,
+                                 "test":{"tests_run":1,"failures":1,"errors":0,
+                                 "skipped":0,"success":False}}) + "\n")
+    sys.stdout.flush()
+"""
+
+RUN_TEST_NOISY_FAKE = r"""
+import json, sys, time
+sys.stdout.write(json.dumps({"t":"hello","protocol":1,"odoo":"19.0","python":"3.12.0",
+                             "db":"db","uid":1,"pid":4242}) + "\n")
+sys.stdout.flush()
+for i in range(2100):
+    sys.stderr.write("BEFORE %d\n" % i)
+sys.stderr.flush()
+for line in sys.stdin:
+    frame = json.loads(line)
+    if frame["t"] == "close":
+        sys.stdout.write(json.dumps({"t":"bye","id":frame["id"]}) + "\n")
+        sys.stdout.flush()
+        break
+    for i in range(3000):
+        sys.stderr.write("NOISE %d\n" % i)
+    sys.stderr.flush()
+    time.sleep(0.5)  # let the daemon drain stderr before the result lands
+    sys.stdout.write(json.dumps({"t":"result","id":frame["id"],"stdout":"",
+                                 "stdout_truncated":False,"result":None,
+                                 "result_truncated":False,"error":None,"duration":0.01,
+                                 "test":{"tests_run":62,"failures":0,"errors":0,
+                                 "skipped":0,"success":True}}) + "\n")
     sys.stdout.flush()
 """
 
@@ -259,6 +309,154 @@ async def test_pending_counter_tracks_transaction_boundaries(tmp_path):
     await session.execute("c")
     await session.rollback()
     assert session.pending_commands == 0
+    await session.close()
+
+
+async def test_run_test_sends_the_frame_and_reports_no_discarded_work(tmp_path):
+    session = await make_session(tmp_path)
+    await session.start()
+    result = await session.run_test("sale", "TestSaleOrder", "test_x")
+    assert result["result"] == "42"  # the generic fake reply, proves it dispatched
+    assert result["discarded_pending"] is False
+    assert result["stderr"] == []
+    await session.close()
+
+
+async def test_run_test_flags_discarded_pending_and_clears_the_counter(tmp_path):
+    session = await make_session(tmp_path)
+    await session.start()
+    await session.execute("a")
+    assert session.pending_commands == 1
+    result = await session.run_test("sale", "TestSaleOrder")
+    assert result["discarded_pending"] is True
+    assert session.pending_commands == 0
+    await session.close()
+
+
+async def test_run_test_captures_stderr_produced_during_the_run(tmp_path):
+    session = await make_session(tmp_path, script=RUN_TEST_STDERR_FAKE)
+    await session.start()
+    result = await session.run_test("sale", "TestSaleOrder", "test_x")
+    assert any("FAIL TestSaleOrder.test_x" in line for line in result["stderr"])
+    assert result["test"]["success"] is False
+    await session.close()
+
+
+async def test_run_test_stderr_excludes_lines_from_before_the_call(tmp_path):
+    noisy = 'import sys\nsys.stderr.write("OLD noise\\n")\nsys.stderr.flush()\n' + RUN_TEST_STDERR_FAKE
+    session = await make_session(tmp_path, script=noisy)
+    await session.start()
+    await asyncio.sleep(0.05)  # let the old stderr line land before the snapshot
+    result = await session.run_test("sale", "TestSaleOrder")
+    assert not any("OLD noise" in line for line in result["stderr"])
+    assert any("FAIL" in line for line in result["stderr"])
+    await session.close()
+
+
+async def test_run_test_stderr_survives_the_tail_deque_overflowing(tmp_path):
+    """`_stderr` is capped at 2000 lines. A real test class logs far more than
+    that, so an index into it is meaningless by the time the result lands."""
+    session = await make_session(tmp_path, script=RUN_TEST_NOISY_FAKE)
+    await session.start()
+    # Wait for the pre-run noise to fill the tail deque to its ceiling.
+    for _ in range(200):
+        if len(session._stderr) >= 2000:
+            break
+        await asyncio.sleep(0.02)
+    assert len(session._stderr) == 2000, "the deque must be full before the run"
+
+    result = await session.run_test("qbo", "TestBig", timeout=10)
+
+    lines = result["stderr"]
+    assert len(lines) == 3000, "every line the run produced, not a slice of the tail"
+    assert lines[0] == "NOISE 0", "the window starts where the run started"
+    assert lines[-1] == "NOISE 2999"
+    assert not any(line.startswith("BEFORE") for line in lines)
+    assert result["stderr_truncated"] is False
+    await session.close()
+
+
+async def test_run_test_stderr_is_capped_and_says_so(tmp_path):
+    """An unbounded per-run collector would be a memory hole on a long run."""
+    session = await make_session(tmp_path, script=RUN_TEST_NOISY_FAKE)
+    await session.start()
+    for _ in range(200):
+        if len(session._stderr) >= 2000:
+            break
+        await asyncio.sleep(0.02)
+
+    from odoo_sheller import session as session_module
+
+    original = session_module.RUN_STDERR_LIMIT
+    session_module.RUN_STDERR_LIMIT = 500
+    try:
+        result = await session.run_test("qbo", "TestBig", timeout=10)
+    finally:
+        session_module.RUN_STDERR_LIMIT = original
+
+    assert len(result["stderr"]) == 500
+    assert result["stderr"][-1] == "NOISE 2999", "keep the tail, like every other cap here"
+    assert result["stderr_truncated"] is True
+    await session.close()
+
+
+async def test_run_test_stops_collecting_stderr_once_it_answers(tmp_path):
+    """A collector left registered would keep growing for the session's life."""
+    session = await make_session(tmp_path, script=RUN_TEST_STDERR_FAKE)
+    await session.start()
+    await session.run_test("sale", "TestSaleOrder")
+    assert session._stderr_collectors == []
+    await session.close()
+
+
+async def test_run_test_while_busy_is_rejected(tmp_path):
+    session = await make_session(tmp_path)
+    await session.start()
+    running = asyncio.create_task(session.execute("SLEEP"))
+    await asyncio.sleep(0.2)
+    assert session.state is SessionState.BUSY
+    with pytest.raises(SessionBusy):
+        await session.run_test("sale", "TestSaleOrder")
+    await running
+    await session.close()
+
+
+async def test_describe_names_a_running_test(tmp_path):
+    """The UI cannot tell a test from exec unless describe() says so."""
+    session = await make_session(tmp_path)
+    await session.start()
+    assert session.describe().get("activity") is None
+    running = asyncio.create_task(session.run_test("sale", "SLEEP"))
+    await asyncio.sleep(0.2)
+    assert session.describe()["activity"] == "run_test"
+    assert session.describe()["state"] == "busy"
+    await running
+    assert session.describe().get("activity") is None
+    await session.close()
+
+
+async def test_describe_names_a_running_exec(tmp_path):
+    session = await make_session(tmp_path)
+    await session.start()
+    running = asyncio.create_task(session.execute("SLEEP"))
+    await asyncio.sleep(0.2)
+    assert session.describe()["activity"] == "exec"
+    await running
+    assert session.describe().get("activity") is None
+    await session.close()
+
+
+async def test_busy_state_events_carry_the_running_activity(tmp_path):
+    seen = []
+    session = await make_session(tmp_path, on_event=lambda event: seen.append(event))
+    await session.start()
+    running = asyncio.create_task(session.run_test("sale", "SLEEP"))
+    await asyncio.sleep(0.2)
+    busy = [event for event in seen if event.get("state") == "busy"]
+    assert busy[-1]["activity"] == "run_test"
+    await running
+    ready = [event for event in seen if event.get("state") == "ready"]
+    assert ready[-1].get("activity") is None
     await session.close()
 
 
@@ -647,3 +845,119 @@ async def test_a_former_owner_may_still_close_what_it_handed_over(tmp_path):
         assert mine in session.former_keys
     finally:
         await session.kill()
+
+
+# --- autoclose (test sessions clean up after themselves) -----------------
+
+
+def autoclose_events(seen):
+
+    return [event for event in seen if event["kind"] == "autoclose"]
+
+
+async def test_a_test_session_announces_it_is_finished(tmp_path):
+    seen = []
+    session = await make_session(
+        tmp_path, autoclose=True, on_event=lambda event: seen.append(event)
+    )
+    await session.start()
+    assert autoclose_events(seen) == [], "hello alone must not end the session"
+
+    await session.run_test("sale", "TestSaleOrder")
+
+    assert len(autoclose_events(seen)) == 1
+    assert autoclose_events(seen)[0]["session"] == session.id
+    await session.close()
+
+
+async def test_autoclose_fires_after_the_result_reaches_the_journal(tmp_path):
+    """Closing before the result is written would put session_close ahead of
+    it in the transcript."""
+    seen = []
+    kinds_at_signal = []
+
+    def watch(event):
+        seen.append(event)
+        if event["kind"] == "autoclose":
+            kinds_at_signal.extend(r["kind"] for r in session.journal.records())
+
+    session = await make_session(tmp_path, autoclose=True, on_event=watch)
+    await session.start()
+    await session.run_test("sale", "TestSaleOrder")
+
+    assert "result" in kinds_at_signal, "the result must already be journalled"
+    await session.close()
+
+
+async def test_a_plain_session_never_announces_autoclose(tmp_path):
+    seen = []
+    session = await make_session(tmp_path, on_event=lambda event: seen.append(event))
+    await session.start()
+    await session.run_test("sale", "TestSaleOrder")
+    await session.execute("1 + 1")
+    assert autoclose_events(seen) == []
+    await session.close()
+
+
+async def test_a_test_session_that_never_ran_a_test_stays_open(tmp_path):
+    """The flag says how it ends, not that it ends before doing its job."""
+    seen = []
+    session = await make_session(
+        tmp_path, autoclose=True, on_event=lambda event: seen.append(event)
+    )
+    await session.start()
+    await session.execute("1 + 1")
+    assert autoclose_events(seen) == []
+    await session.close()
+
+
+async def test_a_timed_out_run_announces_only_when_the_result_lands(
+    tmp_path, monkeypatch
+):
+    """A run that blew its ceiling is still going: closing then would kill it."""
+
+    async def fake_signal(container, pid, name):
+        pass
+
+    monkeypatch.setattr("odoo_sheller.session.send_signal", fake_signal)
+    seen = []
+    session = await make_session(
+        tmp_path,
+        script=LATE_RESULT_FAKE,
+        autoclose=True,
+        on_event=lambda event: seen.append(event),
+    )
+    await session.start()
+    with pytest.raises(TimeoutError):
+        await session.run_test("sale", "Slow", timeout=0.05)
+    assert autoclose_events(seen) == [], "the run still owns the container"
+
+    await wait_for_state(session, SessionState.READY)
+    assert len(autoclose_events(seen)) == 1
+    kinds = [record["kind"] for record in session.journal.records()]
+    assert "abandoned_result" in kinds
+    await session.kill()
+
+
+async def test_a_test_session_whose_process_died_is_announced_too(tmp_path):
+    """Nothing is coming back; the registry entry should not linger either."""
+    seen = []
+    session = await make_session(
+        tmp_path, autoclose=True, on_event=lambda event: seen.append(event)
+    )
+    await session.start()
+    with pytest.raises(SessionDead):
+        await session.run_test("sale", "DIE")
+    assert session.state is SessionState.DEAD
+    assert len(autoclose_events(seen)) == 1
+
+
+async def test_autoclose_is_announced_once(tmp_path):
+    seen = []
+    session = await make_session(
+        tmp_path, autoclose=True, on_event=lambda event: seen.append(event)
+    )
+    await session.start()
+    await session.run_test("sale", "TestSaleOrder")
+    await session.close()
+    assert len(autoclose_events(seen)) == 1

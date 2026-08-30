@@ -15,6 +15,7 @@ from odoo_sheller.protocol import (
     encode_frame,
     exec_frame,
     rollback_frame,
+    run_test_frame,
 )
 from odoo_sheller.transport import Target, send_signal
 
@@ -31,6 +32,29 @@ def _journal_fields(frame: dict) -> dict:
     """Drop the wire type — the journal record already carries its own `kind`."""
 
     return {key: value for key, value in frame.items() if key != "t"}
+
+
+class _StderrWindow:
+    """Lines Odoo logged while one command ran.
+
+    The session's own `_stderr` is a short rolling tail, so an index into it
+    is meaningless once a noisy run has wrapped it. This collects the run's
+    own lines as they arrive, keeping the tail if there are too many — and
+    knows the difference between "exactly at the ceiling" and "over it".
+    """
+
+    def __init__(self, limit: int):
+        self.lines: deque[str] = deque(maxlen=limit)
+        self.total = 0
+
+    def append(self, line: str) -> None:
+        self.lines.append(line)
+        self.total += 1
+
+    @property
+    def truncated(self) -> bool:
+
+        return self.total > len(self.lines)
 
 
 class SessionBusy(Exception):
@@ -51,6 +75,16 @@ class CommitNotAllowed(Exception):
 
 HUMAN_OWNER = {"kind": "human", "label": "browser"}
 
+# Per-run stderr ceiling. The session-wide `_stderr` tail is far too short for
+# a whole test class, but an uncapped collector would grow without limit on a
+# long run. The journal keeps every line either way.
+RUN_STDERR_LIMIT = 20000
+# The stderr reader is its own task: lines already in the pipe when the result
+# frame lands have not necessarily been appended yet. Yielding briefly keeps
+# the tail of a run's output from being cut at an arbitrary point — the same
+# reason `_read_frames` drains stderr before declaring the process dead.
+STDERR_DRAIN = 0.05
+
 
 class Session:
     def __init__(
@@ -63,6 +97,7 @@ class Session:
         owner: dict | None = None,
         allow_commit: bool | None = None,
         client_token: str | None = None,
+        autoclose: bool = False,
     ):
         self.id = session_id
         self.target = target
@@ -98,8 +133,19 @@ class Session:
         # stays BUSY until its result frame finally arrives. Going READY here
         # would let a second command queue up behind the first one in the pipe.
         self._abandoned_id: int | None = None
+        # What is holding BUSY (`exec`, `run_test`, …). None when not busy.
+        # A timeout leaves the session BUSY, so this stays set until the result.
+        self._activity: str | None = None
         self._hello_waiter: asyncio.Future = asyncio.get_running_loop().create_future()
         self._stderr: deque[str] = deque(maxlen=2000)
+        # A session opened to run one test and then get out of the way. It
+        # announces itself finished once the run has really settled, and the
+        # registry closes it — see `_maybe_autoclose`.
+        self.autoclose = autoclose
+        self._ran_test = False
+        self._autoclose_announced = False
+        # Live windows, one per in-flight run_test — see `_StderrWindow`.
+        self._stderr_collectors: list[_StderrWindow] = []
         self._reader = asyncio.create_task(self._read_frames())
         self._stderr_reader = asyncio.create_task(self._read_stderr())
 
@@ -125,6 +171,7 @@ class Session:
             "owner": dict(self.owner),
             "allow_commit": self.allow_commit,
             "client_token": self.client_token,
+            "activity": self._activity,
         }
 
     # -- lifecycle -------------------------------------------------------
@@ -243,6 +290,47 @@ class Session:
 
         return result
 
+    async def run_test(
+        self,
+        module: str,
+        test_class: str,
+        test_method: str | None = None,
+        timeout: float = 300.0,
+    ) -> dict:
+        self._ensure_acceptable("run_test")
+        # Odoo's own run_tests() rolls back env.cr if it holds an open
+        # transaction before testing (odoo/tests/shell.py) — silently, unless
+        # we say so here. Whatever was pending is gone either way.
+        discarded_pending = self.pending_commands > 0
+        self.pending_commands = 0
+        request_id = self._take_id()
+        self.journal.write(
+            "run_test", id=request_id, module=module, test_class=test_class,
+            test_method=test_method, actor=dict(self.owner),
+        )
+        self._ran_test = True
+        window = _StderrWindow(RUN_STDERR_LIMIT)
+        self._stderr_collectors.append(window)
+        try:
+            result = await self._request(
+                run_test_frame(request_id, module, test_class, test_method), timeout
+            )
+            await asyncio.sleep(STDERR_DRAIN)  # let the reader catch up on the tail
+        finally:
+            # A run that raised (timeout, death) must not leave a collector
+            # behind: it would keep filling for the rest of the session.
+            self._stderr_collectors.remove(window)
+        result = {
+            **result,
+            "stderr": list(window.lines),
+            "stderr_truncated": window.truncated,
+            "discarded_pending": discarded_pending,
+        }
+        self.journal.write("result", **_journal_fields(result))
+        self._maybe_autoclose()
+
+        return result
+
     async def commit(self, timeout: float = 300.0) -> dict:
 
         return await self._boundary("commit", commit_frame, timeout)
@@ -292,6 +380,11 @@ class Session:
         waiter = loop.create_future()
         self._waiter = waiter
         self._waiter_id = frame.get("id")
+        # Set before BUSY so the state event already names the work. A close
+        # accepted while busy must not overwrite it: the original command is
+        # still what the container is doing.
+        if self._state is not SessionState.BUSY:
+            self._activity = frame.get("t")
         self._set_state(SessionState.BUSY)
         self.process.stdin.write(encode_frame(frame).encode("utf-8"))
         await self.process.stdin.drain()
@@ -382,6 +475,8 @@ class Session:
                 break
             text = line.decode("utf-8", "replace").rstrip("\n")
             self._stderr.append(text)
+            for collector in self._stderr_collectors:
+                collector.append(text)
             self.journal.write("stderr", line=text)
             self._emit({"kind": "stderr", "line": text})
 
@@ -430,6 +525,22 @@ class Session:
         self.journal.write("abandoned_result", **_journal_fields(frame))
         if self._state is SessionState.BUSY:
             self._set_state(SessionState.READY)
+        self._maybe_autoclose()
+
+    def _maybe_autoclose(self) -> None:
+        """Say the session has done what it was opened for.
+
+        Announced only after the run has really settled *and* been journalled:
+        the registry closes on this, and closing any earlier would put
+        `session_close` ahead of the result in the transcript. A run that blew
+        its ceiling is deliberately not settled — it still owns the container,
+        so the announcement waits for `_settle_abandoned`.
+        """
+        if not (self.autoclose and self._ran_test) or self._autoclose_announced:
+
+            return
+        self._autoclose_announced = True
+        self._emit({"kind": "autoclose", "session": self.id})
 
     def _fail_pending_waiters(self, reason: str) -> None:
         if self._waiter is not None and not self._waiter.done():
@@ -443,6 +554,7 @@ class Session:
             return
         self._set_state(SessionState.DEAD)
         self.journal.write("session_died", reason=reason, stderr=self.stderr_tail(50))
+        self._maybe_autoclose()
         if self._waiter is not None and not self._waiter.done():
             self._waiter.set_exception(SessionDead(f"{reason}: {self._stderr_text()}"))
         if not self._hello_waiter.done():
@@ -470,8 +582,15 @@ class Session:
             return
         if state in (SessionState.CLOSED, SessionState.DEAD):
             self._abandoned_id = None  # nothing is coming back now
+        if state is not SessionState.BUSY:
+            self._activity = None
         self._state = state
-        self._emit({"kind": "state", "state": state.value, "session": self.id})
+        self._emit({
+            "kind": "state",
+            "state": state.value,
+            "session": self.id,
+            "activity": self._activity,
+        })
 
     def _emit(self, event: dict) -> None:
         if self._on_event is not None:

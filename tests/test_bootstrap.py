@@ -10,7 +10,9 @@ ROOT = Path(__file__).resolve().parent.parent
 BOOTSTRAP = ROOT / "odoo_sheller" / "bootstrap.py"
 HARNESS = ROOT / "tests" / "bootstrap_harness.py"
 
-ALLOWED_IMPORTS = {"ast", "io", "json", "os", "sys", "time", "traceback"}
+ALLOWED_IMPORTS = {
+    "ast", "importlib", "io", "json", "os", "socket", "sys", "time", "traceback",
+}
 
 
 def run_bootstrap(frames, timeout=15):
@@ -144,3 +146,29 @@ def test_every_command_answers_exactly_once(code):
     results = [frame for frame in out if frame["t"] == "result"]
     assert len(results) == 1
     assert results[0]["id"] == 9
+
+
+def test_free_port_is_probed_on_the_interface_the_server_binds():
+    """http_spawn binds config['http_interface'] or '0.0.0.0'. A port proved
+    free only on loopback can still be taken there — the exact Errno 98 this
+    code exists to avoid."""
+    source = BOOTSTRAP.read_text(encoding="utf-8")
+    assert '"127.0.0.1", 0' not in source, "loopback is not where the server binds"
+    assert "http_interface" in source
+
+
+def test_run_test_without_a_real_odoo_reports_a_structured_error_not_a_crash():
+    """The harness's FakeEnv has no real `odoo` package on sys.path — the one
+    failure mode a unit test can actually exercise without a container."""
+    out, _, _ = run_bootstrap([
+        {"t": "run_test", "id": 1, "module": "sale", "test_class": "TestSaleOrder",
+         "test_method": None},
+        {"t": "exec", "id": 2, "code": "'alive'"},
+    ])
+    result = out[1]
+    assert result["t"] == "result"
+    assert result["id"] == 1
+    assert result["test"] is None
+    assert result["error"]["type"] == "ModuleNotFoundError"
+    # the loop must still be usable afterwards
+    assert out[2]["result"] == "'alive'"

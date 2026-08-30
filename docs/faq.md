@@ -166,6 +166,13 @@ No. One session, one command at a time. A second one gets refused with
 There's no queue on purpose — a queue would misrepresent when a command
 actually runs. Need real parallelism, open a second session.
 
+**How do I tell a test run from ordinary busy?**
+
+The session badge reads `testing` in rose instead of cyan `busy`, and that
+session's tab grows a blinking rose lamp. A run that finishes in a blink
+still holds both for about a second so they are readable. An ordinary
+`exec` does not light the lamp.
+
 **Do variables persist between commands?**
 
 Yes, that's the entire point. Assign something in one command, use it in the

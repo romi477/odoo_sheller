@@ -76,6 +76,7 @@ class Registry:
         allow_commit: bool | None = None,
         replace: str | None = None,
         client_token: str | None = None,
+        autoclose: bool = False,
     ) -> Session:
         if replace:
             previous = self.target_of_past_session(replace)
@@ -110,6 +111,7 @@ class Registry:
                 owner=owner,
                 allow_commit=allow_commit,
                 client_token=client_token,
+                autoclose=autoclose,
             )
             self.sessions[session_id] = session
             # Watchers need the id before hello: startup stderr is already
@@ -179,5 +181,19 @@ class Registry:
     def _publish(self, session_id: str, event: dict) -> None:
         for queue in self.subscribers.get(session_id, []):
             queue.put_nowait(event)
+        if event.get("kind") == "autoclose":
+            # A session opened to run one test says here that the run has
+            # settled and been journalled. Closing is scheduled rather than
+            # awaited: this runs inside the session's own event callback.
+            asyncio.create_task(self._autoclose(session_id))
+
+            return
         if event.get("kind") in ("state", "owner", "policy"):
             self._broadcast({**event, "session": session_id})
+
+    async def _autoclose(self, session_id: str) -> None:
+        if session_id not in self.sessions:
+
+            return  # already closed by hand, or gone with the daemon
+        with contextlib.suppress(Exception):
+            await self.close(session_id)

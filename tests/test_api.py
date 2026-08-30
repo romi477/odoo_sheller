@@ -45,6 +45,7 @@ class FakeSession:
             "pending_commands": self.pending_commands,
             "owner": dict(self.owner),
             "allow_commit": self.allow_commit,
+            "activity": None,
         }
 
     def held_by(self, key):
@@ -97,6 +98,20 @@ class FakeSession:
 
     async def interrupt(self):
         self.calls.append(("interrupt",))
+
+    async def run_test(self, module, test_class, test_method=None, timeout=300.0):
+        self.calls.append(("run_test", module, test_class, test_method))
+        if self.raises:
+            raise self.raises
+
+        return {
+            "stdout": "", "error": None, "duration": 0.01,
+            "test": {
+                "module": module, "test_class": test_class, "test_method": test_method,
+                "tests_run": 1, "failures": 0, "errors": 0, "skipped": 0, "success": True,
+            },
+            "stderr": [], "discarded_pending": False,
+        }
 
     async def close(self, timeout=10.0):
         self.calls.append(("close",))
@@ -205,6 +220,63 @@ def test_exec_timeout_is_504(client):
 
 def test_unknown_session_is_404(client):
     assert client.post("/api/sessions/nope/exec", json={"code": "1"}).status_code == 404
+
+
+def test_run_test_parses_class_only_spec(client):
+    response = client.post("/api/sessions/s1/run_test", json={"test": "sale.TestSaleOrder"})
+    assert response.status_code == 200
+    assert response.json()["test"]["success"] is True
+    assert client.registry.session.calls[-1] == ("run_test", "sale", "TestSaleOrder", None)
+
+
+def test_run_test_parses_class_and_method_spec(client):
+    response = client.post(
+        "/api/sessions/s1/run_test", json={"test": "sale.TestSaleOrder.test_x"}
+    )
+    assert response.status_code == 200
+    assert client.registry.session.calls[-1] == ("run_test", "sale", "TestSaleOrder", "test_x")
+
+
+def test_run_test_rejects_a_malformed_spec(client):
+    response = client.post("/api/sessions/s1/run_test", json={"test": "not a valid spec!!"})
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "invalid_test_spec"
+    assert client.registry.session.calls == []
+
+
+@pytest.mark.parametrize("bad", [0, -1, 100000])
+def test_run_test_rejects_a_timeout_that_cannot_work(client, bad):
+    """timeout=0 sends the frame and gives up on it at once: the run really
+    starts, and the session stays busy for its whole length."""
+    response = client.post(
+        "/api/sessions/s1/run_test", json={"test": "sale.TestSaleOrder", "timeout": bad}
+    )
+    assert response.status_code == 422
+    assert client.registry.session.calls == [], "nothing may reach the container"
+
+
+def test_run_test_accepts_a_long_but_sane_timeout(client):
+    response = client.post(
+        "/api/sessions/s1/run_test", json={"test": "sale.TestSaleOrder", "timeout": 600}
+    )
+    assert response.status_code == 200
+    assert client.registry.session.calls[-1] == ("run_test", "sale", "TestSaleOrder", None)
+
+
+def test_run_test_on_busy_session_is_409(client):
+    client.registry.session.raises = SessionBusy("busy")
+    response = client.post("/api/sessions/s1/run_test", json={"test": "sale.TestSaleOrder"})
+    assert response.status_code == 409
+
+
+def test_run_test_without_the_write_key_is_403(client):
+    response = client.post(
+        "/api/sessions/s1/run_test",
+        json={"test": "sale.TestSaleOrder"},
+        headers={"X-OS-Session-Key": ""},
+    )
+    assert response.status_code == 403
+    assert client.registry.session.calls == []
 
 
 class FakeJournal:
@@ -789,3 +861,95 @@ def test_a_stranger_still_cannot_close_a_live_session(client):
     session.held_by = lambda key: key == session.write_key
     response = client.delete("/api/sessions/s1", headers={"X-OS-Session-Key": "nope"})
     assert response.status_code == 403
+
+
+def test_list_tests_returns_the_catalogue(client, monkeypatch):
+    async def fake_list(container, module, runner=None):
+        assert container == "qbo19"
+        assert module == "widget"
+
+        return {
+            "ok": True,
+            "module": "widget",
+            "path": "/addons/widget",
+            "classes": [{"name": "TestAlpha", "spec": "widget.TestAlpha", "methods": []}],
+            "error": None,
+            "error_code": None,
+        }
+
+    monkeypatch.setattr("odoo_sheller.discovery.list_tests", fake_list)
+    response = client.get("/api/containers/qbo19/tests", params={"module": "widget"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {
+        "module": "widget",
+        "path": "/addons/widget",
+        "classes": [{"name": "TestAlpha", "spec": "widget.TestAlpha", "methods": []}],
+    }
+    assert "ok" not in body
+
+
+def test_list_tests_rejects_a_dotted_spec(client):
+    response = client.get("/api/containers/qbo19/tests", params={"module": "sale.TestSale"})
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "invalid_module_name"
+
+
+def test_list_tests_missing_module_query_is_invalid(client):
+    response = client.get("/api/containers/qbo19/tests")
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "invalid_module_name"
+
+
+def test_list_tests_unknown_module_is_404(client, monkeypatch):
+    async def fake_list(container, module, runner=None):
+
+        return {
+            "ok": False,
+            "module": module,
+            "path": None,
+            "classes": [],
+            "error": "module widget not on addons path",
+            "error_code": "module_not_found",
+        }
+
+    monkeypatch.setattr("odoo_sheller.discovery.list_tests", fake_list)
+    response = client.get("/api/containers/qbo19/tests", params={"module": "widget"})
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["error"] == "module_not_found"
+    assert "disk" in detail["recovery"]
+
+
+def test_list_tests_docker_failure_is_502(client, monkeypatch):
+    async def fake_list(container, module, runner=None):
+
+        return {
+            "ok": False,
+            "module": module,
+            "path": None,
+            "classes": [],
+            "error": "OCI runtime exec failed",
+            "error_code": None,
+        }
+
+    monkeypatch.setattr("odoo_sheller.discovery.list_tests", fake_list)
+    response = client.get("/api/containers/qbo19/tests", params={"module": "widget"})
+    assert response.status_code == 502
+
+
+def test_open_forwards_autoclose(client):
+    """Only a caller that says so gets a self-closing session."""
+    response = client.post(
+        "/api/sessions",
+        json={"container": "c", "database": "db", "odoo_bin": "/odoo-bin", "autoclose": True},
+    )
+    assert response.status_code == 200
+    assert client.registry.open_kwargs["autoclose"] is True
+
+
+def test_open_does_not_autoclose_by_default(client):
+    client.post(
+        "/api/sessions", json={"container": "c", "database": "db", "odoo_bin": "/odoo-bin"}
+    )
+    assert client.registry.open_kwargs["autoclose"] is False

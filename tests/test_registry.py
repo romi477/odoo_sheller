@@ -261,3 +261,76 @@ async def test_registry_broadcasts_session_lifecycle(tmp_path, monkeypatch):
     registry.unwatch(queue)
     registry._broadcast({"kind": "session_closed", "session": "abc"})
     assert queue.empty(), "a closed watcher must stop receiving"
+
+
+# --- autoclose ----------------------------------------------------------
+
+
+class _FinishingSession:
+    """A session that announces itself finished, the way a test session does."""
+
+    def __init__(self, session_id="s1"):
+        self.id = session_id
+        self.state = SessionState.READY
+        self.closed = []
+
+    async def close(self, timeout=10.0):
+        self.closed.append("close")
+        self.state = SessionState.CLOSED
+
+    async def kill(self):
+        self.closed.append("kill")
+        self.state = SessionState.CLOSED
+
+    def describe(self):
+
+        return {"id": self.id}
+
+
+async def _settle(registry, session_id="s1"):
+    """Let the task the registry scheduled for the announcement run."""
+    registry._publish(session_id, {"kind": "autoclose", "session": session_id})
+    for _ in range(50):
+        await __import__("asyncio").sleep(0)
+        if session_id not in registry.sessions:
+            break
+
+
+@pytest.mark.asyncio
+async def test_an_announced_session_is_closed_and_dropped(tmp_path):
+    registry = Registry(journal_root=tmp_path)
+    session = _FinishingSession()
+    registry.sessions["s1"] = session
+
+    await _settle(registry)
+
+    assert session.closed == ["close"], "a graceful close, not a kill"
+    assert "s1" not in registry.sessions
+
+
+@pytest.mark.asyncio
+async def test_announcing_a_session_that_is_already_gone_is_harmless(tmp_path):
+    """The human may have closed it first; the announcement still arrives."""
+    registry = Registry(journal_root=tmp_path)
+
+    await _settle(registry)
+
+    assert registry.sessions == {}
+
+
+@pytest.mark.asyncio
+async def test_watchers_hear_the_session_close(tmp_path):
+    """The browser drops the tab on session_closed; it must still be sent."""
+    import asyncio
+
+    registry = Registry(journal_root=tmp_path)
+    registry.sessions["s1"] = _FinishingSession()
+    queue: asyncio.Queue = asyncio.Queue()
+    registry.watch(queue)
+
+    await _settle(registry)
+
+    kinds = []
+    while not queue.empty():
+        kinds.append(queue.get_nowait()["kind"])
+    assert "session_closed" in kinds

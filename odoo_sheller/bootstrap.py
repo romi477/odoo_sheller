@@ -6,9 +6,11 @@ interpreter and must never import from this project.
 """
 
 import ast
+import importlib
 import io
 import json
 import os
+import socket
 import sys
 import time
 import traceback
@@ -87,6 +89,105 @@ def _os_run(namespace, code, cell):
     }
 
 
+def _os_test_tags(module, test_class, test_method):
+    spec = f"*/{module}:{test_class}"
+    if test_method:
+        spec += f".{test_method}"
+
+    return spec
+
+
+def _os_free_port(interface):
+    """A port nothing is listening on yet, for the test HTTP daemon to bind.
+
+    The container's own Odoo is usually already on config['http_port'] (e.g.
+    8069) — odoo.tests.shell.run_tests() spawns a second HTTP daemon in this
+    process on that same configured port unconditionally, which fails with
+    "Address already in use" and takes the whole session down with it.
+
+    Probed on the interface `http_spawn` will actually bind, not on loopback:
+    a port free on 127.0.0.1 can still be held on another interface, which
+    would raise the very error this exists to avoid.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind((interface, 0))
+
+        return sock.getsockname()[1]
+    finally:
+        sock.close()
+
+
+def _os_run_test(env, module, test_class, test_method):
+    captured = io.StringIO()
+    saved_stdout = sys.stdout
+    sys.stdout = captured
+    started = time.time()
+    error = None
+    test = None
+    try:
+        shell = importlib.import_module("odoo.tests.shell")
+        server = importlib.import_module("odoo.service.server").server
+        if server.httpd is None:
+            # Only before the first spawn in this process: run_tests() itself
+            # skips spawning a second time, and clobbering the port afterwards
+            # would desync it from the daemon actually already listening.
+            # `server.port` is what http_spawn() actually binds — it was set
+            # from config['http_port'] back when this shell process started
+            # (odoo/cli/shell.py calls server.start() before our loop ever
+            # runs), so mutating the config dict alone here has no effect;
+            # the server object's own attribute has to change too.
+            config = importlib.import_module("odoo.tools").config
+            free_port = _os_free_port(server.interface or config["http_interface"]
+                                      or "0.0.0.0")
+            server.port = free_port
+            config["http_port"] = free_port
+        test_tags = _os_test_tags(module, test_class, test_method)
+        report = shell.run_tests(env, test_tags, modules=[module], reload_tests=True)
+        if report is None:
+            error = {
+                "type": "TestRunnerRefused",
+                "message": (
+                    "odoo.tests.shell.run_tests refused to run: the container's "
+                    "Odoo config must have workers=0 (threaded mode)"
+                ),
+                "traceback": "",
+            }
+        else:
+            test = {
+                "module": module,
+                "test_class": test_class,
+                "test_method": test_method,
+                "tests_run": report.testsRun,
+                "failures": report.failures_count,
+                "errors": report.errors_count,
+                "skipped": report.skipped,
+                "success": report.wasSuccessful(),
+            }
+    # BaseException on purpose: an interrupted test run is an ordinary result
+    # frame, not a reason to lose the session.
+    except BaseException as exc:  # noqa: BLE001
+        error = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+    finally:
+        sys.stdout = saved_stdout
+    duration = time.time() - started
+    stdout, stdout_truncated = _os_clip(captured.getvalue(), _OS_MAX_STDOUT)
+
+    return {
+        "stdout": stdout,
+        "stdout_truncated": stdout_truncated,
+        "result": None,
+        "result_truncated": False,
+        "error": error,
+        "duration": duration,
+        "test": test,
+    }
+
+
 def _os_commit(env):
     env.flush_all()
     env.cr.commit()
@@ -145,6 +246,16 @@ def _os_main(namespace):
         request_id = frame.get("id")
         if kind == "exec":
             answer = _os_run(namespace, frame.get("code", ""), f"<os-cell-{request_id}>")
+            answer["t"] = "result"
+            answer["id"] = request_id
+            _os_send(frames, answer)
+        elif kind == "run_test":
+            answer = _os_run_test(
+                env,
+                frame.get("module", ""),
+                frame.get("test_class", ""),
+                frame.get("test_method"),
+            )
             answer["t"] = "result"
             answer["id"] = request_id
             _os_send(frames, answer)

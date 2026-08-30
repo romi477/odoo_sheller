@@ -35,6 +35,17 @@ def test_builders_carry_type_and_id():
     assert protocol.close_frame(6) == {"t": "close", "id": 6}
 
 
+def test_run_test_frame_carries_module_class_and_optional_method():
+    assert protocol.run_test_frame(7, "sale", "TestSaleOrder") == {
+        "t": "run_test", "id": 7, "module": "sale",
+        "test_class": "TestSaleOrder", "test_method": None,
+    }
+    assert protocol.run_test_frame(8, "sale", "TestSaleOrder", "test_quotation") == {
+        "t": "run_test", "id": 8, "module": "sale",
+        "test_class": "TestSaleOrder", "test_method": "test_quotation",
+    }
+
+
 def test_frame_line_limit_covers_a_clipped_bootstrap_payload():
     """64 KiB is asyncio's default; a clipped stdout+result frame is larger."""
     assert protocol.FRAME_LINE_LIMIT > 64 * 1024

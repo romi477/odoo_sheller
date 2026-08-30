@@ -151,6 +151,74 @@ async def test_close_leaves_no_committed_data(session):
         await registry.close(fresh.id, force=True)
 
 
+async def test_run_test_runs_a_single_known_passing_method(session):
+    """base is always installed; TestFloatPrecision is stable core Odoo code."""
+    result = await session.run_test("base", "TestFloatPrecision", "test_rounding_02")
+    assert result["error"] is None
+    assert result["test"]["tests_run"] == 1
+    assert result["test"]["failures"] == 0
+    assert result["test"]["errors"] == 0
+    assert result["test"]["success"] is True
+    assert result["discarded_pending"] is False
+
+
+async def test_run_test_runs_a_whole_class(session):
+    result = await session.run_test("base", "TestFloatPrecision")
+    assert result["error"] is None
+    assert result["test"]["tests_run"] > 1
+    assert result["test"]["success"] is True
+
+
+async def test_run_test_with_no_matching_name_reports_zero_not_success(session):
+    """OdooTestResult.wasSuccessful() is True for zero tests too — tests_run must
+    be checked, or a typo'd name silently reads as a pass."""
+    result = await session.run_test("base", "ThereIsNoSuchTestClass")
+    assert result["error"] is None
+    assert result["test"]["tests_run"] == 0
+    assert result["test"]["success"] is True  # the misleading part, made visible
+
+
+async def test_run_test_discards_pending_exec_work_in_the_same_session(session):
+    created = await session.execute(
+        "p = env['res.partner'].create({'name': 'pt-e2e-run-test'})\np.id"
+    )
+    assert created["error"] is None
+    assert session.pending_commands == 1
+
+    result = await session.run_test("base", "TestFloatPrecision", "test_rounding_02")
+    assert result["discarded_pending"] is True
+    assert session.pending_commands == 0
+
+    check = await session.execute(
+        "env['res.partner'].search_count([('name', '=', 'pt-e2e-run-test')])"
+    )
+    assert check["result"] == "0"
+
+
+async def test_a_test_session_closes_itself_when_the_run_ends(tmp_path):
+    """The whole point of autoclose: nobody has to remember."""
+    registry = Registry(journal_root=tmp_path)
+    live = await registry.open(CONTAINER, DATABASE, ODOO_BIN, autoclose=True)
+    session_id = live.id
+    try:
+        result = await live.run_test("base", "TestFloatPrecision", "test_rounding_02")
+        assert result["test"]["success"] is True
+
+        for _ in range(100):
+            if session_id not in registry.sessions:
+                break
+            await asyncio.sleep(0.05)
+        assert session_id not in registry.sessions, "the session should be gone"
+
+        # And the result is still readable from the journal it left behind.
+        records = live.journal.records()
+        assert any(record["kind"] == "run_test" for record in records)
+        assert any(record["kind"] == "session_close" for record in records)
+    finally:
+        if session_id in registry.sessions:
+            await registry.close(session_id, force=True)
+
+
 async def test_handover_keeps_the_namespace_and_moves_the_right_to_type(session):
     """The human prepares, the agent continues, and the journal knows who did what."""
     prepared = await session.execute("handover_probe = 21 * 2\nhandover_probe")

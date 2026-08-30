@@ -7,15 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-Nothing yet.
-
 ## [1.1.0] — 2026-08-28
 
 The MCP server now spells out the working habits that were left as guesswork:
 how to run delayed jobs in the shell, when to close a session, and how to
-notice Grant commit without being told in chat. A new read-only tool carries
-the last of those. The web UI is unchanged at the protocol: a session clock
-on the header, and a cell feed that scrolls without a visible bar.
+notice Grant commit without being told in chat. An agent can list one addon's
+tests and run a class or method by name in its own session. The Sessions
+screen tells a test run apart from ordinary `busy`, and a session clock sits
+on the header.
 
 ### Agent access
 
@@ -31,6 +30,91 @@ on the header, and a cell feed that scrolls without a visible bar.
   in that session need no further check-in.
 - `os_session` — GET of the current session, including `allow_commit`. That
   is how an agent sees a grant flipped in the UI.
+- `os_run_test` — runs one Odoo test method or a whole test class
+  (`module.TestClass` / `module.TestClass.test_method`) through Odoo's own
+  shell-native test runner (`odoo.tests.shell.run_tests`), not a
+  reimplementation. Always opens its own brand-new session first, so it never
+  has a pending transaction to lose; the session is left open afterwards.
+  stdout and the Odoo log lines produced during the run come back separated.
+  `tests_run: 0` is reported explicitly — Odoo's own result object reads as
+  "successful" even when a name matched nothing. Calling it a second time in
+  the same session after `os_exec` left work pending discards that work
+  (Odoo's own test runner rolls back a mid-transaction cursor before testing);
+  the response's `discarded_pending` field says so. The bootstrap picks a
+  free port for the test HTTP daemon `odoo.tests.shell.run_tests()` spawns
+  the first time it runs in a session, and sets it on the server object
+  itself (not just `config['http_port']`, which is already too late to
+  matter — the object's own `port` attribute was fixed at shell startup) —
+  otherwise it collides with the container's own Odoo on the configured
+  port and takes the session down with it.
+- A `run_test` journal entry is now recognized by `os_history` and
+  `os_journal` (previously only `exec` was) — its outcome (`tests_run`,
+  `failures`, `errors`, `skipped`, `success`, stdout/stderr, duration) is
+  shaped the same way `os_run_test` answers with, so a result is still
+  recoverable after a client-side transport timeout on a long-running test
+  class, the same way an abandoned `exec` already was.
+- A client-side read timeout is now reported as `request_timed_out`, not
+  `daemon_unreachable` — the daemon is still working, not down. The
+  instructions tell the agent to poll `os_history`/`os_journal` on the
+  session instead of retrying the call, which would otherwise start a
+  second, duplicate run on top of the one already in flight.
+- Instructions: one `os_run_test` call, one session, one close — running
+  several test classes in a row means opening, reading, and closing that
+  many sessions in turn, not leaving several open at once.
+- `os_list_tests` — list test classes and methods in one addon (`module`,
+  optional `container`), already shaped as `os_run_test` specs. Disk
+  catalogue via `GET /api/containers/{container}/tests?module=`; read-only,
+  opens no session. It lists what Odoo's own loader would run: any class
+  carrying a `test_*` method (not only ones named `Test*`), and only in the
+  modules `tests/__init__.py` actually imports, so a spec it hands out is
+  never one that comes back `tests_run: 0` for having never been loaded.
+- `run_test` collects the Odoo log lines of its own run as they arrive rather
+  than slicing the session's rolling stderr tail. That tail holds 2000 lines;
+  a real test class logs many times more, so the window used to come back
+  empty on exactly the runs worth reading. Output past `RUN_STDERR_LIMIT`
+  keeps the tail and sets `stderr_truncated`.
+- The rebuilt command feed numbers `exec` and `run_test` on one counter.
+  Two separate counters could hand the same number to two commands, and
+  disagreed with the Markdown transcript for the same journal.
+- `os_run_test` waits out the daemon's own registry-load ceiling when opening
+  its session, instead of giving up first and stranding a session whose write
+  key it never received. If the open does time out, the refusal carries the
+  `client_token` to find that session by.
+- A session opened by `os_run_test` closes itself once the run has settled
+  and been journalled — nothing to remember, no container process or test
+  HTTP daemon left holding on. Never set for a human's session. A run that
+  blew its ceiling is not settled yet, so the close waits for the late
+  result rather than killing a run still in progress; a process that died
+  is reaped the same way.
+- `os_test_result(session_id)` — waits for a run started by `os_run_test`
+  and answers with its outcome, or `running` (call again), or `lost` if the
+  run died with its process. Read-only and needs no write key, so it works
+  after the session has closed itself and after this server restarts.
+- `os_run_test` stops waiting at `MCP_CALL_BUDGET` (40s, override with
+  `ODOO_SHELLER_MCP_BUDGET`) and answers `status: "running"` with the
+  session id instead of being killed by the host mid-call. The daemon still
+  gets the full `timeout` the caller asked for — only this server's own
+  waiting is capped, so the run itself is never cut short. The budget covers
+  the whole call, opening the session included: spending it on the run leg
+  alone, on top of a registry load that already took seconds, overshot the
+  host's own limit and the call died before it could hand back the session
+  id. No leg may add a margin on top of the cap either — a margin over a cap
+  defeats the cap.
+- `os_run_test` clips `stderr` from the end rather than the beginning. The
+  line worth reading is the last one (`Tests passed: …`, or the failure that
+  ended the run); clipping from the front returned the test framework's boot
+  chatter and dropped the answer. It also forwards the daemon's own
+  `stderr_truncated`, which reports dropped *lines* and is a different loss
+  from this server's character clip.
+- `os_list_sessions` drops keys for sessions the daemon no longer has, so
+  `yours` stops listing ids of sessions that already closed themselves.
+- The same stderr tail rule and `stderr_truncated` flag now apply when a run
+  is read back through `os_test_result` or `os_history`, not only when
+  `os_run_test` answers directly — both go through the journal, where the
+  clip was still taking the head.
+- `run_test` rejects a timeout of zero or less (and anything over an hour):
+  it would send the frame and abandon it in the same breath, leaving the
+  session busy for the whole real length of the run.
 
 ### Web UI
 
@@ -40,6 +124,18 @@ on the header, and a cell feed that scrolls without a visible bar.
 - Cell feed hides its scrollbar (same pattern as the journal list). The
   CELLS heading stays put; cards size to their content so unfold still
   works when the feed is long.
+- While a test is running, the session badge reads `testing` in Journals-warning
+  rose. The session tab keeps its usual cyan/amber color and grows a blinking
+  rose lamp instead (no animation when the OS asks for reduced motion). A short
+  run still holds both for one pulse so they are readable. Ordinary `exec`
+  stays cyan `busy`. The daemon names the in-flight work as `activity` on
+  `describe()` and on WebSocket `state` events (`run_test` / `exec` / `null`).
+  An empty cell feed during a test run says to open Logs rather than
+  offering `⌘+Enter`. A `run_test` journal entry is not drawn as a
+  transaction marker.
+- Watching a session, the first open of the log keeps the editor's gap under
+  the session keyboard (same restack as log focus). Previously it sat flush
+  against the keys until expand/collapse was clicked.
 
 ## [1.0.0] — 2026-08-21
 

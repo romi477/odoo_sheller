@@ -59,3 +59,16 @@ def rollback_frame(request_id: int) -> dict:
 def close_frame(request_id: int) -> dict:
 
     return {"t": "close", "id": request_id}
+
+
+def run_test_frame(
+    request_id: int, module: str, test_class: str, test_method: str | None = None
+) -> dict:
+
+    return {
+        "t": "run_test",
+        "id": request_id,
+        "module": module,
+        "test_class": test_class,
+        "test_method": test_method,
+    }
