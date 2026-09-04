@@ -16,6 +16,9 @@ const state = {
   journals: [],
   expandedJournalGroups: new Set(),
   startups: new Map(),
+  connectMode: 'local',
+  builds: [],
+  containerCards: new Map(),
 };
 
 const TESTING_HOLD_MS = 1200;
@@ -238,91 +241,300 @@ function showScreen(screen) {
   }
 }
 
+// The identity slot: a container name locally, a build id on odoo.sh. The
+// daemon sends both under `container`, so every lookup here keeps working —
+// but a build id alone is opaque, and an odoo.sh database is the instance's
+// own 60-character name, so display needs its own answer.
+function targetLabel(info) {
+  if (info.kind === 'odoosh') {
+
+    return `${info.container} / ${info.stage || 'odoo.sh'}`;
+  }
+
+  return `${info.container} / ${info.database}`;
+}
+
+// What is about to be written to, for a confirmation that has to be read.
+function targetForConfirm(info) {
+  if (info.kind === 'odoosh') {
+
+    return `${info.database}\n\non ${info.stage} build ${info.container} (${info.host})`;
+  }
+
+  return info.database;
+}
+
 function sessionForContainer(container) {
 
   return [...state.sessions.values()].find((record) => record.info.container === container);
 }
 
-function renderContainers() {
-  const list = document.querySelector('#containers');
+function sessionsForTarget(container) {
+
+  return [...state.sessions.values()].filter((record) => record.info.container === container);
+}
+
+// A card on Connect stands for a target, not for one session, and a target can
+// hold several — another database locally, a second shell on the same build.
+// Closing them one click at a time made the card lie about what it was showing.
+async function closeSessionsForTarget(container) {
+  const records = sessionsForTarget(container);
+  if (!records.length) {
+
+    return;
+  }
+  const dirty = records.filter((record) => (record.info.pending_commands || 0) > 0);
+  if (dirty.length) {
+    const what = records.length > 1
+      ? `Closing ${records.length} sessions on ${container}. Uncommitted work in ${dirty.length} of them will be discarded. Continue?`
+      : 'Uncommitted work will be discarded. Continue?';
+    if (!confirm(what)) {
+
+      return;
+    }
+  }
+  // One question for the batch: the answer is carried into each close rather
+  // than asked again per session.
+  await Promise.allSettled(
+    records.map((record) => closeSession(record.info.id, false, {confirmed: true})),
+  );
+}
+
+function connectedLabel(records) {
+  if (records.length > 1) {
+
+    return `connected · ${records.length} sessions`;
+  }
+
+  return `connected · ${records[0].info.database || ''}`.trim();
+}
+
+function closeLabel(records) {
+
+  return records.length > 1 ? `Close ${records.length} sessions` : 'Close session';
+}
+
+// --- odoo.sh builds -----------------------------------------------------
+//
+// Local containers are discovered; a build is entered. There is no `docker ps`
+// for odoo.sh, so the only list that can exist is the one you built yourself —
+// kept here so a 40-character hostname is typed once, not once per session.
+
+function savedBuilds() {
+  try {
+
+    return JSON.parse(localStorage.getItem('osBuilds') || '[]');
+  } catch {
+
+    return [];
+  }
+}
+
+function rememberBuild(entry) {
+  const builds = savedBuilds().filter((item) => item.build !== entry.build);
+  builds.unshift(entry);
+  localStorage.setItem('osBuilds', JSON.stringify(builds.slice(0, 12)));
+  state.builds = savedBuilds();
+}
+
+function forgetBuild(build) {
+  localStorage.setItem(
+    'osBuilds', JSON.stringify(savedBuilds().filter((item) => item.build !== build)),
+  );
+  state.builds = savedBuilds();
+  renderBuilds();
+}
+
+function renderTargets() {
+  // A session lives on one of the two lists and its card is on whichever one
+  // is showing. Redrawing only the containers left a build's connected badge
+  // standing after the session was closed.
+  renderContainers();
+  renderBuilds();
+}
+
+function setConnectMode(mode) {
+  state.connectMode = mode;
+  localStorage.setItem('osConnectMode', mode);
+  document.querySelectorAll('#connect-modes [data-connect-mode]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.connectMode === mode);
+  });
+  const local = mode === 'local';
+  document.querySelector('#containers').hidden = !local;
+  document.querySelector('#refresh').hidden = !local;
+  document.querySelector('#odoosh').hidden = local;
+  document.querySelector('#connect-title').textContent = local ? 'Containers' : 'Odoo.sh builds';
+  document.querySelector('#connect-lede').textContent = local
+    ? 'Pick one to probe it and start a session.'
+    : 'Enter a build id and its hostname. The instance decides the rest.';
+  if (!local) {
+    renderBuilds();
+  }
+}
+
+async function probeBuild(build, host) {
+  const known = savedBuilds().find((item) => item.build === build) || {build, host};
+  rememberBuild({...known, host, probing: true});
+  renderBuilds();
+  try {
+    const probe = await request(() => api.post('/api/probe/odoosh', {build, host}));
+    rememberBuild({...known, host, probe, probing: false});
+  } catch (error) {
+    rememberBuild({...known, host, probe: {ok: false, error: String(error)}, probing: false});
+  }
+  renderBuilds();
+}
+
+async function startOdooshSession(build, host) {
+  const previous = state.startups.get(build);
+  if (previous?.socket) {
+    previous.socket.close();
+  }
+  const token = newClientToken();
+  // The same record a container start uses: SSH plus a registry load is the
+  // longest wait on this screen, and the build's own stderr is the only
+  // honest progress there is.
+  state.startups.set(build, {
+    database: null,
+    token,
+    sessionId: null,
+    lines: [],
+    view: [],
+    pending: [],
+    drain: 0,
+    socket: null,
+    failed: false,
+    error: null,
+    hydrated: false,
+    pinned: true,
+    scrollTop: 0,
+  });
+  renderBuilds();
+  adoptStartingSession(build);
+  try {
+    const info = await request(() => api.post('/api/sessions', {
+      kind: 'odoosh',
+      build,
+      host,
+      client_token: token,
+    }));
+    const opening = state.startups.get(build);
+    const lines = opening
+      ? (opening.lines.length ? opening.lines : opening.view)
+      : [];
+    stopStartup(build);
+    if (info.write_key) {
+      saveKey(info.id, info.write_key);
+      delete info.write_key;
+    }
+    state.activeSession = info.id;
+    attachSession(info);
+    const record = state.sessions.get(info.id);
+    if (record && lines.length) {
+      record.logLines = record.logLines.length
+        ? mergeLogLines(lines, record.logLines)
+        : lines;
+    }
+    state.activeSession = info.id;
+    showScreen('sessions');
+  } catch (error) {
+    const startup = state.startups.get(build);
+    if (startup) {
+      startup.failed = true;
+      startup.error = error.message;
+      if (startup.socket) {
+        startup.socket.close();
+        startup.socket = null;
+      }
+    }
+    renderBuilds();
+  }
+}
+
+function renderBuilds() {
+  const list = document.querySelector('#odoosh-builds');
   list.replaceChildren();
-  state.containers.forEach((container) => {
-    const fragment = document.querySelector('#container-card').content.cloneNode(true);
+  if (!state.builds.length) {
+    const empty = document.createElement('li');
+    empty.className = 'empty';
+    empty.textContent = 'No builds yet. Enter one above.';
+    list.append(empty);
+
+    return;
+  }
+  state.builds.forEach((entry) => {
+    const fragment = document.querySelector('#odoosh-card').content.cloneNode(true);
     const card = fragment.querySelector('.card');
-    card.dataset.container = container.name;
-    card.querySelector('.name').textContent = container.name;
-    card.querySelector('.meta').textContent = `${container.image || 'unknown image'} · ${container.status || ''}`;
-    card.querySelector('.open').disabled = !container.probe?.ok || !container.probe?.supported;
-    card.querySelector('.open').addEventListener('click', () => openPicker(container.name));
-    card.querySelector('.reprobe').addEventListener('click', () => probeContainer(container.name));
-    card.querySelector('.start').addEventListener('click', () => startSession(container.name));
-    card.querySelector('.close-connected').addEventListener('click', () => {
-      const record = sessionForContainer(container.name);
-      if (record) {
-        closeSession(record.info.id, false);
-      }
-    });
-    card.addEventListener('click', (event) => {
-      if (event.target.closest('.picker') || event.target.closest('.open')) {
+    const probe = entry.probe || {};
+    card.dataset.container = entry.build;
+    card.querySelector('.name').textContent = entry.build;
 
-        return;
-      }
-      const opening = state.startups.get(container.name);
-      if (opening && !opening.failed) {
-
-        return;
-      }
-      closeAllPickers();
-    });
+    const stage = card.querySelector('.stage');
+    if (probe.stage) {
+      stage.hidden = false;
+      stage.textContent = probe.stage;
+      // Production is the one word on this screen worth interrupting for.
+      stage.classList.toggle('production', probe.stage === 'production');
+    }
 
     const note = card.querySelector('.probe-note');
-    note.classList.remove('error');
-    if (container.probing || !container.probe) {
-      note.textContent = 'probing container…';
-    } else if (!container.probe.ok || !container.probe.supported) {
-      note.textContent = container.probe.error || 'Probe failed';
-      note.classList.add('error');
-    } else if (container.probe.error) {
-      note.textContent = container.probe.error || DATABASE_LIST_FALLBACK;
-      note.classList.add('error');
-      card.querySelector('.meta').textContent =
-        `${container.image || 'unknown image'} · ${container.status || ''} · Odoo ${container.probe.odoo_version}`;
+    const facts = [entry.host];
+    if (probe.ok) {
+      facts.push(`Odoo ${probe.odoo_version}`, probe.db_name);
+    }
+    card.querySelector('.meta').textContent = facts.filter(Boolean).join(' · ');
+    if (entry.probing) {
+      note.textContent = 'probing build…';
+    } else if (probe.ok && probe.supported) {
+      note.hidden = true;
     } else {
-      const config = container.probe.config ? ` · ${container.probe.config}` : '';
-      note.textContent = `Odoo ${container.probe.odoo_version} · Python ${container.probe.python}${config}`;
-      card.querySelector('.meta').textContent =
-        `${container.image || 'unknown image'} · ${container.status || ''} · Odoo ${container.probe.odoo_version}`;
+      note.textContent = probe.error || 'not probed yet';
     }
 
-    const connected = sessionForContainer(container.name);
-    if (connected) {
-      const badge = card.querySelector('.connected');
-      badge.hidden = false;
-      badge.textContent = `connected · ${connected.info.database}`;
-      card.querySelector('.close-connected').hidden = false;
+    card.querySelector('.start').disabled = !(probe.ok && probe.supported);
+    card.querySelector('.start').addEventListener(
+      'click', () => startOdooshSession(entry.build, entry.host),
+    );
+    card.querySelector('.reprobe').addEventListener(
+      'click', () => probeBuild(entry.build, entry.host),
+    );
+    card.querySelector('.forget').addEventListener('click', () => forgetBuild(entry.build));
+
+    const open = sessionsForTarget(entry.build);
+    const connected = card.querySelector('.connected');
+    const close = card.querySelector('.close-connected');
+    if (open.length) {
+      connected.hidden = false;
+      connected.textContent = connectedLabel(open);
+      close.hidden = false;
+      close.textContent = closeLabel(open);
+      close.title = open.length > 1
+        ? 'Close every session on this build. Uncommitted work is discarded.'
+        : 'Close the session on this build. Uncommitted work is discarded.';
+      close.addEventListener('click', () => closeSessionsForTarget(entry.build));
     }
-    const startup = state.startups.get(container.name);
+
+    // Forgetting the card removes the only record of this hostname on this
+    // machine, and a live session would be left with nothing pointing at it.
+    const forget = card.querySelector('.forget');
+    forget.disabled = open.length > 0;
+    forget.title = open.length
+      ? `Close ${open.length > 1 ? 'the sessions' : 'the session'} on this build first — this card is the only record of its hostname here.`
+      : 'Remove this build from the list. Nothing on the instance changes.';
+
+    const startup = state.startups.get(entry.build);
+    const start = card.querySelector('.start');
     if (startup) {
-      // The picker needs a database list; the log well does not. A Refresh
-      // mid-start leaves probe null, and reading it here once took the whole
-      // container list down with a TypeError.
-      if (container.probe) {
-        fillPicker(card, container);
-      }
-      const start = card.querySelector('.start');
       const well = card.querySelector('.startup-log');
       start.disabled = !startup.failed;
       start.classList.toggle('busy', !startup.failed);
       start.setAttribute('aria-busy', startup.failed ? 'false' : 'true');
       start.title = startup.failed
-        ? 'Open the session. Odoo loads its registry once; then commands are cheap.'
-        : 'Opening a session — Odoo is loading its registry.';
+        ? 'Open the session on this build. The instance chooses the database; there is nothing to pick.'
+        : 'Opening a session — over SSH, then Odoo loads its registry.';
+      note.hidden = false;
       well.hidden = false;
       well.replaceChildren(...startup.view.map(logRow));
-      // This card was cloned from the template, so the well's own scroll
-      // position is gone. Scrolling up to read a traceback must survive a
-      // re-render, and re-renders are not user-initiated — every probe that
-      // finishes fires two.
       well.addEventListener('scroll', () => {
         startup.pinned = isLogPinned(well);
         startup.scrollTop = well.scrollTop;
@@ -332,17 +544,171 @@ function renderContainers() {
         note.classList.add('error');
       } else if (!startup.failed) {
         note.classList.remove('error');
-        note.textContent = 'Loading Odoo registry…';
+        note.textContent = 'Connecting over SSH — Odoo is loading its registry.';
       }
     }
-    list.append(fragment);
+    list.append(card);
     if (startup) {
-      // Only now is the well measurable. Setting scrollTop while the card is
-      // still in the detached fragment is a silent no-op, which left every
-      // re-render showing the oldest lines instead of the newest.
+      // Only now is the well measurable: scrollTop on a card still in the
+      // detached fragment is a silent no-op.
       restoreStartupScroll(card, startup);
     }
   });
+}
+
+function setText(element, value) {
+  // Assigning textContent replaces the text node even when the string is
+  // identical: a childList mutation, a dropped selection, and a repaint for
+  // nothing. There are two renders per probe, so this is worth checking.
+  if (element.textContent !== value) {
+    element.textContent = value;
+  }
+}
+
+function buildContainerCard(name) {
+  const fragment = document.querySelector('#container-card').content.cloneNode(true);
+  const card = fragment.querySelector('.card');
+  card.dataset.container = name;
+  card.querySelector('.name').textContent = name;
+  card.querySelector('.open').addEventListener('click', () => openPicker(name));
+  card.querySelector('.reprobe').addEventListener('click', () => probeContainer(name));
+  card.querySelector('.start').addEventListener('click', () => startSession(name));
+  card.querySelector('.close-connected').addEventListener(
+    'click', () => closeSessionsForTarget(name),
+  );
+  card.addEventListener('click', (event) => {
+    if (event.target.closest('.picker') || event.target.closest('.open')) {
+
+      return;
+    }
+    const opening = state.startups.get(name);
+    if (opening && !opening.failed) {
+
+      return;
+    }
+    closeAllPickers();
+  });
+  // Bound here, not per render: the card outlives the render now, so binding
+  // it there would stack a handler per probe.
+  card.querySelector('.startup-log').addEventListener('scroll', () => {
+    const startup = state.startups.get(name);
+    if (startup) {
+      startup.pinned = isLogPinned(card.querySelector('.startup-log'));
+      startup.scrollTop = card.querySelector('.startup-log').scrollTop;
+    }
+  });
+
+  return card;
+}
+
+function renderContainers() {
+  const list = document.querySelector('#containers');
+  const cards = state.containerCards;
+  const rendered = [];
+  const scrolls = [];
+  state.containers.forEach((container) => {
+    let card = cards.get(container.name);
+    if (!card) {
+      card = buildContainerCard(container.name);
+      cards.set(container.name, card);
+    }
+    rendered.push(card);
+    // A reused card carries the last render's state, so everything the
+    // template starts hidden or enabled has to be put back explicitly. The
+    // picker is the exception: it is the user's to open and close.
+    card.classList.toggle('probing', Boolean(container.probing));
+    setText(card.querySelector('.meta'), `${container.image || 'unknown image'} · ${container.status || ''}`);
+    card.querySelector('.open').disabled = !container.probe?.ok || !container.probe?.supported;
+
+    const note = card.querySelector('.probe-note');
+    note.classList.remove('error');
+    if (!container.probe) {
+      setText(note, 'probing container…');
+    } else if (!container.probe.ok || !container.probe.supported) {
+      setText(note, container.probe.error || 'Probe failed');
+      note.classList.add('error');
+    } else if (container.probe.error) {
+      setText(note, container.probe.error || DATABASE_LIST_FALLBACK);
+      note.classList.add('error');
+      setText(card.querySelector('.meta'),
+        `${container.image || 'unknown image'} · ${container.status || ''} · Odoo ${container.probe.odoo_version}`);
+    } else {
+      const config = container.probe.config ? ` · ${container.probe.config}` : '';
+      setText(note, `Odoo ${container.probe.odoo_version} · Python ${container.probe.python}${config}`);
+      setText(card.querySelector('.meta'),
+        `${container.image || 'unknown image'} · ${container.status || ''} · Odoo ${container.probe.odoo_version}`);
+    }
+
+    const badge = card.querySelector('.connected');
+    const close = card.querySelector('.close-connected');
+    const open = sessionsForTarget(container.name);
+    badge.hidden = !open.length;
+    close.hidden = !open.length;
+    if (open.length) {
+      setText(badge, connectedLabel(open));
+      setText(close, closeLabel(open));
+      close.title = open.length > 1
+        ? 'Close every session on this container. Uncommitted work is discarded.'
+        : 'Close the session on this container. Uncommitted work is discarded.';
+    }
+
+    const start = card.querySelector('.start');
+    const well = card.querySelector('.startup-log');
+    const startup = state.startups.get(container.name);
+    if (startup) {
+      // The picker needs a database list; the log well does not. A refresh
+      // mid-start leaves probe null, and reading it here once took the whole
+      // container list down with a TypeError.
+      if (container.probe) {
+        fillPicker(card, container);
+      }
+      start.disabled = !startup.failed;
+      start.classList.toggle('busy', !startup.failed);
+      start.setAttribute('aria-busy', startup.failed ? 'false' : 'true');
+      start.title = startup.failed
+        ? 'Open the session. Odoo loads its registry once; then commands are cheap.'
+        : 'Opening a session — Odoo is loading its registry.';
+      well.hidden = false;
+      well.replaceChildren(...startup.view.map(logRow));
+      if (startup.failed && startup.error) {
+        setText(note, startup.error);
+        note.classList.add('error');
+      } else if (!startup.failed) {
+        note.classList.remove('error');
+        setText(note, 'Loading Odoo registry…');
+      }
+      scrolls.push([card, startup]);
+    } else {
+      start.disabled = false;
+      start.classList.remove('busy');
+      start.setAttribute('aria-busy', 'false');
+      start.title = 'Open the session. Odoo loads its registry once; then commands are cheap.';
+      // Guarded: an unconditional clear is a childList mutation on every card
+      // of every render, and there are two renders per probe.
+      if (!well.hidden) {
+        well.hidden = true;
+        well.replaceChildren();
+      }
+    }
+  });
+
+  cards.forEach((card, name) => {
+    if (!state.containers.some((container) => container.name === name)) {
+      cards.delete(name);
+    }
+  });
+
+  // Touch the list only when membership or order changed: re-inserting a node
+  // resets the scroll position of the log well inside it.
+  const same = rendered.length === list.children.length
+    && rendered.every((card, index) => list.children[index] === card);
+  if (!same) {
+    list.replaceChildren(...rendered);
+  }
+  // Only now is a card that was built this render measurable: scrollTop on a
+  // card that is not in the document yet is a silent no-op, which left every
+  // first render showing the oldest lines instead of the newest.
+  scrolls.forEach(([card, startup]) => restoreStartupScroll(card, startup));
 }
 
 function restoreStartupScroll(card, startup) {
@@ -361,17 +727,32 @@ function restoreStartupScroll(card, startup) {
 
 async function loadContainers() {
   const list = document.querySelector('#containers');
-  list.innerHTML = '<li class="empty">Looking for running containers…</li>';
+  const refresh = document.querySelector('#refresh');
+  refresh.classList.add('spinning');
+  if (!state.containers.length) {
+    list.innerHTML = '<li class="empty">Looking for running containers…</li>';
+  }
   try {
     const containers = await request(() => api.get('/api/containers'));
     const last = localStorage.getItem('osContainer');
+    // Keep what the last probe said until the new one answers. Blanking it
+    // rewrites every card's facts and note, and that is the text that jumps.
+    const known = new Map(state.containers.map((container) => [container.name, container]));
     state.containers = containers
-      .map((container) => ({...container, probe: null, probing: true}))
+      .map((container) => ({
+        ...container,
+        probe: known.get(container.name)?.probe ?? null,
+        probing: true,
+      }))
       .sort((a, b) => (a.name === last ? -1 : b.name === last ? 1 : 0));
     renderContainers();
     await Promise.allSettled(state.containers.map((container) => probeContainer(container.name)));
   } catch (error) {
     list.innerHTML = `<li class="card"><p class="probe-note error">${escapeHtml(error.message)}</p></li>`;
+  } finally {
+    // The probes are what take the time, so it keeps turning until the last
+    // one has answered rather than until `docker ps` came back.
+    refresh.classList.remove('spinning');
   }
 }
 
@@ -643,7 +1024,7 @@ function failStartupById(sessionId, reason) {
       startup.socket.close();
       startup.socket = null;
     }
-    renderContainers();
+    renderTargets();
 
     return name;
   }
@@ -742,7 +1123,7 @@ function attachSession(info, reattached = false) {
   if (existing) {
     existing.info = {...existing.info, ...info};
     noteTesting(existing, existing.info.activity);
-    renderContainers();
+    renderTargets();
     renderSessions();
 
     return;
@@ -756,7 +1137,7 @@ function attachSession(info, reattached = false) {
   state.activeSession ||= info.id;
   noteTesting(record, info.activity);
   connectSocket(info.id);
-  renderContainers();
+  renderTargets();
   renderSessions();
 }
 
@@ -940,7 +1321,7 @@ function renderSessions() {
     const tab = document.createElement('button');
     tab.className = `session-tab mono${id === state.activeSession ? ' active' : ''}`;
     tab.title = 'Show this session.';
-    tab.append(`${record.info.container} / ${record.info.database}`);
+    tab.append(targetLabel(record.info));
     if (sessionIsTesting(record)) {
       const lamp = document.createElement('span');
       lamp.className = 'tab-lamp';
@@ -1012,7 +1393,7 @@ function renderSessions() {
 
 function bindSessionPanel(panel, id, record) {
   panel.dataset.session = id;
-  panel.querySelector('.target').textContent = `${record.info.container} / ${record.info.database}`;
+  panel.querySelector('.target').textContent = targetLabel(record.info);
   panel.querySelector('.odoo').textContent = `Odoo ${record.info.odoo || 'loading'}`;
   const sessionId = panel.querySelector('.session-id');
   sessionId.setAttribute('aria-label', `Copy session id ${id}`);
@@ -1046,7 +1427,16 @@ function bindSessionPanel(panel, id, record) {
   const grant = panel.querySelector('.grant-commit');
   const access = panel.querySelector('.grant-access');
   const interrupt = panel.querySelector('.interrupt');
-  grant.disabled = owner.kind !== 'agent';
+  // Locally a human owner may commit at will, so this latch is an agent gate.
+  // On someone else's instance the flag gates the human too — they grant it to
+  // themselves the same way they grant it to an agent — and on production
+  // nothing grants it at all.
+  const remote = record.info.kind === 'odoosh';
+  const production = record.info.stage === 'production';
+  grant.disabled = production || !(owner.kind === 'agent' || remote);
+  grant.title = production
+    ? 'Grant commit — Refused on production. Read all you like; nothing writes.'
+    : 'Grant commit — Let this session write to the database.';
   grant.setAttribute('aria-pressed', record.info.allow_commit ? 'true' : 'false');
   access.setAttribute('aria-pressed', owner.kind === 'agent' ? 'true' : 'false');
   access.title = owner.kind === 'agent'
@@ -1058,7 +1448,13 @@ function bindSessionPanel(panel, id, record) {
   const rollback = panel.querySelector('.rollback');
   const commit = panel.querySelector('.commit');
   rollback.disabled = !accepting;
-  commit.disabled = !accepting;
+  // Offering a Commit the daemon will refuse is worse than not offering it.
+  commit.disabled = !accepting || (remote && !record.info.allow_commit);
+  commit.title = production
+    ? 'Commit — Refused on production.'
+    : remote && !record.info.allow_commit
+      ? 'Commit — Not granted for this instance yet. Use Grant commit first.'
+      : 'Commit — Write the open transaction to the database.';
   panel.querySelector('.close').disabled = !!record.closing;
   panel.querySelector('.kill').disabled = record.closing && record.closingForce;
   const neu = panel.querySelector('.new');
@@ -1435,7 +1831,8 @@ async function transaction(id, kind) {
 
     return;
   }
-  if (kind === 'commit' && !confirm(`Commit changes to ${record.info.database}?`)) {
+  if (kind === 'commit'
+    && !confirm(`Commit changes to ${targetForConfirm(record.info)}?`)) {
 
     return;
   }
@@ -1580,11 +1977,17 @@ async function grantCommit(id, allowed) {
 
     return;
   }
-  if (allowed && !confirm(
-    `Let this agent write to ${record.info.database}?\n\n`
-    + 'Everything uncommitted in the session, including anything you did before '
-    + 'handing it over, would be written.',
-  )) {
+  // The latch grants two different things now. An agent asks for it; on a
+  // remote instance a human grants it to themselves, and telling them an
+  // agent is about to write would be plainly wrong.
+  const toAgent = (record.info.owner || {}).kind === 'agent';
+  const who = toAgent ? 'Let this agent write' : 'Allow writing';
+  const caveat = toAgent
+    ? 'Everything uncommitted in the session, including anything you did before '
+      + 'handing it over, would be written.'
+    : 'This instance is not your machine. Everything uncommitted in the session '
+      + 'would be written to it.';
+  if (allowed && !confirm(`${who} to ${targetForConfirm(record.info)}?\n\n${caveat}`)) {
     renderSessions();
 
     return;
@@ -1603,7 +2006,7 @@ async function grantCommit(id, allowed) {
   }
 }
 
-async function closeSession(id, force) {
+async function closeSession(id, force, options = {}) {
   const record = state.sessions.get(id);
   if (!record) {
 
@@ -1617,7 +2020,7 @@ async function closeSession(id, force) {
 
     return;
   }
-  if (!escalating && (record.info.pending_commands || 0) > 0 &&
+  if (!escalating && !options.confirmed && (record.info.pending_commands || 0) > 0 &&
       !confirm('Uncommitted work will be discarded. Continue?')) {
 
     return;
@@ -1651,7 +2054,7 @@ async function closeSession(id, force) {
     if (state.activeSession === id) {
       state.activeSession = state.sessions.keys().next().value || null;
     }
-    renderContainers();
+    renderTargets();
     renderSessions();
     if (!state.sessions.size) {
       showScreen('connect');
@@ -1673,15 +2076,27 @@ async function duplicateSession(id) {
   record.duplicating = true;
   renderSessions();
   try {
-    const container = state.containers.find((item) => item.name === record.info.container);
-    const probe = container?.probe?.odoo_bin
-      ? container.probe
-      : await request(() => api.post('/api/probe', {container: record.info.container}));
-    const info = await request(() => api.post('/api/sessions', {
-      container: record.info.container,
-      database: record.info.database,
-      odoo_bin: probe.odoo_bin,
-    }));
+    let opening;
+    if (record.info.kind === 'odoosh') {
+      // A build needs no probe of ours to reopen: the daemon probes it on the
+      // way in, and the instance dictates the database either way.
+      opening = {
+        kind: 'odoosh',
+        build: record.info.container,
+        host: record.info.host,
+      };
+    } else {
+      const container = state.containers.find((item) => item.name === record.info.container);
+      const probe = container?.probe?.odoo_bin
+        ? container.probe
+        : await request(() => api.post('/api/probe', {container: record.info.container}));
+      opening = {
+        container: record.info.container,
+        database: record.info.database,
+        odoo_bin: probe.odoo_bin,
+      };
+    }
+    const info = await request(() => api.post('/api/sessions', opening));
     if (info.write_key) {
       saveKey(info.id, info.write_key);
       delete info.write_key;
@@ -2313,7 +2728,7 @@ function connectRegistrySocket() {
       if (state.activeSession === message.session) {
         state.activeSession = state.sessions.keys().next().value || null;
       }
-      renderContainers();
+      renderTargets();
       renderSessions();
 
       return;
@@ -2394,7 +2809,20 @@ function restoreScreen() {
   }
 }
 
+document.querySelectorAll('#connect-modes [data-connect-mode]').forEach((button) => {
+  button.addEventListener('click', () => setConnectMode(button.dataset.connectMode));
+});
+document.querySelector('.odoosh-add').addEventListener('click', () => {
+  const build = document.querySelector('.odoosh-build').value.trim();
+  const host = document.querySelector('.odoosh-host').value.trim();
+  if (build && host) {
+    probeBuild(build, host);
+  }
+});
+
 connectRegistrySocket();
 restoreScreen();
+state.builds = savedBuilds();
+setConnectMode(localStorage.getItem('osConnectMode') === 'odoosh' ? 'odoosh' : 'local');
 setInterval(tickSessionAges, 1000);
 Promise.allSettled([loadContainers(), reattachSessions()]);

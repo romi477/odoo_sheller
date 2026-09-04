@@ -7,6 +7,182 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+Odoo 15 through 19, not 19 alone. Nothing above the bootstrap changed to
+allow it: the frame protocol, the session state machine, the transport and
+the API are untouched, because the facts the bootstrap rests on are
+line-for-line the same in all five versions — the non-tty branch of Odoo's
+own `console()`, the names `env` and `self`, the rollback around it, `SIGINT`,
+and a cursor that commits on a clean exit. Every version was verified on a
+real container, not by reading sources.
+
+### Versions
+
+- `SUPPORTED_MAJORS` (15, 16, 17, 18, 19) replaces the single supported
+  major, and a refusal now names what would work: `Odoo 14.0 found;
+  supported: 15, 16, 17, 18, 19`. It is still one gate, still at connect
+  time, so an unsupported instance is refused before a command is ever run.
+- Verified live on 15, 16, 17, 18 and 19: probe, session, `exec`, a namespace
+  that survives between commands, structured errors, commit and rollback,
+  interrupt, close, `list_tests` and a real `run_test`. On 15 the commit was
+  read back from a second session and the rolled-back record was gone, since
+  that path is the one that had to be rewritten.
+- What moved between versions is **feature-detected in the bootstrap**, never
+  keyed to a version number: the container is the only authority on what its
+  Odoo has, and a number parsed from `odoo.release` would be a second,
+  weaker one.
+  - `env.flush_all()` and `env.invalidate_all(flush=False)` arrived in 16.
+    Before that the same two things are `env['base'].flush()` and
+    `env.clear()` — `Environment.clear` invalidates the cache and drops both
+    `tocompute` and `towrite`, so it discards pending writes rather than
+    writing them out, which is exactly what a rollback needs. The default
+    `flush=True` would have written out what the rollback then threw away.
+  - `odoo/tests/shell.py` arrived in 17 and is byte-for-byte the same file in
+    17, 18 and 19, so those three call `run_tests` and nothing here
+    reimplements it. 15 and 16 have no such file, but every primitive it is
+    built from is older and unchanged — the tag DSL, `loader.make_suite`,
+    `loader.run_suite`, the result object, `Registry._lock` — so
+    `_os_run_tests_fallback` is that file's body against them, used only when
+    `odoo.tests.shell` will not import. Its `workers != 0` refusal is kept and
+    still reaches the caller as `TestRunnerRefused`.
+  - The fallback drops the `odoo.cli.COMMAND != 'shell'` guard: `odoo.cli` has
+    no `COMMAND` attribute before 17 (checked on a live 16 and 15), and the
+    shell is where we already are.
+  - `OdooTestResult` lives in `odoo/tests/result.py` from 16 and in
+    `odoo/tests/runner.py` in 15, where its counters are unittest's lists
+    rather than the `*_count` integers. `_os_test_counts` prefers the
+    integers and falls back to `len()`.
+  - `run_suite` gained `global_report` in 16. `_os_run_suite` reads
+    `run_suite.__code__.co_varnames` rather than trying the keyword and
+    catching `TypeError` — a `TypeError` raised inside a test is
+    indistinguishable from a signature mismatch, and must not be retried as
+    one.
+- `odoo/tests/tag_selector.py` does differ (19 split a file-path variant out
+  of the module part of the grammar), but the spec this project builds,
+  `*/module:Class.method`, parses the same in all five. The rest of
+  `cli/shell.py`'s diff across versions is the interactive branch — ipython,
+  ptpython, `--shell-file` — which is dead code here, since stdin is never a
+  tty.
+- The bootstrap harness now installs a fake Odoo in three shapes (15, 16, 17)
+  so all three runner paths and both transaction boundaries are covered
+  without a container. `tests/test_e2e.py` no longer pins 19, so
+  `PT_E2E_CONTAINER` can point it at any supported major.
+
+### Agent access
+
+- Instructions: read a record whole with `record.read()[0]` rather than
+  naming the fields you expect — it returns every readable field, computed
+  ones included, so a field the agent did not think to name is there anyway.
+  The return is always a list, one dict per record. Relations are not
+  followed: a many2one comes back as `(id, display_name)`, an x2m as a list
+  of ids, so a level deeper is a second read. A wide model read whole is
+  expensive, so it is one record to learn the shape, then `search_read` with
+  the fields that mattered.
+- Instructions: how to pick up a module's changed data, views or schema —
+  `button_immediate_upgrade()`, and `button_immediate_install()` for a module
+  that is not installed yet (dependencies come with it; an empty recordset
+  means `update_list()` has not run since the module appeared on disk).
+  Either commits on its own and so is a write the commit gate does not
+  cover: the human is asked first, and never on a
+  session running on someone else's instance. It is also how the module's
+  migration scripts run, which is usually the point, and a script runs only
+  if its version is above what `latest_version` records and no higher than
+  the manifest's. Edited Python is not picked up at all — the process
+  imported those files at startup — so that needs a new session.
+
+## [1.2.0] — 2026-09-04
+
+An odoo.sh build can be a target, not just a local container. The mechanism
+did not change to allow it — the frame protocol, the session state machine
+and the bootstrap are untouched — because the design never leaned on
+anything `docker exec` and `ssh` do differently. Verified against a live
+staging build, including an interrupt mid-command and a test run.
+
+### Targets
+
+- `Target` carries a kind. One identity slot, read differently: a container
+  name locally, a build id on odoo.sh. `send_signal` takes the target rather
+  than a container string — that argument was knowledge of containers
+  leaking into the session layer.
+- `POST /api/probe/odoosh` asks a build about itself: `$PGDATABASE`,
+  `$ODOO_VERSION`, `$ODOO_STAGE`, and `odoo-bin` already on `PATH`. No path
+  guessing, no config candidates, no database list — a build has exactly one
+  database and the instance user cannot read `pg_database` anyway. A build is
+  entered, not discovered; there is no `docker ps` for odoo.sh.
+- `POST /api/sessions` takes `kind: "odoosh"` with `build`/`host`. The
+  registry probes before it spawns, so an unsupported version is refused
+  then rather than on the first command, and the stage comes from the
+  instance rather than the request — a caller that could name its own stage
+  would make the guard below decorative.
+- We pass odoo.sh no arguments at all. Its `odoo-bin` wrapper appends
+  `--database`, `--config`, `--workers=0` and `--no-http` after the
+  caller's, so a `-d` of ours would be shadowed and would imply a choice the
+  build does not have. `--workers=0` being forced there happens to satisfy
+  `run_tests()`'s own precondition.
+- SSH connections are multiplexed (`ControlMaster`/`ControlPersist`).
+  Interrupt and kill each open a second connection: measured against a real
+  build, a fresh handshake costs ~1.1s against ~0.13s — and 1.1s is the
+  latency this tool exists to remove.
+
+### Connect
+
+- Two modes on the Connect screen: containers, discovered as before, and
+  odoo.sh builds, which are entered and then kept. A probed build stays as a
+  card so a 40-character hostname is typed once, not once per session, and
+  carries the stage the instance reported.
+- **Open session** on a build shows what a container start shows: the key
+  goes inert with a spinning arrow, the note says an SSH connection and a
+  registry load are in progress, and a log well streams the build's own
+  stderr. SSH plus a registry load is the longest wait on the screen, and it
+  used to be silent. A failed open leaves the well up with the error.
+- **Probe** carries a neutral outline at rest. It is the key that makes a
+  card exist and the only control on an empty screen, and `.primary` drops
+  the border, so it was visible only under the cursor.
+- A key that is working keeps its label: **Start**, **Open session** and the
+  session keyboard's **New** blurred their word under the spinner instead of
+  hiding it. An empty key reads as broken rather than busy. The ink moves
+  into a narrow `text-shadow` — a `filter` on the button would have blurred
+  the spinner along with it, and a wide radius smeared the word over the
+  key's own outline. A busy **Start** also borrows a border, since `.primary`
+  has none and the key stopped looking like a key.
+- **Close session** on a card closes every session on that target, and the
+  card counts them (`connected · 2 sessions`, **Close 2 sessions**). One
+  click per session was the card behaving as if it stood for a session; it
+  stands for a target, and a target legitimately holds several. The
+  discard question is asked once for the batch.
+- A build's **×** is disabled while that build has a session open, and says
+  to close it first. The card is the only record of the hostname on this
+  machine, so forgetting it left a live session with nothing pointing at it.
+- Refresh is a **↻** beside the list it refreshes, not a button across the
+  header — across the header it read as a peer of the mode control. It turns
+  until the last probe answers, since the probes are the slow part.
+- A refresh updates the container cards in place instead of rebuilding them.
+  Ten full rebuilds per refresh, a blanked list and discarded probe results
+  made the text jump; cards are now kept by name, keep the facts their last
+  probe reported, dim them while they are re-checked, and nothing is written
+  that has not changed.
+
+### Writing to someone else's instance
+
+- On a remote target commit is off until granted, for a human owner too.
+  Locally owning the session is enough because the human confirms in the UI;
+  owning a session is not the same as being entitled to write to someone's
+  instance.
+- On `production` commit is refused outright, as `commit_forbidden` rather
+  than `commit_not_allowed`, and the attempt to *grant* the right is refused
+  too — a guard that can be granted around is not a guard. The two codes
+  must differ: the first means ask and then watch for the grant, the second
+  means nothing will ever grant it, and an agent treating them alike would
+  poll forever. `exec` and `rollback` are untouched.
+- An agent cannot open a remote target at all, and this is enforced by
+  omission rather than by a check: no MCP tool takes a host or a build. It
+  reaches one only through a handover a human performed.
+- `os_run_test(session_id=...)` runs in a session that was handed over,
+  which on odoo.sh is the only way — otherwise the tests feature was
+  unreachable exactly where staging lives. Such a session is not closed by
+  the agent or by itself, and `discarded_pending` stops being theoretical:
+  a lent session may hold the human's work, and Odoo's own runner rolls back
+  a mid-transaction cursor before testing.
+
 ## [1.1.0] — 2026-08-28
 
 The MCP server now spells out the working habits that were left as guesswork:
@@ -34,7 +210,7 @@ on the header.
   (`module.TestClass` / `module.TestClass.test_method`) through Odoo's own
   shell-native test runner (`odoo.tests.shell.run_tests`), not a
   reimplementation. Always opens its own brand-new session first, so it never
-  has a pending transaction to lose; the session is left open afterwards.
+  has a pending transaction to lose; that session then closes itself (below).
   stdout and the Odoo log lines produced during the run come back separated.
   `tests_run: 0` is reported explicitly — Odoo's own result object reads as
   "successful" even when a name matched nothing. Calling it a second time in
@@ -55,12 +231,17 @@ on the header.
   class, the same way an abandoned `exec` already was.
 - A client-side read timeout is now reported as `request_timed_out`, not
   `daemon_unreachable` — the daemon is still working, not down. The
-  instructions tell the agent to poll `os_history`/`os_journal` on the
-  session instead of retrying the call, which would otherwise start a
-  second, duplicate run on top of the one already in flight.
-- Instructions: one `os_run_test` call, one session, one close — running
-  several test classes in a row means opening, reading, and closing that
-  many sessions in turn, not leaving several open at once.
+  instructions tell the agent to wait on `os_test_result` rather than retry
+  the call, which would otherwise start a second, duplicate run on top of
+  the one already in flight.
+- Instructions: how to find the code being debugged. A model's `__mro__`
+  names every module extending it in resolution order, and
+  `inspect.getsource` on the winning method answers what the filesystem
+  cannot — on disk every override sits side by side with nothing to say
+  which one is in effect. Non-Python files (views, data, manifests) go
+  through `odoo.tools.file_open`, which stays inside the addons paths and
+  refuses one that escapes them. Both were already possible from the shell;
+  nothing said so, so nothing used them.
 - `os_list_tests` — list test classes and methods in one addon (`module`,
   optional `container`), already shaped as `os_run_test` specs. Disk
   catalogue via `GET /api/containers/{container}/tests?module=`; read-only,
@@ -296,6 +477,7 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
-[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/romi477/odoo_sheller/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/romi477/odoo_sheller/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/romi477/odoo_sheller/releases/tag/v1.0.0

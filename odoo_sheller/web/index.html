@@ -13,7 +13,7 @@
     <nav id="top">
       <a class="brand" href="https://github.com/romi477/odoo_sheller" target="_blank" rel="noopener noreferrer" title="odoo-sheller on GitHub">
         <img class="logo" src="/static/logo.svg" alt="" width="18" height="18">
-        <span class="wordmark">odoo-sheller.<sub>v1.1.0</sub></span>
+        <span class="wordmark">odoo-sheller.<sub>v1.2.0</sub></span>
       </a>
       <div class="nav-tabs">
         <button data-screen="connect" class="active" title="Running containers. Probe and start a session. ⇧←/→ switches tabs.">Connect</button>
@@ -32,12 +32,49 @@
     <section id="screen-connect" class="screen">
       <header class="screen-head">
         <div>
-          <h1>Containers</h1>
-          <p>Pick one to probe it and start a session.</p>
+          <div class="heading-line">
+            <h1 id="connect-title">Containers</h1>
+            <button id="refresh" class="icon" aria-label="Refresh" title="Refresh — re-run docker ps and probe every container again."><span aria-hidden="true">↻</span></button>
+          </div>
+          <p id="connect-lede">Pick one to probe it and start a session.</p>
         </div>
-        <button id="refresh" title="Re-run docker ps and probe every container again.">Refresh</button>
+        <div id="connect-modes" class="segmented">
+          <button data-connect-mode="local" class="active" title="Running Docker containers on this machine. Found by docker ps — nothing to configure.">Local</button>
+          <button data-connect-mode="odoosh" title="An odoo.sh build, reached over SSH. There is no listing for these: a build is entered, not discovered.">Odoo.sh</button>
+        </div>
       </header>
       <ul id="containers"></ul>
+      <div id="odoosh" hidden>
+        <div class="odoosh-form">
+          <input class="odoosh-build mono" placeholder="build id" title="The numeric build id, which is also the SSH user — odoo.sh shows it beside the build.">
+          <input class="odoosh-host mono" placeholder="build hostname" title="The hostname the build's UI is served on. Together with the build id this is the SSH destination.">
+          <button class="odoosh-add primary" title="Ask the build what it is: database, Odoo version, and whether it is staging or production. Nothing is opened yet.">Probe</button>
+        </div>
+        <p class="odoosh-note">A build is entered, not discovered — there is no listing for odoo.sh. Probing only reads what the instance says about itself.</p>
+        <ul id="odoosh-builds"></ul>
+      </div>
+      <template id="odoosh-card">
+        <li class="card">
+          <div class="row">
+            <div class="identity">
+              <span class="name-line">
+                <span class="name mono"></span>
+                <span class="badge stage" hidden></span>
+                <span class="badge connected" hidden></span>
+              </span>
+            </div>
+            <button class="start primary" title="Open the session on this build. The instance chooses the database; there is nothing to pick.">Open session</button>
+            <button class="close-connected" hidden title="Close the session on this build. Uncommitted work is discarded.">Close session</button>
+            <button class="reprobe" title="Ask the build about itself again — after a rebuild, or if it was asleep.">re-probe</button>
+            <button class="forget icon" aria-label="Forget this build" title="Remove this build from the list. Nothing on the instance changes."><span aria-hidden="true">×</span></button>
+          </div>
+          <div class="card-facts">
+            <span class="meta"></span>
+            <p class="probe-note">probing build…</p>
+          </div>
+          <div class="startup-log" hidden></div>
+        </li>
+      </template>
       <template id="container-card">
         <li class="card">
           <div class="row">
@@ -97,7 +134,7 @@
               <button type="button" class="session-key interrupt" aria-label="Interrupt" title="Interrupt — Send SIGINT to the running command. The session stays alive.">Interrupt</button>
               <button type="button" class="session-key rollback" aria-label="Rollback" title="Rollback — Discard the open transaction. Nothing is written.">Rollback</button>
               <button type="button" class="session-key commit" aria-label="Commit" title="Commit — Write the open transaction to the database. Asks for confirmation.">Commit</button>
-              <button type="button" class="session-key new" aria-label="New" title="New — Open another session on the same container and database. Stay on this tab.">New</button>
+              <button type="button" class="session-key new" aria-label="New" title="New — Open another session on the same target. Stay on this tab.">New</button>
             </div>
           </header>
           <div class="socket-offline" hidden>Live updates unavailable — reconnecting when the daemon is reachable again.</div>

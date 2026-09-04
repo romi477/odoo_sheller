@@ -7,6 +7,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from odoo_sheller.discovery import probe_odoosh
 from odoo_sheller.journal import (
     JOURNAL_ROOT,
     Journal,
@@ -15,7 +16,14 @@ from odoo_sheller.journal import (
     target_from_records,
 )
 from odoo_sheller.session import Session
-from odoo_sheller.transport import Target, bootstrap_source, build_command, spawn
+from odoo_sheller.transport import (
+    DOCKER,
+    ODOOSH,
+    Target,
+    bootstrap_source,
+    build_command,
+    spawn,
+)
 
 ADMIN_KEY_PATH = JOURNAL_ROOT.parent / "admin.key"
 
@@ -67,6 +75,32 @@ class Registry:
 
         return target_from_records(past.records())
 
+    async def _odoosh_target(self, build: str | None, host: str | None) -> Target:
+        """Ask the build what it is before opening anything in it.
+
+        The stage comes from here rather than from the request: a caller that
+        could name its own stage would make the production guard decorative,
+        and production differs from staging by the digits in a build id. The
+        probe doubles as validation — an unsupported version is refused now
+        instead of on the first command.
+        """
+        if not (build and host):
+            raise ValueError("build and host are required for an odoo.sh target")
+        probe = await probe_odoosh(build, host)
+        if not probe.get("supported"):
+            raise ValueError(probe.get("error") or f"build {build} is not usable")
+
+        return Target(
+            kind=ODOOSH,
+            build=build,
+            host=host,
+            stage=probe.get("stage"),
+            # Informational: the wrapper picks the database, and the hello
+            # frame confirms it. Set here so the session reads right from the
+            # moment it is announced, before hello has arrived.
+            database=probe.get("db_name"),
+        )
+
     async def open(
         self,
         container: str | None = None,
@@ -77,18 +111,30 @@ class Registry:
         replace: str | None = None,
         client_token: str | None = None,
         autoclose: bool = False,
+        kind: str = DOCKER,
+        build: str | None = None,
+        host: str | None = None,
     ) -> Session:
         if replace:
+            if kind != DOCKER:
+                # A journal records the identity slot but not how to reach it
+                # again over SSH. An agent cannot open these at all, and a
+                # human retypes the build, so say so rather than rebuild the
+                # wrong kind of target from the right-looking fields.
+                raise ValueError("replace is only for local targets")
             previous = self.target_of_past_session(replace)
             if previous is None:
                 raise KeyError(f"no journal for session {replace}")
             container = container or previous["container"]
             database = database or previous["database"]
             odoo_bin = odoo_bin or previous["odoo_bin"]
-        if not (container and database and odoo_bin):
-            raise ValueError("container, database and odoo_bin are required")
+        if kind == ODOOSH:
+            target = await self._odoosh_target(build, host)
+        else:
+            if not (container and database and odoo_bin):
+                raise ValueError("container, database and odoo_bin are required")
+            target = Target(container=container, database=database, odoo_bin=odoo_bin)
         session_id = uuid.uuid4().hex[:12]
-        target = Target(container=container, database=database, odoo_bin=odoo_bin)
         process = await spawn(build_command(target, bootstrap_source()))
         session = None
         announced = False
@@ -97,8 +143,11 @@ class Registry:
                 journal_path(
                     self.journal_root,
                     session_id,
-                    container,
-                    database,
+                    # From the target, not the request: an odoo.sh session was
+                    # never asked for by container name, and its database came
+                    # back from the probe.
+                    target.name,
+                    target.database,
                     datetime.now(UTC),
                 )
             )

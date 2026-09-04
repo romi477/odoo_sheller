@@ -1,7 +1,8 @@
 # odoo-sheller
 
-Persistent Odoo 19 REPL proxy: a local Python daemon keeps `odoo-bin shell`
-alive inside Docker and exposes it over HTTP/WebSocket.
+Persistent Odoo REPL proxy (15 through 19): a local Python daemon keeps `odoo-bin shell`
+alive — in a local Docker container, or on an odoo.sh build over SSH — and
+exposes it over HTTP/WebSocket.
 
 A web UI (stage 1) and later an AI agent (stage 2) run ORM code without paying
 registry startup on every call. Both clients use the same API.
@@ -27,12 +28,18 @@ filtering). Across a debugging session that dominates.
 
 odoo-sheller starts Odoo once, keeps the namespace, and makes commit/rollback
 explicit. Rollback is the default; nothing is written until you confirm a
-commit. Odoo 19 only; local Docker only.
+commit. Odoo 15 through 19.
 
 ```
 browser ──HTTP/WS──> daemon (macOS) ──pipe──> docker exec ──> odoo-bin shell
                      127.0.0.1:8765          stdin/fd 3 + stdout
+                                             └──> ssh ──> odoo-bin shell
+                                                          (an odoo.sh build)
 ```
+
+The saving is larger on a remote build, not smaller: `ssh host 'odoo-bin
+shell' < script.py` pays that 1.4s *and* a round trip on every call, while a
+held session pays the load once and one round trip per command.
 
 Full documentation: [docs/](docs/README.md) — architecture, the UI guide,
 agent access, the security model, and an FAQ in
@@ -49,7 +56,12 @@ This tool executes arbitrary Python as `SUPERUSER_ID` against a real database.
   uncommitted work.
 - **Journals are unmasked.** They can contain credentials and API keys read
   from the database. They live in `~/.odoo-sheller/journals/`, stay out of git, and
-  must be reviewed before sharing.
+  must be reviewed before sharing. A remote session's journal holds that
+  instance's data, on your machine.
+- **A remote target is a human's to open.** No MCP tool takes a host or a
+  build, so an agent can only ever be handed one. There, commit is off until
+  granted — for a human owner too — and on a `production` instance it is
+  refused outright.
 
 The reasoning behind each of these, and what they don't cover, is in
 [docs/security.md](docs/security.md).
@@ -61,10 +73,11 @@ The reasoning behind each of these, and what they don't cover, is in
 | OS | macOS (daemon is not containerized) |
 | Python | 3.12 or newer |
 | Package manager | [uv](https://docs.astral.sh/uv/) (preferred) or pip + venv |
-| Docker | Docker CLI; a running Odoo **19** container |
+| Docker | Docker CLI; a running Odoo **15 through 19** container |
+| odoo.sh (optional) | SSH access to a build; nothing else — no key files to configure here, an alias from your own `~/.ssh/config` works |
 
-Nothing is installed inside the target container. The bootstrap needs `sh` and
-Odoo's own Python.
+Nothing is installed on the far side, container or build. The bootstrap needs
+`sh` and Odoo's own Python.
 
 ## Install
 
@@ -160,11 +173,11 @@ Every control below, with what it guarantees: [docs/ui-guide.md](docs/ui-guide.m
 
 | Control | What it does |
 |---|---|
-| **Refresh** | Re-runs `docker ps` and probes every container again |
+| **↻** (beside the title) | Re-runs `docker ps` and probes every container again. Turns while it works, until the last probe answers |
 | **re-probe** | Probes this container only — after a restart or a config change |
 | **Open session** | Expands the card's database picker. Disabled when the probe found no Odoo 19. A click on the card outside the picker collapses it again |
 | **Start** | Opens the session on the chosen database. While Odoo loads its registry the button spins, same as **New**, and the card shows the container's stderr as it arrives. Scroll back in the well and it holds position; a **Refresh** mid-start keeps the well |
-| **Close session** | Shown on a container that already has a session; closes that session without leaving the screen |
+| **Close session** | Shown on a container that already has a session; closes it without leaving the screen. With several sessions on that container it reads **Close N sessions** and closes all of them — the card stands for the target, not for one session |
 
 A container may hold more than one session — a second one on another database is
 legitimate.
@@ -333,8 +346,9 @@ answers `409` until that command's result finally arrives. Use `interrupt`, or
 |---|---|---|
 | `GET` | `/api/containers` | running containers |
 | `POST` | `/api/probe` | probe one container |
+| `POST` | `/api/probe/odoosh` | probe an odoo.sh build (`{"build", "host"}`); answers `stage`, `db_name`, version |
 | `GET` | `/api/containers/{container}/tests` | test classes/methods in one addon (`?module=`) |
-| `POST` | `/api/sessions` | open a session, wait for `hello`. Optional `client_token` is echoed back in the session description, so a client recognises its own `session_starting` among several |
+| `POST` | `/api/sessions` | open a session, wait for `hello`. `kind: "odoosh"` with `build`/`host` opens on an odoo.sh build instead of a container; the instance dictates the database, and its stage is read from the build itself, not from the request. Optional `client_token` is echoed back in the session description, so a client recognises its own `session_starting` among several |
 | `GET` | `/api/sessions` | live sessions |
 | `GET` | `/api/sessions/{id}` | one session |
 | `POST` | `/api/sessions/{id}/exec` | run code |

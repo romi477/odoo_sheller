@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from odoo_sheller import discovery
 
 
@@ -97,14 +99,30 @@ def test_probe_source_reads_version_and_db_name_from_a_fake_container(tmp_path):
     assert "database list unavailable" in payload["error"]
 
 
-async def test_probe_refuses_other_major_versions():
+@pytest.mark.parametrize("major", [15, 16, 17, 18, 19])
+async def test_probe_accepts_every_supported_major(major):
+    """The shell path is identical in 17, 18 and 19 — see docs/architecture.md."""
     payload = json.dumps({
-        "ok": True, "odoo_bin": "/opt/odoo/odoo-bin", "odoo_version": "17.0",
-        "odoo_major": 17, "python": "3.10.0", "config": None, "databases": [], "error": None,
+        "ok": True, "odoo_bin": "/opt/odoo/odoo-bin", "odoo_version": f"{major}.0",
+        "odoo_major": major, "python": "3.10.0", "config": None, "databases": [],
+        "error": None,
+    })
+    result = await discovery.probe("box", runner=fake_runner([(0, payload, "")]))
+    assert result["supported"] is True
+    assert result["error"] is None
+
+
+async def test_probe_refuses_a_major_below_the_supported_ones():
+    payload = json.dumps({
+        "ok": True, "odoo_bin": "/opt/odoo/odoo-bin", "odoo_version": "14.0",
+        "odoo_major": 14, "python": "3.10.0", "config": None, "databases": [], "error": None,
     })
     result = await discovery.probe("old", runner=fake_runner([(0, payload, "")]))
     assert result["supported"] is False
-    assert "19" in result["error"]
+    # The refusal has to say what would work, not only what will not.
+    assert "14.0" in result["error"]
+    for major in (15, 16, 17, 18, 19):
+        assert str(major) in result["error"]
 
 
 async def test_probe_reports_a_container_without_odoo():
@@ -351,3 +369,110 @@ async def test_list_tests_survives_docker_exec_failure():
     result = await discovery.list_tests("gone", "sale", runner=runner)
     assert result["ok"] is False
     assert "OCI runtime exec failed" in result["error"]
+
+
+# --- odoo.sh: the instance answers from its own environment -------------
+
+
+def oosh_env(**overrides):
+    env = {
+        "ODOO_VERSION": "19.0",
+        "ODOO_STAGE": "staging",
+        "PGDATABASE": "ventor-dev-demo-36887345",
+    }
+    env.update(overrides)
+
+    return env
+
+
+def run_oosh_probe(env, with_odoo_bin=True, tmp_path=None):
+    """Run the real probe source under a faked odoo.sh environment."""
+    import subprocess
+    import sys
+
+    full = {"PATH": "/usr/bin:/bin", **{k: v for k, v in env.items() if v is not None}}
+    if with_odoo_bin:
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        stub = bin_dir / "odoo-bin"
+        stub.write_text("#!/bin/sh\n", encoding="utf-8")
+        stub.chmod(0o755)
+        full["PATH"] = f"{bin_dir}:{full['PATH']}"
+    proc = subprocess.run(
+        [sys.executable, "-"], input=discovery.OOSH_PROBE_SOURCE,
+        capture_output=True, text=True, timeout=30, env=full, check=False,
+    )
+    lines = [line for line in proc.stdout.splitlines() if line.startswith("{")]
+    assert lines, proc.stdout + proc.stderr
+
+    return json.loads(lines[-1])
+
+
+def test_oosh_probe_source_reads_the_instance_out_of_its_environment(tmp_path):
+    payload = run_oosh_probe(oosh_env(), tmp_path=tmp_path)
+    assert payload["ok"] is True
+    assert payload["error"] is None
+    assert payload["odoo_version"] == "19.0"
+    assert payload["odoo_major"] == 19
+    assert payload["stage"] == "staging"
+    assert payload["db_name"] == "ventor-dev-demo-36887345"
+    # One build, one database: there is nothing to pick, and the instance user
+    # cannot read pg_database anyway.
+    assert payload["databases"] == ["ventor-dev-demo-36887345"]
+    assert payload["odoo_bin"].endswith("odoo-bin")
+
+
+def test_oosh_probe_source_says_what_is_missing(tmp_path):
+    payload = run_oosh_probe(oosh_env(PGDATABASE=None), tmp_path=tmp_path)
+    assert payload["ok"] is False
+    assert "PGDATABASE" in payload["error"]
+
+
+def test_oosh_probe_source_needs_no_odoo_and_no_psycopg2():
+    """It never imports Odoo and never opens a connection: four variables."""
+    assert "import odoo" not in discovery.OOSH_PROBE_SOURCE
+    assert "psycopg2" not in discovery.OOSH_PROBE_SOURCE
+
+
+async def test_probe_odoosh_goes_over_ssh_to_build_at_host():
+    runner = fake_runner([(0, json.dumps({
+        "ok": True, "odoo_version": "19.0", "odoo_major": 19, "stage": "staging",
+        "db_name": "db", "databases": ["db"], "python": "3.12.3",
+        "odoo_bin": "/opt/odoo.sh/odoosh/bin/odoo-bin", "config": None, "error": None,
+    }), "")])
+    result = await discovery.probe_odoosh("36887345", "build.dev.odoo.com", runner=runner)
+    argv = runner.calls[0][0]
+    assert argv[0] == "ssh"
+    assert "36887345@build.dev.odoo.com" in argv
+    assert result["supported"] is True
+    assert result["stage"] == "staging"
+
+
+async def test_probe_odoosh_refuses_another_major_the_way_docker_does():
+    runner = fake_runner([(0, json.dumps({
+        "ok": True, "odoo_version": "14.0", "odoo_major": 14, "stage": "staging",
+        "db_name": "db", "databases": ["db"], "python": "3.10.0",
+        "odoo_bin": "/x/odoo-bin", "config": None, "error": None,
+    }), "")])
+    result = await discovery.probe_odoosh("1", "h", runner=runner)
+    assert result["supported"] is False
+    assert "14.0" in result["error"]
+
+
+async def test_probe_odoosh_carries_a_production_stage_through():
+    """Nothing may swallow this word: it is what the commit guard reads."""
+    runner = fake_runner([(0, json.dumps({
+        "ok": True, "odoo_version": "19.0", "odoo_major": 19, "stage": "production",
+        "db_name": "db", "databases": ["db"], "python": "3.12.3",
+        "odoo_bin": "/x/odoo-bin", "config": None, "error": None,
+    }), "")])
+    result = await discovery.probe_odoosh("1", "h", runner=runner)
+    assert result["stage"] == "production"
+
+
+async def test_probe_odoosh_survives_unparsable_output():
+    runner = fake_runner([(1, "ssh: Could not resolve hostname", "kex_exchange failed")])
+    result = await discovery.probe_odoosh("1", "nope", runner=runner)
+    assert result["ok"] is False
+    assert result["supported"] is False
+    assert "kex_exchange" in result["error"]

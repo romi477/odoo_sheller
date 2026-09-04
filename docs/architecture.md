@@ -10,11 +10,13 @@ understanding or extending it.
 ```
 browser ──HTTP/WS──> daemon (macOS, Python) ──pipe──> docker exec ──> odoo-bin shell
                      127.0.0.1:8765          stdin/fd 3 + stdout      bootstrap loop
+                                             └────────> ssh ────────> odoo-bin shell
+                                                                      (an odoo.sh build)
 ```
 
-- **The daemon** is the only piece that knows about pipes, framing, and
-  containers. It runs as a plain process on the host — not containerized —
-  and speaks HTTP and WebSocket to whoever is driving it.
+- **The daemon** is the only piece that knows about pipes, framing, and where
+  a session runs. It runs as a plain process on the host — not containerized
+  — and speaks HTTP and WebSocket to whoever is driving it.
 - **The web UI** is one client of that API, served by the daemon itself at
   `/web`. An MCP server (`odoo_sheller/mcp.py`) is a second client, for an
   agent. Both see the same surface — there is deliberately only one API.
@@ -40,9 +42,57 @@ The reference is `odoo/cli/shell.py`. Three facts make the whole design work:
   default everywhere.
 
 Because the bootstrap only depends on the non-TTY branch and the names `env`
-and `self`, it happens to be version-neutral by construction. Only Odoo 19 is
-verified, though — the probe (below) refuses anything else at connect time
-with a clear message, rather than failing on the first command.
+and `self`, it is version-neutral by construction — and those facts hold
+line-for-line in 15, 16, 17, 18 and 19: `cli/shell.py:65/64/65/66/80` for the
+non-TTY branch, `:115-116/:114-115/:116-117/:117-118/:142-143` for the
+namespace, the `cr.rollback()` after `console()`, `signal.signal(SIGINT, …)`
+at `:62/:61/:62/:63/:77`, and a cursor whose `__exit__` commits on a clean
+exit and rolls back on an exception (`sql_db.py:157` in 15, then
+`:81/84/106/115`). `server.port = config['http_port']`
+(`service/server.py:312/352/385/372/412`) is what the test-port fix writes to.
+All five are verified by live runs — session, commands, namespace,
+transactions (a committed record read back from a second session, a rolled
+back one gone), interrupt, a real test run. The probe (below) refuses anything
+below 15 at connect time with a clear message, rather than failing on the
+first command.
+
+**What moved is feature-detected, not keyed to a version number.** The
+container is the only authority on what its Odoo has, so the bootstrap asks
+it rather than parsing `odoo.release`:
+
+| | 15 | 16 | 17, 18, 19 |
+|---|---|---|---|
+| flush before a commit | `env['base'].flush()` | `env.flush_all()` | `env.flush_all()` |
+| discard before a rollback | `env.clear()` | `env.invalidate_all(flush=False)` | same |
+| test runner | the fallback | the fallback | `odoo.tests.shell.run_tests` |
+| `OdooTestResult` | `odoo.tests.runner` | `odoo.tests.result` | `odoo.tests.result` |
+| result counters | unittest's lists | `*_count` integers | integers |
+| `run_suite` report | not accepted | `global_report=` | `global_report=` |
+| `odoo.cli.COMMAND` | absent | absent | `'shell'` |
+
+`Environment.clear` is the pre-16 equivalent of `invalidate_all(flush=False)`,
+not of the default: it invalidates the cache and drops both `tocompute` and
+`towrite`, so pending writes are discarded rather than written out — which is
+the whole point at a rollback. `_os_run_suite` reads
+`run_suite.__code__.co_varnames` instead of trying the keyword and catching
+`TypeError`, because a `TypeError` raised inside a test is indistinguishable
+from a signature mismatch and must not be retried as one.
+
+`odoo/tests/shell.py` arrived in 17 and is byte-for-byte the same file in 17,
+18 and 19, so those three call `run_tests` and this project reimplements
+nothing. There is no such file in 15 or 16 — but every primitive it is built
+from is older and unchanged: the tag DSL (`tests/tag_selector.py`, and
+`tests/common.py` in 15), `loader.make_suite`, `loader.run_suite`, the result
+object, `Registry._lock`. So `_os_run_tests_fallback` in the bootstrap is that
+file's body against those primitives, used only when `odoo.tests.shell` will
+not import. The `workers != 0` refusal is kept, and reaches the caller as the
+same `TestRunnerRefused` error.
+
+What else differs is `odoo/tests/tag_selector.py` — 19 split a file-path
+variant out of the module part of the grammar — but the spec this project
+builds, `*/module:Class.method`, parses the same in all five. The rest of
+`cli/shell.py`'s diff is the interactive branch (ipython, ptpython,
+`--shell-file`), which is dead code here: stdin is never a tty.
 
 ## Starting a session
 
@@ -50,6 +100,15 @@ with a clear message, rather than failing on the first command.
 docker exec -i <container> sh -c 'exec 3<&0; exec <odoo-bin> shell -d <db> --no-http <<"OSBOOT"
 <bootstrap source>
 OSBOOT'
+```
+
+The same shape reaches an odoo.sh build, with a different prefix and no
+arguments of ours at all:
+
+```bash
+ssh -T <build>@<host> 'sh -c "exec 3<&0; exec odoo-bin shell <<\"OSBOOT\"
+<bootstrap source>
+OSBOOT"'
 ```
 
 `exec 3<&0` duplicates the `docker exec` stdin pipe onto file descriptor 3
@@ -209,6 +268,56 @@ this is what makes the UI's Interrupt button work. Raised while the loop is
 blocked reading the next frame, it means a signal arrived between commands; it
 is swallowed silently so the loop does not exit for no reason.
 
+## Two kinds of place, one mechanism
+
+Everything above `transport.py` — the frame protocol, the session state
+machine, the bootstrap itself — is identical for both, and that is not luck.
+The design never leaned on anything the two do differently:
+
+| What it relies on | Docker | SSH |
+|---|---|---|
+| stdin survives on fd 3 | `docker exec -i` gives a pipe | `ssh -T` gives a pipe |
+| frames on stdout, logs on stderr | two pipes | two channels |
+| death is EOF | pipe closes | channel closes |
+| signals are *not* forwarded | true without a tty | true without a tty |
+
+The last row is the one worth pausing on. Because `docker exec -i` does not
+forward a signal into the container, interrupts were never sent down the
+pipe: they go as a separate `kill -<SIG> <pid>` using the pid the bootstrap
+reported in its hello frame. SSH behaves the same way, so the workaround
+built for Docker transferred without a line of change.
+
+**What differs is the arguments, and on odoo.sh they are not ours.** Its
+`odoo-bin` is a wrapper that re-execs the real one and appends its own flags
+*after* the caller's:
+
+    '--config', '/home/odoo/.config/odoo/odoo.conf',
+    '--database', os.environ['PGDATABASE'],
+    '--workers=0',
+    '--no-http'
+
+So we pass none. A `-d` of ours would be shadowed by the wrapper's
+`--database` anyway, and offering one would imply a choice the build does not
+have — an odoo.sh build is one database, full stop. `--workers=0` being
+forced there is a small gift: it is exactly the precondition
+`odoo.tests.shell.run_tests()` checks.
+
+**One quoting trap.** `docker exec … sh -c script` hands argv straight over,
+but `ssh host a b c` joins its arguments and the remote login shell parses the
+result *again*. The script is quoted exactly once for that extra parse; the
+heredoc survives neither one quote too few nor one too many, and a test pins
+it by re-parsing the command with `shlex`.
+
+**SSH options that each earn their place.** `-T`, because a pty would merge
+the frame stream into the log stream and the split between them is what lets
+stdout carry frames at all. `BatchMode=yes`, because the daemon has no
+terminal to answer a password prompt and should fail rather than hang.
+`ServerAliveInterval`, so a dead link becomes the EOF the session already
+treats as an ordinary death. And `ControlMaster` with `ControlPersist`,
+because interrupt and kill each open a second connection: measured against a
+real build, a fresh handshake costs ~1.1s against ~0.13s multiplexed — and
+1.1s is precisely the latency this tool exists to remove.
+
 ## Session state machine
 
 ```
@@ -293,8 +402,31 @@ containers; a one-shot probe inside a chosen container reports the `odoo-bin`
 path, Odoo and Python versions, the config file location, and the database
 list (read via `psycopg2`, which any Odoo container already has installed —
 nothing extra to add). The probe process exits the moment it has answered.
-Odoo versions other than 19 are refused right here, with a specific message,
-rather than accepted and left to fail on the first real command.
+A major outside `SUPPORTED_MAJORS` (15 through 19) is refused right here, with a
+specific message naming what would work, rather than accepted and left to
+fail on the first real command.
+
+**An odoo.sh build is entered, not discovered.** There is no `docker ps` for
+odoo.sh, so this is the one place the "discovered live, never configured"
+principle does not hold, and the UI should say so rather than blur it. The
+probe is correspondingly smaller: no path guessing, no config candidates, no
+database list — the build answers from its own environment, over
+`POST /api/probe/odoosh`.
+
+| Needed | Comes from |
+|---|---|
+| database | `$PGDATABASE` |
+| version | `$ODOO_VERSION` |
+| instance kind | `$ODOO_STAGE` — `staging`, `production` |
+| odoo-bin | already on `PATH` |
+
+Listing databases is impossible there in any case: the instance user gets
+`permission denied for table pg_database`, because it reaches only its own.
+
+The stage is read here, before a session exists, and taken from the probe
+rather than the request when one is opened — a caller that could name its own
+stage would make the commit guard in `docs/security.md` decorative, and
+production differs from staging by the digits in a build id alone.
 
 A second one-shot, `GET /api/containers/{container}/tests?module=`, lists
 test classes and methods for one addon technical name. It walks files on
@@ -330,6 +462,8 @@ in practice.
 
 Outgoing HTTP call tracing, record-level "what changed" diffs, synchronous
 execution of `with_delay` jobs, live streaming of output while a command runs,
-remote (non-Docker, non-local) targets, and Odoo versions other than 19. None
+generic self-hosted Odoo over SSH (odoo.sh is supported; a plain Ubuntu box
+would need sudo, path discovery and a database list, which is a separate
+job), and Odoo 14 or older. None
 of these are technically precluded by the protocol or the API — they're just
 not built, and the UI doesn't pretend they exist.

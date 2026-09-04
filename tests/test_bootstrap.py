@@ -15,9 +15,12 @@ ALLOWED_IMPORTS = {
 }
 
 
-def run_bootstrap(frames, timeout=15):
+def run_bootstrap(frames, timeout=15, fake_odoo=None):
     """Feed frames over stdin, return (out_frames, stderr_text, transaction_calls)."""
     stdin = "".join(json.dumps(frame) + "\n" for frame in frames)
+    env = {"OS_CMD_FD": "0", "PATH": "/usr/bin:/bin"}
+    if fake_odoo:
+        env["OS_FAKE_ODOO"] = fake_odoo
     proc = subprocess.run(
         [sys.executable, str(HARNESS), str(BOOTSTRAP)],
         input=stdin,
@@ -25,7 +28,7 @@ def run_bootstrap(frames, timeout=15):
         check=False,
         text=True,
         timeout=timeout,
-        env={"OS_CMD_FD": "0", "PATH": "/usr/bin:/bin"},
+        env=env,
         cwd=ROOT,
     )
     out = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
@@ -172,3 +175,91 @@ def test_run_test_without_a_real_odoo_reports_a_structured_error_not_a_crash():
     assert result["error"]["type"] == "ModuleNotFoundError"
     # the loop must still be usable afterwards
     assert out[2]["result"] == "'alive'"
+
+
+def test_run_test_calls_odoos_own_shell_runner_when_there_is_one():
+    """17 and up ship odoo/tests/shell.py; nothing may replace it there."""
+    out, _, calls = run_bootstrap([
+        {"t": "run_test", "id": 1, "module": "sale", "test_class": "TestSaleOrder",
+         "test_method": None},
+    ], fake_odoo="17")
+    result = out[1]
+    assert result["error"] is None, result["error"]
+    assert result["test"]["tests_run"] == 2
+    assert "shell.run_tests(*/sale:TestSaleOrder)" in calls
+    assert not [call for call in calls if call.startswith("make_suite")], (
+        "the backport must stay out of the way when the real runner exists"
+    )
+
+
+def test_run_test_falls_back_to_the_primitives_when_shell_is_absent():
+    """Odoo 16 has no odoo/tests/shell.py, but every piece it was built from.
+
+    The fallback is that file's body against those same primitives — the tag
+    DSL, make_suite, run_suite, OdooTestResult — not a runner of our own.
+    """
+    out, _, calls = run_bootstrap([
+        {"t": "run_test", "id": 1, "module": "sale", "test_class": "TestSaleOrder",
+         "test_method": "test_amount"},
+    ], fake_odoo="16")
+    result = out[1]
+    assert result["error"] is None, result["error"]
+    assert result["test"]["tests_run"] == 2
+    assert result["test"]["success"] is True
+    assert "make_suite(sale,at_install)" in calls
+    assert "make_suite(sale,post_install)" in calls
+    # The tag spec and the enable flag have to be in place while the suite runs.
+    assert "run_suite(tags=*/sale:TestSaleOrder.test_amount,enable=True)" in calls
+    # Same registry handling as Odoo's own runner, and the flags put back after.
+    unloaded = calls.index("registry.loaded=False")
+    assert "registry.loaded=True" in calls[unloaded:], "the flags must go back"
+    assert "http_spawn" in " ".join(calls)
+
+
+def test_the_fallback_restores_the_test_flags_it_set():
+    """A session goes on being used after a test run; config is process-wide."""
+    out, _, _ = run_bootstrap([
+        {"t": "run_test", "id": 1, "module": "sale", "test_class": "TestSaleOrder",
+         "test_method": None},
+        {"t": "exec", "id": 2, "code": (
+            "c = __import__('odoo').tools.config\n(c['test_enable'], c['test_tags'])"
+        )},
+    ], fake_odoo="16")
+    assert out[1]["error"] is None
+    assert out[2]["result"] == "(None, None)", out[2]
+
+
+def test_the_boundaries_use_what_the_version_has():
+    """15 has neither flush_all nor invalidate_all; the boundary must still be
+    flush-then-commit, and invalidate-without-flushing before a rollback."""
+    _, _, calls = run_bootstrap([
+        {"t": "exec", "id": 1, "code": "1"},
+        {"t": "commit", "id": 2},
+        {"t": "rollback", "id": 3},
+    ], fake_odoo="15")
+    assert calls == ["base.flush", "cr.commit", "env.clear", "env.clear", "cr.rollback"], calls
+
+
+def test_the_boundaries_prefer_the_explicit_api_when_it_exists():
+    _, _, calls = run_bootstrap([
+        {"t": "commit", "id": 1},
+        {"t": "rollback", "id": 2},
+    ], fake_odoo="16")
+    assert calls[:3] == ["flush_all", "cr.commit", "invalidate_all(flush=False)"], calls
+
+
+def test_run_test_on_fifteen_reads_the_result_it_is_given():
+    """15's result object lives in odoo.tests.runner and counts in lists, and
+    its run_suite takes no global_report."""
+    out, _, calls = run_bootstrap([
+        {"t": "run_test", "id": 1, "module": "sale", "test_class": "TestSaleOrder",
+         "test_method": None},
+    ], fake_odoo="15")
+    result = out[1]
+    assert result["error"] is None, result["error"]
+    assert result["test"]["tests_run"] == 2
+    assert result["test"]["failures"] == 0
+    assert result["test"]["errors"] == 0
+    assert result["test"]["skipped"] == 0
+    assert result["test"]["success"] is True
+    assert "make_suite(sale,at_install)" in calls

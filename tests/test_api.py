@@ -953,3 +953,109 @@ def test_open_does_not_autoclose_by_default(client):
         "/api/sessions", json={"container": "c", "database": "db", "odoo_bin": "/odoo-bin"}
     )
     assert client.registry.open_kwargs["autoclose"] is False
+
+
+# --- odoo.sh targets ----------------------------------------------------
+
+
+def test_open_forwards_an_odoosh_target(client):
+    response = client.post(
+        "/api/sessions",
+        json={"kind": "odoosh", "build": "36887345", "host": "build.dev.odoo.com"},
+    )
+    assert response.status_code == 200
+    assert client.registry.open_kwargs["kind"] == "odoosh"
+    assert client.registry.open_kwargs["build"] == "36887345"
+    assert client.registry.open_kwargs["host"] == "build.dev.odoo.com"
+
+
+def test_open_is_a_local_docker_target_unless_told_otherwise(client):
+    client.post("/api/sessions", json={"container": "c", "database": "db", "odoo_bin": "/b"})
+    assert client.registry.open_kwargs["kind"] == "docker"
+
+
+def test_probing_a_build_answers_what_the_instance_said(client, monkeypatch):
+    async def fake_probe(build, host, runner=None):
+
+        return {"ok": True, "supported": True, "stage": "staging",
+                "db_name": "ventor-dev-36887345", "odoo_version": "19.0", "error": None}
+
+    monkeypatch.setattr("odoo_sheller.api.discovery.probe_odoosh", fake_probe)
+    body = client.post(
+        "/api/probe/odoosh", json={"build": "36887345", "host": "build.dev.odoo.com"}
+    ).json()
+    assert body["stage"] == "staging"
+    assert body["db_name"] == "ventor-dev-36887345"
+
+
+def test_opening_an_unusable_build_is_422_not_500(client):
+    async def refuse(**kwargs):
+        raise ValueError("Odoo 17.0 found; only 19 is supported")
+
+    client.registry.open = refuse
+    response = client.post("/api/sessions", json={"kind": "odoosh", "build": "1", "host": "h"})
+    assert response.status_code == 422
+    assert "17.0" in str(response.json()["detail"])
+
+
+def test_a_production_commit_is_refused_as_terminal_not_as_pending(client):
+    """`commit_not_allowed` means "ask the human". This one means "never", and
+    an agent told to poll for a grant that will never come would poll forever."""
+    from odoo_sheller.session import CommitForbidden
+
+    client.registry.session.raises = CommitForbidden(
+        "this session runs on production (99 at build-99.dev.odoo.com); "
+        "commit is refused there, rollback is not"
+    )
+    response = client.post("/api/sessions/s1/commit")
+    assert response.status_code == 423
+    detail = response.json()["detail"]
+    assert detail["error"] == "commit_forbidden"
+    assert "production" in detail["message"]
+    assert "build-99.dev.odoo.com" in detail["message"], "name the instance"
+    assert "rollback" in detail["recovery"]
+
+
+def test_granting_commit_on_production_is_refused_too(client):
+    """A guard that can be granted around is not a guard."""
+    from odoo_sheller.session import CommitForbidden
+
+    def refuse(allowed):
+        raise CommitForbidden("this session runs on production (99 at h)")
+
+    client.registry.session.set_allow_commit = refuse
+    response = client.post(
+        "/api/sessions/s1/policy",
+        json={"allow_commit": True},
+        headers={"X-OS-Admin-Key": ADMIN_KEY},
+    )
+    assert response.status_code == 423
+    assert response.json()["detail"]["error"] == "commit_forbidden"
+
+
+def test_revoking_commit_from_a_human_on_a_remote_target_is_allowed(client):
+    """The refusal exists because locally the flag does not gate a human, so
+    storing a revocation would lie. On someone else's instance it does gate
+    them, so revoking is a real act."""
+    session = client.registry.session
+    session.owner = {"kind": "human", "label": "browser"}
+    session.describe = lambda: {"id": "s1", "kind": "odoosh", "stage": "staging",
+                                "owner": dict(session.owner)}
+
+    response = client.post(
+        "/api/sessions/s1/policy",
+        json={"allow_commit": False},
+        headers={"X-OS-Admin-Key": ADMIN_KEY},
+    )
+    assert response.status_code == 200
+    assert ("set_allow_commit", False) in session.calls
+
+
+def test_revoking_commit_from_a_local_human_is_still_refused(client):
+    response = client.post(
+        "/api/sessions/s1/policy",
+        json={"allow_commit": False},
+        headers={"X-OS-Admin-Key": ADMIN_KEY},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "policy_not_applicable"

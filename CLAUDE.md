@@ -111,11 +111,37 @@ as a heredoc — nothing is copied into the container, nothing to clean up.
   is `invalidate_all(flush=False)` then `cr.rollback()`. The `flush=False` is
   required — the default `True` would write out exactly what a rollback is about
   to discard (`odoo/orm/environments.py:357`).
-- **Odoo 19 only.** The bootstrap happens to be version-neutral by construction
-  (it depends only on the non-tty `console()` branch and the names `env` /
-  `self`), but only 19 is verified and supported. The probe refuses anything
-  else at connect time with a clear message rather than failing later. Older
-  versions are a migration target, not a requirement.
+- **Odoo 15 through 19.** The bootstrap is version-neutral by construction —
+  it depends only on the non-tty `console()` branch and the names `env` /
+  `self` — and those, the rollback around the console, `SIGINT`, and the
+  cursor that commits on a clean exit are line-for-line the same in all five.
+  All five are verified by live runs: session, exec, namespace, transactions
+  (including a committed record read back from a second session), interrupt,
+  and a real `run_test`. `SUPPORTED_MAJORS` in `discovery.py` is the whole
+  gate, and the probe refuses anything below it at connect time rather than
+  failing later.
+- **What moved between versions is feature-detected, never keyed to a number.**
+  The bootstrap asks the interpreter it is in, because the container is the
+  only authority on what it has:
+  - `env.flush_all()` / `env.invalidate_all(flush=False)` arrived in 16. Before
+    that the same two things are `env['base'].flush()` and `env.clear()` —
+    `Environment.clear` invalidates the cache and drops `tocompute` and
+    `towrite`, so it discards rather than flushes, which is what a rollback
+    needs.
+  - `odoo/tests/shell.py` arrived in 17 and is byte-for-byte identical in 17,
+    18 and 19, so those call `run_tests`. For 15 and 16 there is no such file,
+    but every primitive it is built from is older and unchanged, so
+    `_os_run_tests_fallback` is that file's body against them. It drops the
+    `odoo.cli.COMMAND != 'shell'` guard, because `odoo.cli` has no `COMMAND`
+    before 17 and the shell is where we already are.
+  - `OdooTestResult` lives in `odoo/tests/result.py` from 16, in
+    `odoo/tests/runner.py` in 15; and there its counters are unittest's lists,
+    not the `*_count` integers, so `_os_test_counts` prefers the integers and
+    falls back to `len()`.
+  - `run_suite` gained `global_report` in 16. `_os_run_suite` reads
+    `run_suite.__code__.co_varnames` rather than trying the keyword and
+    catching `TypeError`: a `TypeError` from inside a test looks identical and
+    must not be retried as a signature mismatch.
 
 ## Session model
 
@@ -176,7 +202,11 @@ close / interrupt / kill, stderr panel, web UI.
 
 Out, deliberately deferred: outgoing HTTP tracing, `changed` record diffing,
 synchronous `with_delay` execution, live streaming of output while a command
-runs, MCP server, remote hosts over SSH, odoo.sh. Local Docker only.
+runs, and generic self-hosted Odoo over SSH — a plain box would need sudo,
+path discovery and a database list, which is a separate job from odoo.sh.
+
+Since shipped past the MVP line: the MCP server, and odoo.sh builds as a
+second kind of target.
 
 ## Conventions
 
@@ -213,5 +243,10 @@ Rollback is the default everywhere; commit is always an explicit, confirmed act.
   "value": ...}` structure and into a transcript in plain text. Proper masking
   is out of scope for the MVP, so journals stay local, stay out of git, and must
   be reviewed before being shared.
-- Production-database guards are out of scope: local Docker only, by
-  definition.
+- Production guards exist only where the target says what it is. A local
+  database is never guessed at. An odoo.sh build reports `$ODOO_STAGE`, so
+  there: only a human opens a remote target (enforced by omission — no MCP
+  tool takes a host or a build), commit is off until granted even for a human
+  owner, and on `production` it is refused outright, as `commit_forbidden`.
+  A remote session's journal holding that instance's data was weighed and
+  accepted; see `docs/security.md`.

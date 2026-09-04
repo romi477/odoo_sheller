@@ -5,6 +5,7 @@ import pytest
 from odoo_sheller.journal import Journal, feed_from_records
 from odoo_sheller.protocol import FRAME_LINE_LIMIT
 from odoo_sheller.session import (
+    CommitForbidden,
     CommitNotAllowed,
     Session,
     SessionBusy,
@@ -149,7 +150,13 @@ for line in sys.stdin:
 """
 
 
-async def make_session(tmp_path, script=FAKE, **kwargs):
+def oosh_target(stage="staging"):
+
+    return Target(kind="odoosh", build="36887345", host="build.dev.odoo.com",
+                  database="ventor-dev-36887345", stage=stage)
+
+
+async def make_session(tmp_path, script=FAKE, target=None, **kwargs):
     proc = await asyncio.create_subprocess_exec(
         "python3",
         "-c",
@@ -160,7 +167,9 @@ async def make_session(tmp_path, script=FAKE, **kwargs):
         limit=FRAME_LINE_LIMIT,
     )
 
-    return Session("s1", TARGET, proc, Journal(tmp_path / "s1.jsonl"), **kwargs)
+    return Session(
+        "s1", target or TARGET, proc, Journal(tmp_path / "s1.jsonl"), **kwargs
+    )
 
 
 async def test_ready_only_after_hello(tmp_path):
@@ -583,8 +592,8 @@ async def test_events_are_published_on_state_changes(tmp_path):
 async def test_timeout_interrupts_and_reports(tmp_path, monkeypatch):
     signals = []
 
-    async def fake_signal(container, pid, name):
-        signals.append((container, pid, name))
+    async def fake_signal(target, pid, name):
+        signals.append((target.name, pid, name))
 
     monkeypatch.setattr("odoo_sheller.session.send_signal", fake_signal)
     session = await make_session(tmp_path)
@@ -712,8 +721,8 @@ async def test_close_is_accepted_while_a_command_is_abandoned(tmp_path, monkeypa
 async def test_interrupt_signals_the_container_pid(tmp_path, monkeypatch):
     signals = []
 
-    async def fake_signal(container, pid, name):
-        signals.append((container, pid, name))
+    async def fake_signal(target, pid, name):
+        signals.append((target.name, pid, name))
 
     monkeypatch.setattr("odoo_sheller.session.send_signal", fake_signal)
     session = await make_session(tmp_path)
@@ -961,3 +970,84 @@ async def test_autoclose_is_announced_once(tmp_path):
     await session.run_test("sale", "TestSaleOrder")
     await session.close()
     assert len(autoclose_events(seen)) == 1
+
+
+# --- committing to a remote instance ------------------------------------
+
+
+async def test_a_local_human_session_may_still_commit_at_once(tmp_path):
+    """Unchanged: locally the human confirms in the UI instead."""
+    session = await make_session(tmp_path)
+    await session.start()
+    try:
+        assert session.allow_commit is True
+    finally:
+        await session.kill()
+
+
+async def test_a_remote_session_starts_with_commit_off_even_for_a_human(tmp_path):
+    """Being the owner is enough locally. On someone's instance it is not."""
+    session = await make_session(tmp_path, target=oosh_target())
+    await session.start()
+    try:
+        assert session.owner["kind"] == "human"
+        assert session.allow_commit is False
+        with pytest.raises(CommitNotAllowed):
+            await session.commit()
+
+        session.set_allow_commit(True)
+        assert (await session.commit())["error"] is None
+    finally:
+        await session.kill()
+
+
+async def test_production_refuses_a_commit_outright(tmp_path):
+    """Not "awaiting a grant" — there is no grant to wait for."""
+    session = await make_session(tmp_path, target=oosh_target("production"))
+    await session.start()
+    try:
+        with pytest.raises(CommitForbidden):
+            await session.commit()
+    finally:
+        await session.kill()
+
+
+async def test_production_refuses_the_grant_itself(tmp_path):
+    """A guard that can be granted around is not a guard."""
+    session = await make_session(tmp_path, target=oosh_target("production"))
+    await session.start()
+    try:
+        with pytest.raises(CommitForbidden):
+            session.set_allow_commit(True)
+        assert session.allow_commit is False
+        with pytest.raises(CommitForbidden):
+            await session.commit()
+        assert not any(
+            record["kind"] == "commit" for record in session.journal.records()
+        ), "nothing may reach the pipe"
+    finally:
+        await session.kill()
+
+
+async def test_rollback_on_production_is_untouched(tmp_path):
+    """Reading a production instance is the legitimate case; only writing is not."""
+    session = await make_session(tmp_path, target=oosh_target("production"))
+    await session.start()
+    try:
+        assert (await session.execute("1 + 1"))["error"] is None
+        assert (await session.rollback())["error"] is None
+    finally:
+        await session.kill()
+
+
+async def test_a_remote_session_describes_where_it_is(tmp_path):
+    session = await make_session(tmp_path, target=oosh_target("production"))
+    await session.start()
+    try:
+        described = session.describe()
+        assert described["kind"] == "odoosh"
+        assert described["stage"] == "production"
+        assert described["container"] == "36887345"
+        assert described["host"] == "build.dev.odoo.com"
+    finally:
+        await session.kill()

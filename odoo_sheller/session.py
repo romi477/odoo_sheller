@@ -17,7 +17,7 @@ from odoo_sheller.protocol import (
     rollback_frame,
     run_test_frame,
 )
-from odoo_sheller.transport import Target, send_signal
+from odoo_sheller.transport import PRODUCTION, Target, send_signal
 
 
 class SessionState(str, Enum):
@@ -73,6 +73,16 @@ class CommitNotAllowed(Exception):
     """This session was opened without the right to write to the database."""
 
 
+class CommitForbidden(CommitNotAllowed):
+    """A write that will never be allowed here, not one awaiting a grant.
+
+    Subclasses CommitNotAllowed so every existing caller keeps refusing; the
+    difference is that there is nothing to ask for. Raised on a production
+    instance, by both `commit` and the attempt to grant the right — a guard
+    that can be granted around is not a guard.
+    """
+
+
 HUMAN_OWNER = {"kind": "human", "label": "browser"}
 
 # Per-run stderr ceiling. The session-wide `_stderr` tail is far too short for
@@ -109,10 +119,16 @@ class Session:
         self.client_token = client_token
         self.owner = dict(owner or HUMAN_OWNER)
         # A human drives the UI and confirms every commit there; an agent has to
-        # be granted the right explicitly.
-        self.allow_commit = (
-            self.owner.get("kind") == "human" if allow_commit is None else allow_commit
-        )
+        # be granted the right explicitly. On a remote instance neither applies:
+        # being the owner is enough locally, and is not enough on someone's
+        # own Odoo, so a human starts without the right there too.
+        if allow_commit is None:
+            local_human = self.owner.get("kind") == "human" and not target.is_remote
+            self.allow_commit = local_human
+        else:
+            self.allow_commit = allow_commit
+        if target.stage == PRODUCTION:
+            self.allow_commit = False
         # Held by whoever may execute code here. Rotated on every transfer, so a
         # previous owner's key stops working the moment ownership moves.
         self.write_key = secrets.token_urlsafe(24)
@@ -163,8 +179,16 @@ class Session:
         return {
             "id": self.id,
             "state": self._state.value,
-            "container": self.target.container,
+            # The identity slot: a container name locally, a build id on
+            # odoo.sh. Kept under this key so every existing reader — the UI,
+            # the journal, the MCP tools — keeps working.
+            "container": self.target.name,
             "database": self.target.database,
+            # A local container has neither, and a reader that only knows
+            # about containers keeps working because the slot above is shared.
+            "kind": self.target.kind,
+            "host": self.target.host,
+            "stage": self.target.stage,
             "odoo": (self.hello or {}).get("odoo"),
             "python": (self.hello or {}).get("python"),
             "pending_commands": self.pending_commands,
@@ -190,7 +214,7 @@ class Session:
             "session_open",
             owner=dict(self.owner),
             allow_commit=self.allow_commit,
-            container=self.target.container,
+            container=self.target.name,
             database=self.target.database,
             odoo_bin=self.target.odoo_bin,
             odoo=self.hello.get("odoo"),
@@ -226,7 +250,7 @@ class Session:
         pid = (self.hello or {}).get("pid")
         if pid:
             with contextlib.suppress(Exception):
-                await send_signal(self.target.container, pid, "KILL")
+                await send_signal(self.target, pid, "KILL")
         with contextlib.suppress(ProcessLookupError):
             self.process.kill()
         with contextlib.suppress(Exception):
@@ -259,13 +283,29 @@ class Session:
         return self.write_key
 
     def set_allow_commit(self, allowed: bool) -> None:
+        if allowed and self.target.stage == PRODUCTION:
+            raise CommitForbidden(self._production_refusal())
         self.allow_commit = allowed
         self.journal.write("policy_changed", allow_commit=allowed)
         self._emit({"kind": "policy", "allow_commit": allowed, "session": self.id})
 
+    def _production_refusal(self) -> str:
+
+        return (
+            f"this session runs on production ({self.target.name} at "
+            f"{self.target.host}); commit is refused there, rollback is not"
+        )
+
     def _may_commit(self) -> bool:
-        # Grant commit is the agent gate. A human already confirms in the UI.
-        if self.owner.get("kind") == "human":
+        """Whether a commit may even be attempted.
+
+        Locally a human owner confirms in the UI, so the flag is an agent
+        gate. On a remote instance that reasoning does not carry: the flag
+        gates everyone, and on production nothing lifts it.
+        """
+        if self.target.stage == PRODUCTION:
+            raise CommitForbidden(self._production_refusal())
+        if self.owner.get("kind") == "human" and not self.target.is_remote:
 
             return True
 
@@ -275,7 +315,7 @@ class Session:
         pid = (self.hello or {}).get("pid")
         if not pid:
             raise SessionNotReady("no pid yet")
-        await send_signal(self.target.container, pid, "INT")
+        await send_signal(self.target, pid, "INT")
         self.journal.write("interrupt", actor=dict(self.owner))
 
     # -- commands --------------------------------------------------------
@@ -398,7 +438,7 @@ class Session:
             pid = (self.hello or {}).get("pid")
             if pid:
                 with contextlib.suppress(Exception):
-                    await send_signal(self.target.container, pid, "INT")
+                    await send_signal(self.target, pid, "INT")
             self.journal.write("timeout", id=frame.get("id"), seconds=timeout)
             raise TimeoutError(f"command exceeded {timeout}s, interrupt sent") from None
         finally:

@@ -334,3 +334,122 @@ async def test_watchers_hear_the_session_close(tmp_path):
     while not queue.empty():
         kinds.append(queue.get_nowait()["kind"])
     assert "session_closed" in kinds
+
+
+# --- odoo.sh targets ----------------------------------------------------
+
+
+def _stub_spawn_and_session(monkeypatch, captured):
+    """Capture the Target a spawn was built from, without spawning anything."""
+    from odoo_sheller import transport
+
+    real_build = transport.build_command
+
+    async def fake_spawn(argv):
+        captured["argv"] = argv
+
+        return MagicMock()
+
+    def spy_build(target, source):
+        captured["target"] = target
+
+        return real_build(target, source)
+
+    class FakeSession:
+        def __init__(self, session_id, target, process, journal, **kwargs):
+            self.id = session_id
+            self.target = target
+            self.kwargs = kwargs
+            self.state = SessionState.READY
+
+        async def start(self, timeout=90.0):
+
+            return {"odoo": "19.0", "db": target_db(self.target), "pid": 1}
+
+        def describe(self):
+
+            return {"id": self.id}
+
+    monkeypatch.setattr("odoo_sheller.registry.spawn", fake_spawn)
+    monkeypatch.setattr("odoo_sheller.registry.build_command", spy_build)
+    monkeypatch.setattr("odoo_sheller.registry.Session", FakeSession)
+
+
+def target_db(target):
+
+    return target.database
+
+
+@pytest.mark.asyncio
+async def test_opening_an_odoosh_build_takes_the_stage_from_the_instance(
+    tmp_path, monkeypatch
+):
+    """Not from the request. A client that could name its own stage would make
+    the production guard decorative — production differs from staging by the
+    digits in a build id."""
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+
+    async def fake_probe(build, host, runner=None):
+        captured["probed"] = (build, host)
+
+        return {
+            "ok": True, "supported": True, "stage": "production",
+            "db_name": "prod-db-99", "odoo_version": "19.0", "error": None,
+        }
+
+    monkeypatch.setattr("odoo_sheller.registry.probe_odoosh", fake_probe)
+
+    registry = Registry(journal_root=tmp_path)
+    await registry.open(kind="odoosh", build="99", host="build-99.dev.odoo.com")
+
+    assert captured["probed"] == ("99", "build-99.dev.odoo.com")
+    target = captured["target"]
+    assert target.kind == "odoosh"
+    assert target.name == "99"
+    assert target.stage == "production", "the instance said so, nobody else"
+    assert target.database == "prod-db-99"
+    assert captured["argv"][0] == "ssh"
+
+
+@pytest.mark.asyncio
+async def test_opening_an_odoosh_build_refuses_an_unsupported_instance(
+    tmp_path, monkeypatch
+):
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+
+    async def fake_probe(build, host, runner=None):
+
+        return {
+            "ok": True, "supported": False, "stage": "staging", "db_name": "db",
+            "odoo_version": "17.0", "error": "Odoo 17.0 found; only 19 is supported",
+        }
+
+    monkeypatch.setattr("odoo_sheller.registry.probe_odoosh", fake_probe)
+
+    registry = Registry(journal_root=tmp_path)
+    with pytest.raises(ValueError, match="17.0"):
+        await registry.open(kind="odoosh", build="1", host="h")
+    assert "argv" not in captured, "nothing may be spawned for a refused target"
+
+
+@pytest.mark.asyncio
+async def test_opening_an_odoosh_build_needs_a_build_and_a_host(tmp_path):
+    registry = Registry(journal_root=tmp_path)
+    with pytest.raises(ValueError, match="build"):
+        await registry.open(kind="odoosh", host="h")
+
+
+@pytest.mark.asyncio
+async def test_replacing_a_lost_session_stays_local_only(tmp_path, monkeypatch):
+    """A journal records the identity slot but not how to reach it again over
+    SSH. Rather than rebuild a docker target from an odoo.sh one, say so — an
+    agent cannot open these anyway, and a human retypes the build."""
+    registry = Registry(journal_root=tmp_path)
+    monkeypatch.setattr(
+        registry, "target_of_past_session",
+        lambda session_id: {"container": "36887345", "database": "db", "odoo_bin": None},
+    )
+    with pytest.raises(ValueError):
+        await registry.open(replace="gone", kind="odoosh")

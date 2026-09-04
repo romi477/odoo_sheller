@@ -283,7 +283,46 @@ a.brand:hover .wordmark {
   margin-bottom: 0;
 }
 
-#containers {
+/* The refresh acts on the list under it, so it reads as part of that list's
+   name rather than as a peer of the mode control across the header. */
+.heading-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+button.icon {
+  padding: 0 6px;
+  line-height: 1.4;
+  font-size: 14px;
+  border-color: transparent;
+  background: none;
+  color: var(--muted);
+}
+
+button.icon:hover:not(:disabled) {
+  color: var(--cyan);
+  border-color: var(--chrome-edge);
+}
+
+#refresh.spinning {
+  color: var(--amber);
+  pointer-events: none;
+}
+
+#refresh.spinning span {
+  display: inline-block;
+  animation: spin-icon 0.8s linear infinite;
+}
+
+@keyframes spin-icon {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+#containers,
+#odoosh-builds {
   display: grid;
   gap: 10px;
   margin: 0;
@@ -329,6 +368,13 @@ a.brand:hover .wordmark {
   gap: 0;
   margin-top: 10px;
 }
+/* A card being re-probed keeps its facts and dims them. Swapping the text for
+   `probing container…` and back is what made the rows jump. */
+.card.probing .card-facts {
+  opacity: 0.55;
+  transition: opacity 120ms linear;
+}
+
 
 .card-facts .meta,
 .card-facts .probe-note {
@@ -404,6 +450,82 @@ a.brand:hover .wordmark {
 .badge.closed {
   background: var(--red-dark);
   color: var(--red);
+}
+
+/* A build's stage. `staging` is ordinary information; `production` is the one
+   word on this screen worth interrupting for, so it is the only badge that
+   fills solid rather than tinting. */
+.badge.stage {
+  background: color-mix(in oklch, var(--cyan) 12%, var(--panel));
+  color: var(--cyan);
+}
+
+.badge.stage.production {
+  background: var(--red);
+  color: var(--background);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* --- picking where to connect --- */
+
+.segmented {
+  display: flex;
+  margin-left: auto;
+}
+
+.segmented button {
+  border-radius: 0;
+  margin-left: -1px;
+}
+
+.segmented button:first-child {
+  border-top-left-radius: 4px;
+  border-bottom-left-radius: 4px;
+  margin-left: 0;
+}
+
+.segmented button:last-child {
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
+}
+
+.segmented button.active {
+  z-index: 1;
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+
+.odoosh-form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.odoosh-build {
+  flex: 0 0 10ch;
+}
+
+.odoosh-host {
+  flex: 1 1 32ch;
+  min-width: 0;
+}
+
+/* Probe is the key that makes a card exist, and it is the only control on an
+   empty screen. `.primary` drops the border, which left it visible only under
+   the cursor. The outline is neutral: it says "button", the amber label says
+   which one. The element is in the selector on purpose: `.primary` sets the
+   transparent border and comes later in this file. */
+button.odoosh-add {
+  border-color: var(--border);
+}
+
+.odoosh-note {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 12px;
+  max-width: 68ch;
 }
 
 .probe-note {
@@ -786,6 +908,7 @@ input {
 .session-key.new.busy {
   position: relative;
   color: transparent;
+  text-shadow: 0 0 1.5px color-mix(in oklch, var(--amber) 80%, transparent);
   opacity: 1;
 }
 
@@ -801,9 +924,16 @@ input {
   animation: spin 0.8s linear infinite;
 }
 
+/* The label stays as a blurred shape with the spinner sharp on top. The ink
+   moves into a text-shadow rather than the button taking a `filter`: a filter
+   applies to the pseudo-element too, and would blur the spinner with it. */
 .start.busy {
   position: relative;
   color: transparent;
+  text-shadow: 0 0 1.5px color-mix(in oklch, var(--amber) 80%, transparent);
+  /* `.primary` has no border of its own, so a busy key would have been a
+     floating word. It is a button for as long as it is working. */
+  border-color: color-mix(in oklch, var(--amber) 40%, transparent);
   opacity: 1;
 }
 

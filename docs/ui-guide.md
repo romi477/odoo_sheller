@@ -26,25 +26,49 @@ the way they do:
 
 ## Connect
 
-A list of running containers, one card each. Probing happens automatically
+Two halves, chosen with the segmented control in the header, because they
+differ in kind rather than in parameters: local containers are **discovered**
+(cards you did not ask for), an odoo.sh build is **entered**. The mode you
+used last comes back on a reload, the way the screen does.
+
+### Local
+
+A list of running containers, one card each. The **↻** beside the title
+re-runs `docker ps` and probes everything again; it turns until the last probe
+has answered, not until `docker ps` came back, because the probes are what
+take the time. It sits with the title because it acts on the list under it —
+a button across the header would have read as a peer of the mode control.
+
+A refresh does not redraw the screen. Cards are kept and updated in place,
+each keeps the facts its last probe reported and dims them while they are
+being re-checked, and nothing is written that has not changed. The list held
+still through a refresh in the browser: same nodes, same heights, one DOM
+insertion instead of a hundred. A card only appears or disappears when the
+container did. Probing happens automatically
 when the screen loads, and each card also has its own re-probe for after a
 restart or a config change.
 
 - A container that already has a session shows a `connected · <database>`
   badge and offers **Close session** next to **Open session** — a *second*
   session on the same container, against another database, is entirely
-  normal and allowed.
+  normal and allowed. Once there are several the badge counts them
+  (`connected · 2 sessions`) and the key reads **Close 2 sessions**: a card
+  here stands for a target, not for one session, so it closes all of them.
+  Uncommitted work is discarded, and the question is asked once for the
+  batch rather than once per session.
 - **Open session** expands the card into a database picker. The default
   database comes from `db_name` in the container's `odoo.conf`, which in a
   dev container is almost always the right answer. If the database list
   couldn't be read at all, a free-text field takes its place.
 - Probe failures are explained specifically — "no odoo-bin found in this
-  container", "Odoo 17 found, only 19 is supported", "could not read database
+  container", "Odoo 14.0 found; supported: 15, 16, 17, 18, 19", "could not read database
   list — enter the name manually" — rather than as a generic error. A
   container that fails its probe keeps its card and its re-probe button; it
   just can't be opened until whatever's wrong is fixed.
 - Opening a session takes a few seconds while Odoo loads its registry.
-  **Start** goes inert with a spinning arrow, and a log well at the bottom of
+  **Start** goes inert with a spinning arrow over its own label, which stays
+  legible as a blurred shape rather than vanishing — a key that empties reads
+  as broken, not as busy. A log well at the bottom of
   the card streams the container's stderr as it arrives — so "loading" isn't
   a black box. A failed start leaves that well up, with the last lines
   readable right next to the error. Scrolling back in the well to read a
@@ -56,9 +80,43 @@ restart or a config change.
 - The last container and database you used are remembered and preselected
   next time.
 
+### odoo.sh
+
+Two fields — build id and hostname — then **Probe**, which only reads what the
+instance says about itself: its database, its Odoo version, and whether it is
+`staging` or `production`. Nothing is opened by probing.
+
+A probed build becomes a card and stays in the list, so a 40-character
+hostname is typed once rather than once per session. Each card carries what
+its last probe said, and `production` is the one badge on this screen that
+fills solid rather than tinting — it is the word worth interrupting for. The
+**×** removes a card and changes nothing on the instance; it is disabled
+while the build has a session open, and says so, because this card is the
+only record of that hostname on this machine and the session would be left
+with nothing pointing at it.
+
+**Open session** needs no database picker: an odoo.sh build has exactly one
+database and the instance names it. There is no listing here and no **↻** —
+there is no `docker ps` for odoo.sh, so the only list that can exist is the one
+you built.
+
+Opening one is the longest wait on this screen — an SSH connection, then the
+same registry load a container pays — so it shows the same things a container
+start shows: the key goes inert with a spinning arrow, the note says what is
+happening, and a log well under the card streams the build's own stderr as it
+arrives. A failed open leaves that well up with the error on the note, and the
+key comes back. Nothing about the wait is inferred from a timer.
+
+Two things behave differently once such a session is open, both because it is
+not your machine: **Grant commit** is enabled for you, not only for an agent,
+and until you press it **Commit** is disabled rather than offered and refused.
+On a `production` build the latch is disabled too and says why — nothing
+grants a commit there. Rollback and running code are untouched.
+
 ## Sessions
 
-A tab strip of open sessions (`odoo19-dev / acme_dev`), each closable. A
+A tab strip of open sessions (`odoo19-dev / acme_dev`, or `36887345 / staging`
+for an odoo.sh build), each closable. A
 second session on the same container and database opens from the session
 keyboard's **New** key without leaving the current tab — the twin shows up as
 another tab. Idle tabs are cyan; the selected one is amber. While a test is
@@ -122,7 +180,7 @@ hint always explains why a key is inert.
 
 | Key | What it does |
 |---|---|
-| **Grant commit** | See Ownership, above |
+| **Grant commit** | See Ownership, above. On an odoo.sh session it is enabled for you as well, and disabled entirely on `production` |
 | **Grant access** | See Ownership, above |
 | **Close** | Graceful: the bootstrap leaves its loop, Odoo rolls back and closes the cursor, the process exits. If it hasn't exited after ten seconds — a long command can hold it open — the daemon escalates to a kill on its own |
 | **Kill** | `SIGKILL` immediately, no waiting, no Odoo teardown. Postgres rolls back the transaction on its own. Journalled as `killed`, so an ordinary close is never confused with one that had to be forced |

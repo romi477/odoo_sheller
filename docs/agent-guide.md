@@ -13,6 +13,9 @@ Claude Desktop.
 
 ## Two ways an agent gets a session
 
+Both of them are local containers. An agent cannot open a session on a remote
+instance at all — see [Sessions it did not open](#sessions-it-did-not-open).
+
 - **Opens its own.** `os_open_session` creates a session with `owner: agent`
   and `allow_commit: false`. It behaves exactly like a human-opened session
   from the daemon's point of view — same registry, same journal, same rules.
@@ -37,7 +40,7 @@ no way for an agent to grant itself write access.
 | `os_session` | `session_id=None` | one session's state, including `allow_commit` (read-only) |
 | `os_exec` | `code`, `session_id=None` | blocks; returns stdout, result, error, duration |
 | `os_list_tests` | `module`, `container=None` | classes and methods in one addon, as `os_run_test` specs; disk catalogue, no session |
-| `os_run_test` | `test`, `container=None`, `database=None`, `odoo_bin=None`, `timeout=30.0` | runs one Odoo test method or a whole class; opens its own new session, which then closes itself |
+| `os_run_test` | `test`, `container=None`, `database=None`, `odoo_bin=None`, `timeout=30.0`, `session_id=None` | runs one Odoo test method or a whole class; opens its own new session (which then closes itself), or runs in one it was handed |
 | `os_test_result` | `session_id` | waits for a run started by `os_run_test` and returns its outcome (read-only, no key needed) |
 | `os_rollback` | `session_id=None` | discards the open transaction |
 | `os_commit` | `session_id=None` | fails unless the human has granted commit |
@@ -84,6 +87,35 @@ see directly. In short:
 - Never touch `~/.odoo-sheller/` directly and never call the daemon's admin
   endpoints — everything an agent needs is one of the tools above.
 - Rollback is cheap and is the right way to end an experiment. Prefer it.
+- To see what a record holds, read it whole — `record.read()[0]` with no
+  arguments returns every readable field, computed ones included, so a field
+  the agent did not think to name is there anyway. The return is always a
+  list, one dict per record: `[0]` for one record, the list itself for a
+  recordset read in a single call. Relations are not
+  followed: a many2one comes back as `(id, display_name)`, an x2m as a list
+  of ids, so a level deeper is a second read. A wide model read whole is
+  expensive, so it is one record to learn the shape, then `search_read` with
+  the fields that mattered.
+- To pick up a module's changed data, views or schema in a session:
+  `env['ir.module.module'].search([('name','=','sale')]).button_immediate_upgrade()`,
+  and `button_immediate_install()` for a module that is not installed yet
+  (dependencies come with it; an empty recordset means `update_list()` has
+  not been run since the module appeared on disk).
+  Either commits by itself — a write the commit gate does not cover — so the
+  human is asked first, and never on a remote session. It is also how the
+  module's migration scripts run, which is usually the point: they are
+  selected by `installed_version < script version <= manifest version`, so a
+  database that already records the manifest's version redoes schema and data
+  but runs no script. Edited Python is not
+  picked up at all: the process already imported it, so that needs a new
+  session.
+- To see *which* code is running, read the loaded registry rather than the
+  filesystem: the model's `__mro__` names every module that extends it, in
+  resolution order, and `inspect.getsource` on the winning method gives the
+  code with the file it came from. On disk every override sits side by side
+  and nothing says which is in effect. For views, data and manifests — not
+  Python, so `inspect` cannot reach them — `odoo.tools.file_open` reads
+  inside the addons paths and refuses a path that escapes them.
 
 ## Running a test
 
@@ -161,6 +193,39 @@ Pad a class-sized `timeout` a little further still: Odoo's own test framework
 can add up to 10 seconds per test class if one leaves a subprocess running
 (`odoo/tests/common.py`'s `check_remaining_processes` — harmless, logged as a
 warning, unrelated to odoo-sheller).
+
+## Sessions it did not open
+
+A session may run somewhere other than a local container — on an odoo.sh
+build, reached over SSH. An agent never opens one of those, and the reason is
+worth being precise about: it is not a check, it is the absence of a
+parameter. `os_open_session` takes `container`, `database` and `odoo_bin`, and
+no host or build; so does `os_run_test`. There is no way for an agent to
+*name* a remote instance, staging or production, and nothing to forget to
+enforce. It reaches one only through a handover a human performed after
+looking at what the instance said it was.
+
+Once handed one, two things differ, and `os_session` reports both as `kind`
+and `stage`:
+
+- **Commit is off for everyone until granted**, not only for the agent.
+  Locally a human owner may commit at will because they confirm each one in
+  the UI; owning a session is not the same as being entitled to write to
+  someone's instance, so there the human grants it the same way they grant it
+  to an agent. A handover resets the right in any case.
+- **On `production`, commit is refused outright**, as `commit_forbidden`
+  rather than `commit_not_allowed`. The distinction is the point: the first
+  means ask and then watch `allow_commit`, the second means nothing will ever
+  grant it. An agent that treated them alike would poll forever. `exec` and
+  `rollback` are untouched — reading a production instance is the legitimate
+  case.
+
+Tests are the usual reason to be handed a remote session, and
+`os_run_test(session_id=...)` runs in one rather than opening its own. That
+session is not the agent's: it does not close itself, and the agent does not
+close it. `discarded_pending` matters there — a fresh session has nothing to
+lose, but a lent one may hold the human's work, and Odoo's own runner rolls
+back a mid-transaction cursor before it tests.
 
 ## Running under Claude Desktop
 

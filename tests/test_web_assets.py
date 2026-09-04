@@ -178,9 +178,10 @@ def test_abandoning_the_database_picker_collapses_the_card(app_js):
     opener = re.search(r"function openPicker\(.*?\n\}", app_js, re.DOTALL)
     assert opener is not None
     assert "closeAllPickers(" in opener.group(0)
-    render = re.search(r"function renderContainers\(.*?\n\}", app_js, re.DOTALL)
-    assert render is not None
-    body = render.group(0)
+    # The handler is bound once, where the card is built, not on every render.
+    build = re.search(r"function buildContainerCard\(.*?\n\}", app_js, re.DOTALL)
+    assert build is not None
+    body = build.group(0)
     assert "closest('.picker')" in body
     assert "closest('.open')" in body
     assert "closeAllPickers(" in body
@@ -1529,29 +1530,28 @@ def test_the_startup_card_survives_a_refresh_mid_start(app_js):
     branch = render.group(0).split("state.startups.get(container.name)", 1)[1]
     guarded = re.search(r"if \(container\.probe\) \{\s*\n\s*fillPicker", branch)
     assert guarded is not None, "the picker needs a probe; the log well does not"
-    assert "startup-log" in branch, "the well still shows while the probe is away"
+    assert "well.hidden = false" in branch, "the well still shows while the probe is away"
 
 
 def test_the_startup_well_does_not_undo_a_scroll_back(app_js):
-    """The card is rebuilt every render, so the scroll intent lives on the record."""
+    """A render replaces the well's lines, so the scroll intent lives on the record."""
     start = re.search(r"async function startSession\(.*?\n\}", app_js, re.DOTALL)
     assert start is not None
     assert "pinned: true" in start.group(0)
+    build = re.search(r"function buildContainerCard\(.*?\n\}", app_js, re.DOTALL)
+    assert build is not None
+    assert "'scroll'" in build.group(0), "nothing else can notice the reader scrolled"
     render = re.search(r"function renderContainers\(.*?\n\}", app_js, re.DOTALL)
     assert render is not None
-    branch = render.group(0).split("state.startups.get(container.name)", 1)[1]
-    assert "'scroll'" in branch, "nothing else can notice the reader scrolled"
-    # scrollTop on a card still inside the detached fragment is a silent no-op,
-    # so the restore has to come after the card is in the document.
-    assert branch.index("list.append(fragment)") < branch.index("restoreStartupScroll")
+    body = render.group(0)
+    # scrollTop on a card built this render and not in the document yet is a
+    # silent no-op, so the restore has to come after the list is filled.
+    assert body.index("list.replaceChildren(...rendered)") < body.index("restoreStartupScroll")
     restore = re.search(r"function restoreStartupScroll\(.*?\n\}", app_js, re.DOTALL)
     assert restore is not None
     assert "startup.pinned" in restore.group(0), "an unpinned well must keep its offset"
     assert "startup.scrollTop" in restore.group(0)
-    detached = branch.split("list.append(fragment)")[0]
-    assert re.search(r"well\.scrollTop\s*=", detached) is None, (
-        "no scrolling while the card is detached"
-    )
+    assert re.search(r"well\.scrollTop\s*=", body) is None, "the restore owns the offset"
 
 
 def test_startup_log_follows_live_stderr_instead_of_dumping_the_tail(app_js):
@@ -1590,7 +1590,7 @@ def test_a_watcher_stops_on_session_failed(app_js):
     assert body is not None
     assert "failed = true" in body.group(0)
     assert "socket" in body.group(0), "a dead session's stream must be let go"
-    assert "renderContainers()" in body.group(0)
+    assert "renderTargets()" in body.group(0)
 
 
 def test_the_startup_claims_only_its_own_session(app_js):
@@ -1619,3 +1619,351 @@ def test_startup_log_adopts_a_starting_session_from_the_listing(app_js):
     start = re.search(r"async function startSession\(.*?\n\}", app_js, re.DOTALL)
     assert start is not None
     assert "adoptStartingSession" in start.group(0)
+
+
+# --- a session may run somewhere other than a container -----------------
+
+
+def test_the_target_label_is_built_in_one_place(app_js):
+    """`container / database` reads wrong for an odoo.sh build: a build id is
+    opaque and its database is the instance's own 60-character name. One helper
+    decides, so the tab and the panel header cannot drift apart."""
+    assert "function targetLabel(" in app_js
+    assert "${record.info.container} / ${record.info.database}" not in app_js
+
+
+def test_a_remote_target_is_labelled_by_build_and_stage(app_js):
+    label = re.search(r"function targetLabel\(([^)]*)\)\s*\{(.*?)\n\}", app_js, re.DOTALL)
+    assert label is not None
+    body = label.group(2)
+    assert "odoosh" in body
+    assert "stage" in body
+
+
+def test_committing_to_a_remote_instance_names_the_instance(app_js):
+    """"Commit changes to ventor-dev-…-36887345?" says nothing about which
+    machine is about to be written to, and that is the part worth confirming."""
+    confirms = re.findall(r"confirm\(\s*`?[^)]*?Commit[^)]*?\)", app_js, re.DOTALL)
+    assert confirms, "the commit confirmation moved; check this test"
+    assert any("targetForConfirm" in text for text in confirms)
+    # A short tab label is not what a confirmation needs: it spells out the
+    # stage, the build and the host, because that is the part being agreed to.
+    naming = re.search(r"function targetForConfirm\(([^)]*)\)\s*\{(.*?)\n\}", app_js, re.DOTALL)
+    assert naming is not None
+    for field in ("stage", "container", "host"):
+        assert field in naming.group(2), field
+
+
+def test_a_second_session_on_a_remote_target_reopens_the_same_kind(app_js):
+    """New rebuilt a session from container + database + a docker probe. On an
+    odoo.sh record those fields describe a place that request cannot reach."""
+    duplicate = re.search(
+        r"record\.duplicating = true;(.*?)\n  \} catch", app_js, re.DOTALL
+    )
+    assert duplicate is not None, "the duplicate path moved; check this test"
+    body = duplicate.group(1)
+    assert "odoosh" in body, "it must branch on the kind of target"
+    assert "build" in body and "host" in body
+
+
+def test_connect_offers_a_choice_of_where_to_open(markup):
+    """Local containers are discovered; odoo.sh builds are entered. Two lists,
+    not one form with a kind field — the halves differ in kind, not in
+    parameters, and the screen should say so."""
+    assert "data-connect-mode" in markup.data_attributes
+    assert "odoosh" in markup.ids or "odoosh-builds" in markup.ids
+    assert "odoosh-card" in markup.ids
+
+
+def test_the_odoosh_mode_asks_for_a_build_and_a_host(markup):
+    for cls in ("odoosh-build", "odoosh-host"):
+        assert cls in markup.classes, cls
+
+
+def test_a_remembered_build_is_a_card_like_a_container(app_js):
+    """Typing a 40-character hostname twice is once too many, and it keeps the
+    existing habit: click a card, press Start."""
+    assert "osBuilds" in app_js
+    assert "rememberBuild" in app_js or "saveBuild" in app_js
+
+
+def test_starting_a_build_opens_a_build_not_a_container(app_js):
+    starter = re.search(
+        r"async function startOdooshSession\(([^)]*)\)\s*\{(.*?)\n\}", app_js, re.DOTALL
+    )
+    assert starter is not None
+    body = starter.group(2)
+    assert "kind: 'odoosh'" in body
+    assert "build" in body and "host" in body
+
+
+def test_production_is_unmistakable(app_js):
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    # It is the only badge that fills solid instead of tinting.
+    solid = re.search(r"\.badge\.stage\.production\s*\{([^}]*)\}", css)
+    assert solid is not None
+    assert "background: var(--red)" in solid.group(1)
+    assert "production" in app_js
+
+
+def test_both_connect_lists_are_styled_as_lists_of_cards():
+    """A card list that keeps its bullet is a list that was styled by accident."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    block = re.search(r"([^}]*)\{[^}]*list-style: none;[^}]*\}", css)
+    assert block is not None
+    rule = re.search(r"(#containers[^{]*)\{([^}]*)\}", css)
+    assert rule is not None
+    assert "#odoosh-builds" in rule.group(1)
+    assert "list-style: none" in rule.group(2)
+
+
+def test_the_commit_keys_consult_the_kind_of_target(app_js):
+    """A human owner may commit at will locally, so Grant commit is an agent
+    latch there. On a remote target the flag gates the human too — leaving the
+    old rule would offer Commit that 423s and a grant that cannot be pressed."""
+    keys = re.search(r"const grant = panel\.querySelector.*?neu\.setAttribute", app_js, re.DOTALL)
+    assert keys is not None, "the keyboard enablement moved; check this test"
+    body = keys.group(0)
+    assert "odoosh" in body or "remote" in body
+    assert "allow_commit" in body
+    assert "production" in body, "nothing grants a commit there; the latch must say so"
+
+
+def test_the_grant_confirmation_says_who_is_about_to_write(app_js):
+    """The latch grants two different things: an agent asks for it, and on a
+    remote instance a human grants it to themselves. One wording cannot be
+    right for both — "let this agent write" to your own session is a lie."""
+    grant = re.search(r"const toAgent = (.*?)confirm\(", app_js, re.DOTALL)
+    assert grant is not None, "the grant confirmation moved; check this test"
+    assert "owner" in grant.group(1)
+    assert "Allow writing" in grant.group(1)
+
+
+def test_refresh_sits_beside_the_title_not_across_the_header():
+    """It acts on the list below it, so it belongs with the list's name — and
+    a full-width button competing with the mode control read like a choice of
+    equal weight, which it is not."""
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    heading = re.search(r'<h1 id="connect-title">.*?</h1>\s*<button id="refresh"', html, re.DOTALL)
+    assert heading is not None, "refresh should follow the title directly"
+    button = re.search(r'<button id="refresh"[^>]*>(.*?)</button>', html, re.DOTALL)
+    assert button is not None
+    assert "Refresh" in button.group(0), "the hint still has to say what it does"
+    assert "↻" in button.group(1), "the same glyph the other spinners use"
+
+
+def test_refresh_spins_while_it_is_refreshing(app_js):
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert "spinning" in app_js
+    # The glyph turns, not the button: the shared `spin` keyframes carry a
+    # translate for absolutely-positioned pseudo-elements and would displace it.
+    spin = re.search(r"#refresh\.spinning span\s*\{([^}]*)\}", css)
+    assert spin is not None
+    assert "animation: spin-icon" in spin.group(1)
+    assert re.search(r"@keyframes spin-icon\s*\{", css)
+
+
+def test_the_odoosh_mode_is_titled_in_sentence_case(app_js):
+    assert "'Odoo.sh builds'" in app_js
+    assert "'odoo.sh builds'" not in app_js
+
+
+def test_a_refresh_keeps_the_cards_it_already_has(app_js):
+    """Blanking the list to one placeholder line, then growing it back, is the jump."""
+    load = re.search(r"async function loadContainers\(.*?\n\}", app_js, re.DOTALL)
+    assert load is not None
+    body = load.group(0)
+    placeholder = re.search(
+        r"if \(!state\.containers\.length\) \{[^}]*Looking for running containers", body
+    )
+    assert placeholder is not None, "the placeholder must be for an empty list only"
+    # Dropping the probe results wipes every card's facts line and its note,
+    # which is the text that jumps. Keep what the last probe said until the
+    # new one answers.
+    assert "probe: null" not in body
+    assert "probe: known.get(container.name)?.probe ?? null" in body
+
+
+def test_container_cards_survive_a_rerender(app_js):
+    """Ten full rebuilds per refresh (two per probe) is what flickers."""
+    assert "function buildContainerCard(" in app_js
+    render = re.search(r"function renderContainers\(.*?\n\}", app_js, re.DOTALL)
+    assert render is not None
+    body = render.group(0)
+    assert "list.replaceChildren()" not in body, "must not empty the list on every render"
+    assert "state.containerCards" in body
+    # Listeners belong to the card, not to the render: rebinding them per
+    # render stacks duplicates on a node that now outlives the render.
+    assert "addEventListener" not in body
+    # Re-inserting a node resets the scroll of the log well inside it, so the
+    # list is only touched when membership or order actually changed.
+    assert re.search(r"if \(!same\)", body)
+
+
+def test_a_reprobe_dims_the_card_instead_of_rewriting_it(app_js):
+    """A card that already has facts keeps them while they are being re-checked."""
+    render = re.search(r"function renderContainers\(.*?\n\}", app_js, re.DOTALL)
+    assert render is not None
+    body = render.group(0)
+    assert "classList.toggle('probing'" in body
+    # A card with no facts yet still says so; one that has them keeps them.
+    assert "if (!container.probe) {" in body
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    dim = re.search(r"\.card\.probing\s+\.card-facts\s*\{([^}]*)\}", css)
+    assert dim is not None
+    assert "opacity" in dim.group(1)
+
+
+def _odoosh_template() -> str:
+    page = (WEB / "index.html").read_text(encoding="utf-8")
+    block = re.search(r'<template id="odoosh-card">.*?</template>', page, re.DOTALL)
+    assert block is not None
+
+    return block.group(0)
+
+
+def test_opening_a_build_shows_what_a_container_start_shows(app_js):
+    """SSH plus a registry load is the longest wait on this screen; it must show."""
+    start = re.search(r"async function startOdooshSession\(.*?\n\}", app_js, re.DOTALL)
+    assert start is not None
+    body = start.group(0)
+    assert "newClientToken(" in body, "the stream is adopted by token, not by target"
+    assert "adoptStartingSession(" in body
+    assert "pinned: true" in body
+    assert "stopStartup(" in body
+    render = re.search(r"function renderBuilds\(.*?\n\}", app_js, re.DOTALL)
+    assert render is not None
+    branch = render.group(0).split("state.startups.get(entry.build)", 1)[1]
+    assert "classList.toggle('busy'" in branch, "the button must say it is working"
+    assert "aria-busy" in branch
+    assert "well.hidden = false" in branch, "the build's own stderr is the progress"
+    assert "restoreStartupScroll" in branch
+
+
+def test_a_session_ending_updates_whichever_list_holds_its_target(app_js):
+    """A build card's connected badge went stale: only the container list was redrawn."""
+    assert "function renderTargets(" in app_js
+    targets = re.search(r"function renderTargets\(.*?\n\}", app_js, re.DOTALL)
+    assert targets is not None
+    assert "renderContainers(" in targets.group(0)
+    assert "renderBuilds(" in targets.group(0)
+    attach = re.search(r"function attachSession\(.*?\n\}", app_js, re.DOTALL)
+    assert attach is not None
+    assert "renderTargets(" in attach.group(0)
+    fail = re.search(r"function failStartupById\(.*?\n\}", app_js, re.DOTALL)
+    assert fail is not None
+    assert "renderTargets(" in fail.group(0)
+
+
+def test_the_build_card_names_its_buttons_for_what_they_do():
+    template = _odoosh_template()
+    start = re.search(r'<button class="start[^"]*"[^>]*>([^<]*)</button>', template)
+    assert start is not None
+    assert start.group(1) == "Open session", "the same words as the container card"
+    forget = re.search(r'<button class="forget[^"]*"([^>]*)>(.*?)</button>', template, re.DOTALL)
+    assert forget is not None
+    attributes, label = forget.group(1), forget.group(2)
+    assert re.sub(r"<[^>]*>", "", label).strip() in {"×", "✕"}, (
+        "a mark, not a word, beside three real buttons"
+    )
+    assert 'aria-label="Forget' in attributes, "the mark needs a name for a screen reader"
+    assert "Remove this build from the list" in attributes
+
+
+def test_closing_from_a_card_closes_every_session_on_that_target(app_js):
+    """The card is per target; a target may hold several sessions."""
+    assert "function sessionsForTarget(" in app_js
+    all_of_them = re.search(r"function sessionsForTarget\(.*?\n\}", app_js, re.DOTALL)
+    assert all_of_them is not None
+    assert "filter(" in all_of_them.group(0), "every match, not the first one"
+    closer = re.search(r"async function closeSessionsForTarget\(.*?\n\}", app_js, re.DOTALL)
+    assert closer is not None
+    body = closer.group(0)
+    assert "sessionsForTarget(" in body
+    # One question for the batch, not one per session.
+    assert "confirm(" in body
+    assert "confirmed: true" in body
+    # Both lists route the card's key through it: the container card binds it
+    # once where the card is built, the build card on each render.
+    for where in ("buildContainerCard", "renderBuilds"):
+        card = re.search(rf"function {where}\(.*?\n\}}", app_js, re.DOTALL)
+        assert card is not None
+        assert "closeSessionsForTarget(" in card.group(0), where
+    close = re.search(r"async function closeSession\(.*?\n\}", app_js, re.DOTALL)
+    assert close is not None
+    assert "options.confirmed" in close.group(0), "the batch's answer must carry"
+
+
+def test_a_card_says_how_many_sessions_it_holds(app_js):
+    """`connected · acme_dev` for one; a count once there are several."""
+    badge = re.search(r"function connectedLabel\(.*?\n\}", app_js, re.DOTALL)
+    assert badge is not None
+    assert "sessions`" in badge.group(0)
+    assert "info.database" in badge.group(0), "one session still names its database"
+    key = re.search(r"function closeLabel\(.*?\n\}", app_js, re.DOTALL)
+    assert key is not None
+    assert "sessions`" in key.group(0)
+    assert "'Close session'" in key.group(0)
+    # Both lists label their card from the same two helpers.
+    for render in ("renderContainers", "renderBuilds"):
+        body = re.search(rf"function {render}\(.*?\n\}}", app_js, re.DOTALL)
+        assert body is not None
+        assert "connectedLabel(" in body.group(0), render
+        assert "closeLabel(" in body.group(0), render
+
+
+def test_a_build_with_a_session_open_cannot_be_forgotten(app_js):
+    """Forgetting the card drops the only record of the hostname on this machine."""
+    body = re.search(r"function renderBuilds\(.*?\n\}", app_js, re.DOTALL)
+    assert body is not None
+    text = body.group(0)
+    forget = re.search(r"forget\.disabled = ([^;]+);", text)
+    assert forget is not None
+    assert "length" in forget.group(1), "disabled while any session is open"
+    assert "Close" in text, "the title has to say what to do first"
+
+
+def test_a_busy_key_blurs_its_label_under_the_spinner():
+    """The label went invisible mid-start; the key looked empty, not working."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    for selector in (r"\.start\.busy", r"\.session-key\.new\.busy"):
+        rule = re.search(selector + r"\s*\{([^}]*)\}", css)
+        assert rule is not None, selector
+        body = rule.group(1)
+        # The glyphs' own ink moves into a blurred shadow: the word stays as a
+        # shape, and a filter on the button would have blurred the spinner too.
+        assert "text-shadow" in body, selector
+        # Just enough to soften the glyphs: a wide radius smeared the label
+        # over the key's own outline.
+        radius = re.search(r"text-shadow: 0 0 ([\d.]+)px", body)
+        assert radius is not None, selector
+        assert float(radius.group(1)) <= 2, selector
+        assert "color: transparent" in body, selector
+        spinner = re.search(selector + r"::after\s*\{([^}]*)\}", css)
+        assert spinner is not None, selector
+        assert 'content: "↻"' in spinner.group(1), selector
+    # `.primary` carries no border, so a busy Start had none either and the
+    # key stopped looking like a key.
+    start = re.search(r"\.start\.busy\s*\{([^}]*)\}", css)
+    assert start is not None
+    assert re.search(r"border-color:\s*(?!transparent)", start.group(1))
+
+
+def test_probe_carries_its_own_outline_at_rest():
+    """It is the key that makes a card exist; `.primary` alone left it edgeless."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    rule = re.search(r"\.odoosh-add\s*\{([^}]*)\}", css)
+    assert rule is not None, "Probe needs a rule of its own"
+    body = rule.group(1)
+    border = re.search(r"border-color:\s*([^;]+);", body)
+    assert border is not None
+    assert "transparent" not in border.group(1), "visible without hovering"
+    # Neutral, not amber or cyan: the outline says "button", the colour is the
+    # label's job.
+    assert "--border" in border.group(1)
+
+
+def test_the_mode_keys_read_as_names(markup):
+    page = (WEB / "index.html").read_text(encoding="utf-8")
+    modes = dict(re.findall(r'data-connect-mode="(\w+)"[^>]*>([^<]+)</button>', page))
+    assert modes == {"local": "Local", "odoosh": "Odoo.sh"}, modes

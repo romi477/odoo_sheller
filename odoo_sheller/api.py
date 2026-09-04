@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from odoo_sheller import discovery, journal
 from odoo_sheller.registry import Registry, load_admin_key
 from odoo_sheller.session import (
+    CommitForbidden,
     CommitNotAllowed,
     SessionBusy,
     SessionDead,
@@ -68,10 +69,20 @@ class OpenBody(BaseModel):
     # A session opened to run one test and then close itself. Never for a
     # human: the browser's session is theirs until they end it.
     autoclose: bool = False
+    # Where this runs. A local container needs container/database/odoo_bin;
+    # an odoo.sh build needs build/host, and the instance dictates the rest.
+    kind: str = "docker"
+    build: str | None = None
+    host: str | None = None
 
 
 class ProbeBody(BaseModel):
     container: str
+
+
+class ProbeOdooshBody(BaseModel):
+    build: str
+    host: str
 
 
 class OwnerBody(BaseModel):
@@ -156,6 +167,23 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         if isinstance(exc, (SessionBusy, SessionNotReady)):
 
             return HTTPException(status_code=409, detail=str(exc))
+        if isinstance(exc, CommitForbidden):
+            # Checked before CommitNotAllowed, which it subclasses. The codes
+            # have to differ: `commit_not_allowed` means "ask the human", and
+            # an agent told to poll for a grant that will never come would
+            # poll forever.
+
+            return HTTPException(
+                status_code=423,
+                detail={
+                    "error": "commit_forbidden",
+                    "message": str(exc),
+                    "recovery": (
+                        "nothing grants this — end with rollback, or open a "
+                        "session on a staging build if you need to write"
+                    ),
+                },
+            )
         if isinstance(exc, CommitNotAllowed):
 
             return HTTPException(
@@ -190,6 +218,17 @@ def create_app(registry: Registry | None = None) -> FastAPI:
     async def probe(body: ProbeBody):
 
         return await discovery.probe(body.container)
+
+    @app.post("/api/probe/odoosh")
+    async def probe_odoosh(body: ProbeOdooshBody):
+        """What a build says it is, before anything is opened in it.
+
+        There is no listing for odoo.sh — a build is entered, not discovered —
+        so this is the whole of target discovery for that kind. `stage` is the
+        field to read: it is what tells staging from production.
+        """
+
+        return await discovery.probe_odoosh(body.build, body.host)
 
     @app.get("/api/containers/{container}/tests")
     async def container_tests(container: str, module: str | None = Query(None)):
@@ -243,6 +282,9 @@ def create_app(registry: Registry | None = None) -> FastAPI:
                 replace=body.replace,
                 client_token=body.client_token,
                 autoclose=body.autoclose,
+                kind=body.kind,
+                build=body.build,
+                host=body.host,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from None
@@ -466,11 +508,17 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         # session you never owned needs the admin key.
         if not session.held_by(x_os_session_key):
             require_admin(x_os_admin_key)
-        # The right only gates an agent: a human owner confirms each commit in
-        # the UI and `Session._may_commit` lets them through regardless. Storing
-        # a revocation here would journal `policy_changed` and answer
-        # `allow_commit: false` while the next commit went through anyway.
-        if not body.allow_commit and session.owner.get("kind") == "human":
+        # Locally the right only gates an agent: a human owner confirms each
+        # commit in the UI and `Session._may_commit` lets them through
+        # regardless, so storing a revocation would journal `policy_changed`
+        # and answer `allow_commit: false` while the next commit went through
+        # anyway. On a remote target the flag gates the human too, so there a
+        # revocation is a real act and refusing it would be the lie instead.
+        described = session.describe()
+        local_human = (
+            session.owner.get("kind") == "human" and described.get("kind") != "odoosh"
+        )
+        if not body.allow_commit and local_human:
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -483,7 +531,10 @@ def create_app(registry: Registry | None = None) -> FastAPI:
                     ),
                 },
             )
-        session.set_allow_commit(body.allow_commit)
+        try:
+            session.set_allow_commit(body.allow_commit)
+        except CommitForbidden as exc:
+            raise translate(exc, session_id) from None
 
         return {"allow_commit": session.allow_commit}
 

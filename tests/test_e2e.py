@@ -17,6 +17,7 @@ import os
 import pytest
 
 from odoo_sheller import discovery
+from odoo_sheller.discovery import SUPPORTED_MAJORS
 from odoo_sheller.registry import Registry
 from odoo_sheller.session import CommitNotAllowed
 
@@ -42,7 +43,9 @@ async def test_probe_reads_the_real_container():
     assert result["ok"] is True
     assert result["supported"] is True
     assert result["odoo_bin"] == ODOO_BIN
-    assert result["odoo_major"] == 19
+    # The override env vars can point this at a 17 or 18 container just as
+    # legitimately; what matters is that the probe read a supported one.
+    assert result["odoo_major"] in SUPPORTED_MAJORS
     assert result["db_name"] == DATABASE
     assert DATABASE in result["databases"]
 

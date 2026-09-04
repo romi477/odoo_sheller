@@ -259,16 +259,30 @@ guard needs to be built *before* the fact, not discovered missing after.
 
 **Which Odoo versions are supported?**
 
-Only 19. The probe refuses anything else immediately, with a clear message,
-rather than letting you hit a confusing failure on the first real command.
+15 through 19. Anything older is refused by the probe immediately, with a
+message naming what would work, rather than letting you hit a confusing
+failure on the first real command.
 
-The bootstrap itself happens to depend on nothing that's changed in Odoo for
-years, so it's likely version-neutral in practice — but only 19 has actually
-been verified, and the tool only promises what's been checked.
+The bootstrap depends on nothing that has changed across those five: the
+non-tty branch of Odoo's own console, the names `env` and `self`, the
+rollback around it, `SIGINT`, and a cursor that commits on a clean exit. All
+five were checked by hand on real containers — session, commands, interrupt,
+commit and rollback (a committed record read back from a second session), a
+real test run.
+
+Some things did move, and the bootstrap asks the container what it has rather
+than reading a version number: the calls that flush and discard pending work
+were renamed in 16, the shell's own test runner (`odoo/tests/shell.py`)
+arrived in 17, and before that the test result object sat elsewhere and
+counted in lists. For 15 and 16 the tests therefore run through the pieces
+that runner is made of — same tag syntax, same suite loader — all older than
+15. From the outside a test run looks identical on every version.
 
 **Remote hosts, SSH, odoo.sh?**
 
-No. Local Docker, on this machine, only.
+An odoo.sh build, yes — a human opens it from the UI over SSH. A plain
+self-hosted box, no: it would need sudo, path discovery and a database list,
+which is a separate job.
 
 **What's still missing?**
 

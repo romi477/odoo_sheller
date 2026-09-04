@@ -118,6 +118,121 @@ def _os_free_port(interface):
         sock.close()
 
 
+def _os_is_addon_test_module(name):
+    r"""`^odoo\.addons\.\w+\.tests` without importing `re` in here."""
+    parts = name.split(".")
+
+    return len(parts) >= 4 and parts[0] == "odoo" and parts[1] == "addons" \
+        and parts[3] == "tests"
+
+
+def _os_run_suite(loader, suite, report):
+    """`run_suite` gained `global_report` in 16; 15 only returns its result.
+
+    Read off the function rather than guessed from a version: a TypeError from
+    a wrong keyword and a TypeError from inside a test look the same, and the
+    second must not be retried as if it were the first.
+    """
+    code = getattr(loader.run_suite, "__code__", None)
+    names = getattr(code, "co_varnames", ()) if code is not None else ()
+    if "global_report" in names:
+
+        return loader.run_suite(suite, global_report=report)
+
+    return loader.run_suite(suite)
+
+
+def _os_test_counts(report):
+    """15's result is unittest's: `failures`/`errors`/`skipped` are lists.
+
+    16 added the `*_count` integers and made `skipped` one too. Prefer those
+    when they are there; fall back to the length of the list.
+    """
+    def count(name):
+        counter = getattr(report, name + "_count", None)
+        if counter is not None:
+
+            return counter
+        value = getattr(report, name, 0)
+
+        return len(value) if isinstance(value, list) else value
+
+    return count("failures"), count("errors"), count("skipped")
+
+
+def _os_run_tests_fallback(env, test_tags, modules):
+    """What `odoo/tests/shell.py` does, for the versions that do not ship it.
+
+    That file arrived in Odoo 17. Everything it is built from is older and
+    unchanged — the tag DSL, `loader.make_suite`, `loader.run_suite`,
+    `result.OdooTestResult`, `Registry._lock` — so this is its body against
+    those same primitives rather than a test runner of our own. `run_suite`
+    lost a positional argument after 16, hence the keyword.
+
+    Returns None on the same refusal `run_tests` returns None on: a container
+    running workers, where the test framework cannot work at all.
+    """
+    tools = importlib.import_module("odoo.tools")
+    loader = importlib.import_module("odoo.tests.loader")
+    try:
+        results = importlib.import_module("odoo.tests.result")
+    except ImportError:
+        # 15 keeps OdooTestResult in odoo/tests/runner.py.
+        results = importlib.import_module("odoo.tests.runner")
+    registries = importlib.import_module("odoo.modules.registry")
+    config = tools.config
+
+    if config["workers"] != 0:
+
+        return None
+
+    server = importlib.import_module("odoo.service.server").server
+    if not server.httpd:
+        # Some tests need the http daemon; the port was already moved off the
+        # container's own by the caller.
+        server.http_spawn()
+
+    try:
+        ready = importlib.import_module("psycopg2.extensions").STATUS_READY
+        if env.cr._cnx.status != ready:
+            # A cursor holding a lock deadlocks the suite. Odoo's own runner
+            # rolls back here too; the session reports it as discarded work.
+            env.cr.rollback()
+    except Exception:  # noqa: BLE001, S110 - the check is an optimisation
+        pass
+
+    for name in list(sys.modules):
+        # reload_tests=True: an edited test file must be seen on the next run.
+        if _os_is_addon_test_module(name):
+            del sys.modules[name]
+
+    config["test_tags"] = test_tags
+    config["test_enable"] = True
+    try:
+        report = results.OdooTestResult()
+        with registries.Registry._lock:
+            registry = registries.Registry(env.cr.dbname)
+            try:
+                # Best effort to restore the test environment, as Odoo does.
+                registry.loaded = False
+                registry.ready = False
+                suite = loader.make_suite(modules, "at_install")
+                if suite.countTestCases():
+                    report.update(_os_run_suite(loader, suite, report))
+            finally:
+                registry.loaded = True
+                registry.ready = True
+        suite = loader.make_suite(modules, "post_install")
+        if suite.countTestCases():
+            report.update(_os_run_suite(loader, suite, report))
+    finally:
+        # Process-wide state: a session goes on being used after a test run.
+        config["test_enable"] = None
+        config["test_tags"] = None
+
+    return report
+
+
 def _os_run_test(env, module, test_class, test_method):
     captured = io.StringIO()
     saved_stdout = sys.stdout
@@ -126,7 +241,12 @@ def _os_run_test(env, module, test_class, test_method):
     error = None
     test = None
     try:
-        shell = importlib.import_module("odoo.tests.shell")
+        try:
+            shell = importlib.import_module("odoo.tests.shell")
+        except ImportError:
+            # Odoo 16 and older: no shell runner to call, only the primitives
+            # it was built from.
+            shell = None
         server = importlib.import_module("odoo.service.server").server
         if server.httpd is None:
             # Only before the first spawn in this process: run_tests() itself
@@ -143,25 +263,29 @@ def _os_run_test(env, module, test_class, test_method):
             server.port = free_port
             config["http_port"] = free_port
         test_tags = _os_test_tags(module, test_class, test_method)
-        report = shell.run_tests(env, test_tags, modules=[module], reload_tests=True)
+        if shell is None:
+            report = _os_run_tests_fallback(env, test_tags, [module])
+        else:
+            report = shell.run_tests(env, test_tags, modules=[module], reload_tests=True)
         if report is None:
             error = {
                 "type": "TestRunnerRefused",
                 "message": (
-                    "odoo.tests.shell.run_tests refused to run: the container's "
+                    "the test runner refused to run: the container's "
                     "Odoo config must have workers=0 (threaded mode)"
                 ),
                 "traceback": "",
             }
         else:
+            failures, errors, skipped = _os_test_counts(report)
             test = {
                 "module": module,
                 "test_class": test_class,
                 "test_method": test_method,
                 "tests_run": report.testsRun,
-                "failures": report.failures_count,
-                "errors": report.errors_count,
-                "skipped": report.skipped,
+                "failures": failures,
+                "errors": errors,
+                "skipped": skipped,
                 "success": report.wasSuccessful(),
             }
     # BaseException on purpose: an interrupted test run is an ordinary result
@@ -188,14 +312,36 @@ def _os_run_test(env, module, test_class, test_method):
     }
 
 
+def _os_flush(env):
+    """Write out pending computations. `flush_all` arrived in 16."""
+    if hasattr(env, "flush_all"):
+        env.flush_all()
+    else:
+        env["base"].flush()
+
+
+def _os_invalidate(env):
+    """Drop the caches *and* the pending writes, without writing them.
+
+    `invalidate_all(flush=False)` arrived in 16; before that `Environment.clear`
+    did the same three things — invalidate the cache, drop `tocompute` and drop
+    `towrite`. Both must discard rather than flush: the default `flush=True`
+    would write out exactly what a rollback is about to throw away.
+    """
+    if hasattr(env, "invalidate_all"):
+        env.invalidate_all(flush=False)
+    else:
+        env.clear()
+
+
 def _os_commit(env):
-    env.flush_all()
+    _os_flush(env)
     env.cr.commit()
-    env.invalidate_all(flush=False)
+    _os_invalidate(env)
 
 
 def _os_rollback(env):
-    env.invalidate_all(flush=False)
+    _os_invalidate(env)
     env.cr.rollback()
 
 

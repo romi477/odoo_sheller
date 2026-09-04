@@ -122,6 +122,24 @@ Uncommitted work travels with a session when ownership moves. If the human hands
 you a session with pending commands, a commit you make would write their work
 too. Say so before committing anything you did not do yourself.
 
+## Sessions on someone else's Odoo
+
+A human may hand you a session that runs on a remote instance rather than a
+local container — an odoo.sh build, say. You cannot open one yourself: no tool
+here takes a host or a build, on purpose. You only ever receive one.
+
+Two things differ there, and os_session shows both as `kind` and `stage`:
+
+- Commit is off for everyone until granted, not only for you. Locally a human
+  owner may commit at will because they confirm in the UI; on someone's own
+  Odoo that is not enough, so they grant it there the same way they grant it
+  to you.
+- On a `production` instance commit is refused outright, and the refusal is
+  `commit_forbidden` rather than `commit_not_allowed`. The difference matters:
+  `commit_not_allowed` means ask the human and then poll os_session, while
+  `commit_forbidden` means nothing will ever grant it. Polling for that grant
+  is an endless loop. Read what you came to read and end with os_rollback.
+
 ## What you cannot do, and must not attempt
 
 - Grant yourself commit rights, or call the daemon's admin endpoints.
@@ -168,6 +186,97 @@ out of a dict. A helper that is only meant to run against a single record
 should open with `self.ensure_one()` rather than assuming — it raises
 immediately and clearly instead of the ambiguous behavior of reading a
 multi-record field.
+
+## Reading the code you are debugging
+
+You are in a Python REPL inside the running instance, so the source is
+readable — and reading it through the *loaded registry* answers a question
+the filesystem cannot: which override actually wins.
+
+    import inspect
+    cls = type(env['res.partner'])
+    [m.__module__ for m in cls.__mro__ if 'addons' in str(m.__module__)]
+
+That lists every module that extends the model, in resolution order — so you
+can see whose method is in front. Then read the one that matters:
+
+    inspect.getsource(cls._compute_display_name)
+    inspect.getsourcefile(cls._compute_display_name)
+
+Prefer this over opening files by path. On disk every override sits side by
+side and nothing says which is in effect; the MRO says.
+
+A real method's source is longer than the result ceiling, so slice it rather
+than fetching it whole and losing the end:
+
+    src = inspect.getsource(cls._compute_display_name).splitlines()
+    src[:40]
+
+For files that are not Python — views, data, manifests — use Odoo's own
+reader, which is confined to the addons paths:
+
+    from odoo.tools import file_path, file_open
+    file_path('sale')                      # the module's directory
+    with file_open('sale/views/sale_views.xml') as f:
+        head = f.read(4000)
+
+`file_open` takes `filter_ext=('.xml',)` to refuse anything else, raises
+`FileNotFoundError` for a path outside the addons directories, and will not
+create files. Use it instead of bare `open()`: a path that escapes the addons
+tree is refused rather than read.
+
+## Reading a record
+
+To see what a record actually holds, read it whole rather than naming the
+fields you expect. `read()` with no arguments returns every field you may
+read, computed ones included, so a field you did not think to ask for is
+there:
+
+    env['res.partner'].browse(11).read()[0]
+
+The return is always a list, one dict per record, so a single record ends in
+`[0]`. On a recordset the list is what you want — keep it and read the whole
+set in one call rather than one record at a time.
+
+Two things it does not do. Relations are not followed: a many2one comes back
+as `(id, display_name)` and a one2many or many2many as a list of `ids`, so
+going a level deeper is a second read on the related model. And a wide model
+read whole is expensive and can be large — binary fields, long text, every
+computed field evaluated — so read one record whole to learn its shape, then
+`search_read` with the fields that turned out to matter for many.
+
+`read()` on several records returns one dict each, in no guaranteed order,
+and silently drops records that no longer exist. `read(load=None)` gives
+bare ids for relations instead of the `(id, display_name)` pairs.
+
+## Installing and updating a module
+
+A session loads the registry once, so a module's data, views and schema are
+whatever they were when it opened. To pick up changes, upgrade the module in
+the session; to add one that is not installed, install it the same way:
+
+    Module = env['ir.module.module']
+    Module.search([('name', '=', 'sale')]).button_immediate_upgrade()
+    Module.search([('name', '=', 'sale_stock')]).button_immediate_install()
+
+Install pulls in the module's dependencies, and an empty recordset means the
+loader has never seen that module: call `Module.update_list()` first — it
+scans the addons paths for manifests — then search again.
+
+Either one commits on its own — it has to, to rebuild the registry — so it is
+a write the commit gate does not cover: ask the human first, the same way you
+would before os_commit, and never call either on a session that runs on
+someone else's instance. Modules that depend on the one you name are upgraded with
+it, and installing one installs whatever it depends on.
+
+This is how the module's migration scripts run, which is usually the point. A
+script runs only if its version is above what `ir.module.module.latest_version`
+records and no higher than the manifest's, so a database already at the
+manifest version redoes schema and data but runs no script.
+
+Edited Python is not picked up: the process imported those files at startup
+and an upgrade does not re-import them. For a change in a `.py`, open a new
+session.
 
 ## Delayed jobs
 
@@ -220,6 +329,13 @@ and nothing to clean up afterwards: the session closes itself.
 
 Never answer a `status: "running"` by calling os_run_test again. That starts
 a second, duplicate run on top of the first.
+
+To run a test in a session a human handed you rather than a fresh one, pass
+os_run_test(session_id=...). On a remote instance that is the only way, since
+no tool here can name one. That session is not yours: it does not close
+itself, and you do not close it either. Watch `discarded_pending` there — if
+the human left work in it, Odoo's own runner rolled that back before testing.
+Passing both a session_id and a container is refused rather than guessed at.
 
 ## Being watched
 
@@ -513,7 +629,10 @@ async def os_list_tests(module: str, container: str | None = None) -> Any:
         "own brand-new session (owner agent, allow_commit false) rather than "
         "reusing one you already have, so there is never anything pending to "
         "lose, and that session closes itself once the run settles — there is "
-        "nothing to clean up. stdout and the Odoo log lines produced during "
+        "nothing to clean up. Pass session_id instead to run in a session a "
+        "human handed you — the only way onto a remote instance — and then it "
+        "is theirs, closed neither by you nor by itself. "
+        "stdout and the Odoo log lines produced during "
         "the run come back separated. A run too long to answer in one call "
         "comes back as {\"status\": \"running\", \"session_id\": ...}, which is "
         "not a failure: call os_test_result(session_id) to wait for it, and "
@@ -528,7 +647,18 @@ async def os_run_test(
     database: str | None = None,
     odoo_bin: str | None = None,
     timeout: float = 30.0,
+    session_id: str | None = None,
 ) -> Any:
+    if session_id and (container or database or odoo_bin):
+        # One says where to run, the other says where to open, and the two can
+        # name different places. Refuse rather than silently pick.
+        return {
+            "error": "ambiguous_target",
+            "recovery": (
+                "pass session_id to run in a session you were handed, or a "
+                "container to open a fresh one — not both"
+            ),
+        }
     if not 0 < timeout <= MAX_TEST_TIMEOUT:
         # Checked before anything is opened: a doomed ceiling would otherwise
         # cost a whole session start to earn a raw validation error.
@@ -547,6 +677,12 @@ async def os_run_test(
     # is killed before it can hand back the session id.
     loop = asyncio.get_running_loop()
     deadline = loop.time() + MCP_CALL_BUDGET
+
+    if session_id:
+        # A session a human handed over — the only way onto a remote instance,
+        # since no tool here can name one. Not ours to close, and not opened
+        # with autoclose, so it stays exactly as it was lent.
+        return await _run_test_in(session_id, test, timeout, deadline, ours=False)
 
     # Container and database do not identify a session — several may be
     # opening on the same target at once — so the token is what finds this one
@@ -588,6 +724,19 @@ async def os_run_test(
     session_id = opened["id"]
     _keys[session_id] = opened.pop("write_key")
 
+    return await _run_test_in(session_id, test, timeout, deadline, ours=True)
+
+
+async def _run_test_in(
+    session_id: str, test: str, timeout: float, deadline: float, ours: bool
+) -> Any:
+    """Run one test in a session and shape the outcome.
+
+    `ours` says whether this server opened the session. It changes nothing
+    about the run, and everything about what the answer may promise: a session
+    we opened closes itself, and one we were lent is the human's to end.
+    """
+    loop = asyncio.get_running_loop()
     # Whatever is left of the budget, and never more: a margin added on top of
     # a cap defeats the cap. The daemon still gets the full ceiling the caller
     # asked for — only our own waiting is capped, so the run is never cut short.

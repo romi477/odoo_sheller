@@ -1102,3 +1102,127 @@ async def test_the_run_test_tool_description_matches_what_it_now_does():
     assert "closes itself" in description
     assert "running" in description
     assert "os_test_result" in description
+
+
+def test_the_instructions_say_how_to_find_the_code_being_debugged():
+    """An agent that cannot see which override wins is guessing."""
+    text = server.INSTRUCTIONS
+    assert "inspect.getsource" in text
+    assert "__mro__" in text
+
+
+def test_the_instructions_say_how_to_read_a_whole_record():
+    """Naming fields one at a time is how an agent misses the field it needed."""
+    text = server.INSTRUCTIONS
+    assert ".read()[0]" in text, "read() always returns a list"
+    assert "read(load=None)" in text
+    # The two things read() does not do, both of which surprise a caller:
+    # relations come back as ids, and a wide model is expensive to read whole.
+    assert "display_name" in text
+    assert "ids" in text
+
+
+def test_the_instructions_say_how_to_update_a_module():
+    """Only what works: the ORM call, what it costs, and what it cannot do."""
+    text = server.INSTRUCTIONS
+    assert "button_immediate_upgrade" in text
+    # It commits on its own, so the human's consent comes first, and it does
+    # not re-import Python.
+    assert "commits" in text
+    assert "new session" in text
+    # What an upgrade is actually for, and the window that decides whether a
+    # script runs at all.
+    assert "migration" in text
+    assert "manifest" in text
+    # Installing is the same act with the same cost, and a module the loader
+    # has never seen has no record to install.
+    assert "button_immediate_install" in text
+    assert "update_list" in text
+
+
+def test_the_instructions_say_how_to_read_non_python_files():
+    """Views and data files are XML; inspect cannot reach them."""
+    text = server.INSTRUCTIONS
+    assert "file_open" in text
+    assert "filter_ext" in text
+
+
+def test_an_agent_cannot_name_a_remote_target():
+    """Decision by omission, not by check: os_open_session has no host, build
+    or kind parameter, so an agent has no way to reach an odoo.sh instance —
+    staging or production — except through a handover a human performed. A
+    guard that cannot be forgotten because there is nothing to forget."""
+    import inspect
+
+    params = set(inspect.signature(server.os_open_session).parameters)
+    assert params == {"container", "database", "odoo_bin", "replace"}
+    assert not params & {"host", "build", "kind", "stage"}
+
+
+def test_no_mcp_tool_offers_a_remote_target():
+    """The same has to hold for every tool that can open a session."""
+    import inspect
+
+    for name in ("os_open_session", "os_run_test"):
+        params = set(inspect.signature(getattr(server, name)).parameters)
+        assert not params & {"host", "build", "kind", "stage"}, name
+
+
+def test_the_instructions_distinguish_the_two_commit_refusals():
+    """One says ask; the other says never. Polling the second one is a loop."""
+    text = server.INSTRUCTIONS
+    assert "commit_forbidden" in text
+    assert "production" in text
+
+
+# --- running a test in a session someone handed over --------------------
+
+
+async def test_run_test_in_a_handed_over_session_opens_nothing(wired):
+    """On odoo.sh this is the only way: an agent cannot open the target, so
+    without it the tests feature is unreachable exactly where staging lives."""
+    result = await server.os_run_test("qbo.TestBig", session_id="s1")
+
+    assert not hasattr(wired, "open_kwargs"), "no session may be opened"
+    assert result["session_id"] == "s1"
+    assert result["tests_run"] == 1
+    assert wired.session.calls[-1][:4] == ("run_test", "qbo", "TestBig", None)
+
+
+async def test_run_test_does_not_close_a_session_it_was_lent(wired):
+    """Closing what you were handed is not yours to do."""
+    result = await server.os_run_test("qbo.TestBig", session_id="s1")
+
+    assert "closes itself" not in str(result), "it does not, and must not claim to"
+    assert "s1" in wired.sessions, "still there for the human who lent it"
+
+
+async def test_run_test_refuses_a_lent_session_and_a_target_at_once(wired):
+    """One says where to run, the other says where to open. Both is a muddle."""
+    refusal = await server.os_run_test("qbo.TestBig", session_id="s1", container="c")
+
+    assert refusal["error"] == "ambiguous_target"
+    assert refusal["recovery"]
+    assert wired.session.calls == [], "nothing may run until the caller decides"
+
+
+async def test_run_test_in_a_lent_session_reports_discarded_work(wired, monkeypatch):
+    """Here it stops being theoretical: the human may have left work in it, and
+    Odoo's own runner rolls back a mid-transaction cursor before testing."""
+    async def with_pending(self, module, test_class, test_method=None, timeout=300.0):
+
+        return {
+            "stdout": "", "error": None, "duration": 1.0,
+            "test": {"tests_run": 4, "failures": 0, "errors": 0,
+                     "skipped": 0, "success": True},
+            "stderr": [], "discarded_pending": True,
+        }
+
+    monkeypatch.setattr(FakeSession, "run_test", with_pending)
+    result = await server.os_run_test("qbo.TestBig", session_id="s1")
+    assert result["discarded_pending"] is True
+
+
+def test_the_instructions_say_how_to_test_on_a_lent_session():
+    text = server.INSTRUCTIONS
+    assert "os_run_test(session_id" in text or "session_id=" in text

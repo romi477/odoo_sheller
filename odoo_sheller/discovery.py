@@ -4,7 +4,15 @@ import asyncio
 import json
 import re
 
-SUPPORTED_MAJOR = 19
+from odoo_sheller.transport import SSH_OPTS
+
+# 15 through 19. Everything the bootstrap rests on is the same in all five:
+# the non-tty branch of `console()`, the names `env` and `self`, the rollback
+# around it, SIGINT, the cursor that commits on a clean exit. What moved since
+# 15 — `flush_all`/`invalidate_all`, `odoo/tests/shell.py`, where the test
+# result object lives, `run_suite`'s signature — the bootstrap feature-detects
+# rather than switching on the number here. See docs/architecture.md.
+SUPPORTED_MAJORS = (15, 16, 17, 18, 19)
 MODULE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 PROBE_SOURCE = r'''
@@ -258,6 +266,51 @@ print(json.dumps(result))
 '''
 
 
+OOSH_PROBE_SOURCE = r'''
+import json, os, shutil, sys
+
+# An odoo.sh build answers everything about itself from its own environment,
+# so this asks rather than guesses: no hunting for odoo-bin's real directory,
+# no config candidates, and no database list. The build has exactly one
+# database, and the instance user cannot read pg_database anyway.
+result = {"ok": False, "odoo_bin": None, "odoo_version": None, "odoo_major": None,
+          "python": "%d.%d.%d" % sys.version_info[:3], "config": None,
+          "db_name": None, "databases": [], "stage": None, "error": None}
+
+result["odoo_bin"] = shutil.which("odoo-bin")
+
+version = os.environ.get("ODOO_VERSION") or ""
+result["odoo_version"] = version or None
+try:
+    result["odoo_major"] = int(version.split(".")[0])
+except ValueError:
+    result["odoo_major"] = None
+
+# staging / production. Read before a session is ever opened, because this is
+# the word the commit guard turns on.
+result["stage"] = os.environ.get("ODOO_STAGE") or None
+
+database = os.environ.get("PGDATABASE") or None
+result["db_name"] = database
+result["databases"] = [database] if database else []
+
+for candidate in [os.environ.get("ODOO_RC"),
+                  os.path.expanduser("~/.config/odoo/odoo.conf")]:
+    if candidate and os.path.exists(candidate):
+        result["config"] = candidate
+        break
+
+missing = [name for name, value in (("odoo-bin on PATH", result["odoo_bin"]),
+                                    ("ODOO_VERSION", result["odoo_version"]),
+                                    ("PGDATABASE", database)) if not value]
+if missing:
+    result["error"] = "not an odoo.sh build: missing " + ", ".join(missing)
+else:
+    result["ok"] = True
+
+print(json.dumps(result))
+'''
+
 async def _docker(argv: list[str], stdin: str | None = None) -> tuple[int, str, str]:
     proc = await asyncio.create_subprocess_exec(
         *argv,
@@ -290,34 +343,65 @@ async def list_containers(runner=None) -> list[dict]:
     return containers
 
 
+def _last_json_line(out: str) -> dict | None:
+    """The probe prints one JSON object; Odoo may print anything before it."""
+    for line in reversed(out.splitlines()):
+        if line.strip().startswith("{"):
+            try:
+
+                return json.loads(line)
+            except ValueError:
+                continue
+
+    return None
+
+
+def _unreadable(code: int, out: str, err: str) -> dict:
+
+    return {
+        "ok": False, "odoo_bin": None, "odoo_version": None, "odoo_major": None,
+        "python": None, "config": None, "db_name": None, "databases": [],
+        "stage": None, "supported": False,
+        "error": (err.strip() or out.strip() or f"probe failed with code {code}"),
+    }
+
+
+def _gate_on_version(payload: dict) -> dict:
+    """Refuse an unsupported major here, not on the first command."""
+    payload["supported"] = payload.get("odoo_major") in SUPPORTED_MAJORS
+    if payload.get("ok") and not payload["supported"]:
+        supported = ", ".join(str(major) for major in SUPPORTED_MAJORS)
+        payload["error"] = (
+            f"Odoo {payload.get('odoo_version')} found; supported: {supported}"
+        )
+    payload.setdefault("db_name", None)
+    payload.setdefault("stage", None)
+
+    return payload
+
+
 async def probe(container: str, runner=None) -> dict:
     runner = runner or _docker
     argv = ["docker", "exec", "-i", container, "python3", "-"]
     code, out, err = await runner(argv, PROBE_SOURCE)
-    payload = None
-    for line in reversed(out.splitlines()):
-        if line.strip().startswith("{"):
-            try:
-                payload = json.loads(line)
-                break
-            except ValueError:
-                continue
-    if payload is None:
+    payload = _last_json_line(out)
 
-        return {
-            "ok": False, "odoo_bin": None, "odoo_version": None, "odoo_major": None,
-            "python": None, "config": None, "db_name": None, "databases": [],
-            "supported": False,
-            "error": (err.strip() or out.strip() or f"probe failed with code {code}"),
-        }
-    payload["supported"] = payload.get("odoo_major") == SUPPORTED_MAJOR
-    if payload.get("ok") and not payload["supported"]:
-        payload["error"] = (
-            f"Odoo {payload.get('odoo_version')} found; only {SUPPORTED_MAJOR} is supported"
-        )
-    payload.setdefault("db_name", None)
+    return _gate_on_version(payload) if payload else _unreadable(code, out, err)
 
-    return payload
+
+async def probe_odoosh(build: str, host: str, runner=None) -> dict:
+    """What an odoo.sh build says about itself.
+
+    A build is entered, not discovered — there is no `docker ps` for odoo.sh —
+    so this is the whole of target discovery for that kind, and it is four
+    environment variables rather than a search.
+    """
+    runner = runner or _docker
+    argv = ["ssh", *SSH_OPTS, f"{build}@{host}", "python3 -"]
+    code, out, err = await runner(argv, OOSH_PROBE_SOURCE)
+    payload = _last_json_line(out)
+
+    return _gate_on_version(payload) if payload else _unreadable(code, out, err)
 
 
 async def list_tests(container: str, module: str, runner=None) -> dict:
