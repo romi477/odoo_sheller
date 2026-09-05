@@ -1,10 +1,12 @@
 import asyncio
+import time
 
 import pytest
 
 from odoo_sheller.journal import Journal, feed_from_records
 from odoo_sheller.protocol import FRAME_LINE_LIMIT
 from odoo_sheller.session import (
+    STDERR_DRAIN,
     CommitForbidden,
     CommitNotAllowed,
     Session,
@@ -1051,3 +1053,40 @@ async def test_a_remote_session_describes_where_it_is(tmp_path):
         assert described["host"] == "build.dev.odoo.com"
     finally:
         await session.kill()
+
+
+async def test_exec_returns_the_stderr_written_while_it_ran(tmp_path):
+    """The agent should not have to build a log handler to see Odoo's log.
+
+    The lines are already collected for run_test; exec must hand them back
+    the same way, or a caller reasonably concludes there was no log at all.
+    """
+    session = await make_session(tmp_path, script=RUN_TEST_STDERR_FAKE)
+    await session.start()
+    result = await session.execute("anything")
+    assert any("FAIL TestSaleOrder.test_x" in line for line in result["stderr"])
+    assert result["stderr_truncated"] is False
+    await session.close()
+
+
+async def test_exec_stderr_is_empty_and_costs_nothing_when_odoo_said_nothing(tmp_path):
+    """A quiet command must not pay the drain wait: exec is the hot path."""
+    session = await make_session(tmp_path)
+    await session.start()
+    started = time.monotonic()
+    result = await session.execute("1")
+    elapsed = time.monotonic() - started
+    assert result["stderr"] == []
+    assert result["stderr_truncated"] is False
+    assert elapsed < STDERR_DRAIN, "no lines arrived, so there is nothing to wait for"
+    await session.close()
+
+
+async def test_exec_stderr_excludes_lines_from_before_the_call(tmp_path):
+    noisy = 'import sys\nsys.stderr.write("OLD noise\\n")\nsys.stderr.flush()\n' + RUN_TEST_STDERR_FAKE
+    session = await make_session(tmp_path, script=noisy)
+    await session.start()
+    await asyncio.sleep(0.05)
+    result = await session.execute("anything")
+    assert not any("OLD noise" in line for line in result["stderr"])
+    await session.close()

@@ -38,7 +38,7 @@ no way for an agent to grant itself write access.
 | `os_attach_session` | `session_id`, `write_key` | adopts a session a human handed over |
 | `os_list_sessions` | — | every session with its owner and state (read-only) |
 | `os_session` | `session_id=None` | one session's state, including `allow_commit` (read-only) |
-| `os_exec` | `code`, `session_id=None` | blocks; returns stdout, result, error, duration |
+| `os_exec` | `code`, `session_id=None`, `stderr=False` | blocks; returns stdout, result, error, duration and `stderr_lines`. `stderr=True` adds the log lines themselves |
 | `os_list_tests` | `module`, `container=None` | classes and methods in one addon, as `os_run_test` specs; disk catalogue, no session |
 | `os_run_test` | `test`, `container=None`, `database=None`, `odoo_bin=None`, `timeout=30.0`, `session_id=None` | runs one Odoo test method or a whole class; opens its own new session (which then closes itself), or runs in one it was handed |
 | `os_test_result` | `session_id` | waits for a run started by `os_run_test` and returns its outcome (read-only, no key needed) |
@@ -59,6 +59,18 @@ for; it becomes required once it holds more than one.
   while the daemon is still holding the command open is exactly the kind of
   confusion the timeout-handling rules in the architecture doc exist to
   avoid. On timeout, the tool says plainly that the session is still busy.
+- **The Odoo log is one flag away, and its existence is free.** Every
+  `os_exec` reports `stderr_lines`, a count; `stderr=True` returns the lines
+  as `stderr`, clipped from the end. The split is deliberate: an agent told
+  nothing about the log builds a `logging` handler of its own to scrape it
+  out of the process — one did — while a log attached to every response is
+  context spent on output nobody asked for. The count is the part that
+  cannot be guessed, so it is always sent, and the lines are on request.
+  `os_run_test` sends its log unasked, because there the log is the answer.
+  Either way the full log is on the journal, `kind: "stderr"` records
+  interleaved with the commands by time, so a log wanted after the fact is
+  read rather than re-produced — re-running a command that wrote to the
+  database writes again.
 - **Output is truncated hard**: 4 KB of stdout, 2 KB of the returned value.
   An agent's context window is the scarce resource here, not disk — the
   untruncated text is one `os_journal` call away.

@@ -222,6 +222,18 @@ own output up to `RUN_STDERR_LIMIT` and reporting `stderr_truncated` past
 that. The window is removed in a `finally`, so a run that times out or dies
 does not leave a collector filling for the rest of the session.
 
+`exec` collects the same way, into a smaller window (`EXEC_STDERR_LIMIT`),
+and returns `stderr` and `stderr_truncated` beside `stdout`. It used to
+return neither, and the lines were only on the journal — which cost a real
+agent seven lines of its own `logging` handler to scrape the log back out of
+the process, because nothing in the response suggested a log existed. The
+HTTP API always answers with the lines; the MCP server is where the decision
+about tokens belongs, so `os_exec` sends a count by default and the lines
+only when asked. The
+drain wait is paid only when lines actually arrived: `exec` is the hot path,
+a trivial command finishes in well under a millisecond, and waiting out the
+drain unconditionally would cost more than the command.
+
 Odoo's runner rolls back the session's own cursor before it tests if that
 cursor is mid-transaction (`odoo/tests/shell.py`), to avoid a lock. Across
 sessions this is a non-issue — each session is its own process, its own
@@ -447,6 +459,13 @@ rewritten, only appended to, and it can be exported as raw JSONL or rendered
 as a Markdown transcript; both forms carry the same session metadata (id,
 container, database, versions, in-container PID, timestamps, command count,
 whether anything was committed).
+
+The Markdown transcript renders those stderr records as an `Odoo log` block
+after the command they belong to, consecutive lines grouped into one fence.
+It used to drop them, and that mattered more than it sounds: Markdown is the
+default export, so a transcript stated that a session had produced no log at
+all — and a traceback Odoo *logs* rather than raises vanished with it, since
+only an exception result was rendered.
 
 Truncation is purely a *display* concern: the wire protocol caps payload size
 to protect the pipe, but the journal stores whatever the bootstrap sent in

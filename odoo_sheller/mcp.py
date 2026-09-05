@@ -225,6 +225,30 @@ reader, which is confined to the addons paths:
 create files. Use it instead of bare `open()`: a path that escapes the addons
 tree is refused rather than read.
 
+## Seeing what Odoo logged
+
+Every command reports `stderr_lines`: how many lines Odoo logged while it
+ran. That is deliberately a number and not the lines — a log in every
+response is context spent on output you did not ask for — but it is the one
+thing you could not otherwise guess, so it is always there.
+
+When the log is what you are after, ask for it: `os_exec(code, stderr=True)`
+returns `stderr`, the lines in order, clipped from the end because the last
+one usually says what happened. `stderr_truncated` means the daemon dropped
+whole lines past its own ceiling; `truncated` means this server clipped
+characters.
+
+If `stderr_lines` was non-zero and you decide afterwards that you need the
+lines, do **not** run the command again — it may have written to the
+database, and a second run is a second write. Read them from the journal:
+`os_journal(session_id, fmt="json")` has every line, interleaved with the
+commands by time, including whatever a response clipped and including a
+traceback Odoo logged rather than raised. Never install a logging handler of
+your own to capture the log; it is collected for you either way.
+
+`os_run_test` returns its `stderr` without being asked, because with a test
+run the log *is* the answer — which test failed and why.
+
 ## Reading a record
 
 To see what a record actually holds, read it whole rather than naming the
@@ -560,10 +584,18 @@ async def os_attach_session(session_id: str, write_key: str) -> Any:
 @mcp.tool(
     description=(
         "Run Python in a session you own. Blocks until the command finishes. "
-        "Variables persist between calls; one command runs at a time."
+        "Variables persist between calls; one command runs at a time. Returns "
+        "stdout, the returned value, any error, and `stderr_lines` — how many "
+        "lines Odoo logged while the command ran. Pass stderr=True to get "
+        "those lines back as `stderr` (clipped from the end); they cost "
+        "context, so ask when the log is what you are after. Either way the "
+        "log is kept: read it with os_journal instead of running the command "
+        "again. Never install a logging handler to capture it."
     ),
 )
-async def os_exec(code: str, session_id: str | None = None) -> Any:
+async def os_exec(
+    code: str, session_id: str | None = None, stderr: bool = False
+) -> Any:
     target = _default_session(session_id)
     if isinstance(target, dict):
 
@@ -575,15 +607,33 @@ async def os_exec(code: str, session_id: str | None = None) -> Any:
 
     stdout, stdout_clipped = _clip(result.get("stdout"), MAX_STDOUT)
     value, value_clipped = _clip(result.get("result"), MAX_RESULT)
-
-    return {
+    log = result.get("stderr") or []
+    clipped = stdout_clipped or value_clipped
+    answer = {
         "stdout": stdout,
         "result": value,
         "error": result.get("error"),
+        # One number rather than the lines: it says a log exists — which is
+        # the thing an agent cannot guess — without billing the context for
+        # content nobody asked for.
+        "stderr_lines": len(log),
         "duration": result.get("duration"),
-        "truncated": stdout_clipped or value_clipped,
-        "journal": f"/api/journals/{target}" if stdout_clipped or value_clipped else None,
     }
+    if stderr:
+        # Clipped from the end, as in os_run_test: on a long command the last
+        # line is the one that says what happened.
+        text, stderr_clipped = _clip_tail("\n".join(log), MAX_STDOUT)
+        clipped = clipped or stderr_clipped
+        answer["stderr"] = text
+        answer["stderr_truncated"] = bool(result.get("stderr_truncated"))
+    answer["truncated"] = clipped
+    # The journal is the way back to a log that was not asked for, and to
+    # anything the clipping dropped — without running the command again.
+    answer["journal"] = (
+        f"/api/journals/{target}" if clipped or (log and not stderr) else None
+    )
+
+    return answer
 
 
 @mcp.tool(

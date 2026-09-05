@@ -1226,3 +1226,87 @@ async def test_run_test_in_a_lent_session_reports_discarded_work(wired, monkeypa
 def test_the_instructions_say_how_to_test_on_a_lent_session():
     text = server.INSTRUCTIONS
     assert "os_run_test(session_id" in text or "session_id=" in text
+
+
+async def test_os_exec_hands_back_the_log_when_it_is_asked_for(monkeypatch):
+    """Without this an agent builds its own logging handler to see the log."""
+    async def fake_call(method, path, session_id=None, **kwargs):
+
+        return {
+            "stdout": "", "result": "None", "error": None, "duration": 0.2,
+            "stderr": ["INFO odoo: one", "ERROR odoo: two"],
+            "stderr_truncated": False,
+        }
+
+    monkeypatch.setattr(server, "_call", fake_call)
+    monkeypatch.setattr(server, "_keys", {"s1": "k"})
+    out = await server.os_exec("x", stderr=True)
+    assert out["stderr"] == "INFO odoo: one\nERROR odoo: two"
+    assert out["stderr_truncated"] is False
+
+
+async def test_os_exec_counts_the_log_without_spending_the_context(monkeypatch):
+    """Every line in every response is a token bill nobody asked for. The
+    count is one number, and it is what tells an agent a log exists at all."""
+    async def fake_call(method, path, session_id=None, **kwargs):
+
+        return {
+            "stdout": "", "result": "None", "error": None, "duration": 0.2,
+            "stderr": ["INFO odoo: one", "ERROR odoo: two"],
+            "stderr_truncated": False,
+        }
+
+    monkeypatch.setattr(server, "_call", fake_call)
+    monkeypatch.setattr(server, "_keys", {"s1": "k"})
+    out = await server.os_exec("x")
+    assert out["stderr_lines"] == 2
+    assert "stderr" not in out, "the lines themselves are opt-in"
+    assert out["journal"], "and the way to read them without re-running"
+
+
+async def test_os_exec_says_nothing_about_a_log_that_is_not_there(monkeypatch):
+    async def fake_call(method, path, session_id=None, **kwargs):
+
+        return {"stdout": "ok", "result": None, "error": None, "duration": 0.1,
+                "stderr": [], "stderr_truncated": False}
+
+    monkeypatch.setattr(server, "_call", fake_call)
+    monkeypatch.setattr(server, "_keys", {"s1": "k"})
+    out = await server.os_exec("x")
+    assert out["stderr_lines"] == 0
+    assert "stderr" not in out
+    assert out["journal"] is None
+
+
+async def test_os_exec_clips_a_long_log_from_the_end(monkeypatch):
+    """The last line is the one worth having, the same as in os_run_test."""
+    async def fake_call(method, path, session_id=None, **kwargs):
+
+        return {
+            "stdout": "", "result": None, "error": None, "duration": 0.2,
+            "stderr": ["x" * 500 for _ in range(40)] + ["THE LAST LINE"],
+            "stderr_truncated": True,
+        }
+
+    monkeypatch.setattr(server, "_call", fake_call)
+    monkeypatch.setattr(server, "_keys", {"s1": "k"})
+    out = await server.os_exec("x", stderr=True)
+    assert out["stderr"].endswith("THE LAST LINE")
+    assert out["truncated"] is True
+    assert out["stderr_truncated"] is True
+    assert out["journal"]
+
+
+async def test_the_exec_tool_says_the_log_comes_back_with_it():
+    """An agent that is not told will build a logging handler instead."""
+    tools = {tool.name: tool for tool in await server.mcp.list_tools()}
+    description = tools["os_exec"].description
+    assert "stderr" in description
+    assert "stderr_lines" in description, "the count is what says a log exists"
+    text = server.INSTRUCTIONS
+    assert "os_exec" in text
+    # Three halves, really: the count is free, the lines are on request, and
+    # the whole log is on the journal without re-running anything.
+    assert "stderr_lines" in text
+    assert "stderr=True" in text
+    assert "os_journal" in text

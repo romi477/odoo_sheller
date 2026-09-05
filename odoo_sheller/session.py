@@ -89,6 +89,9 @@ HUMAN_OWNER = {"kind": "human", "label": "browser"}
 # a whole test class, but an uncapped collector would grow without limit on a
 # long run. The journal keeps every line either way.
 RUN_STDERR_LIMIT = 20000
+# A command's own log, bounded so one noisy exec cannot carry a session's
+# worth of lines into every response. The journal keeps all of it.
+EXEC_STDERR_LIMIT = 2000
 # The stderr reader is its own task: lines already in the pipe when the result
 # frame lands have not necessarily been appended yet. Yielding briefly keeps
 # the tail of a run's output from being cut at an arbitrary point — the same
@@ -324,7 +327,26 @@ class Session:
         self._ensure_acceptable("exec")
         request_id = self._take_id()
         self.journal.write("exec", id=request_id, code=code, actor=dict(self.owner))
-        result = await self._request(exec_frame(request_id, code), timeout)
+        # Collected the same way as for a test run: the lines are on the
+        # journal either way, but a caller that is not handed them concludes
+        # there was no log — and writes a logging handler of its own.
+        window = _StderrWindow(EXEC_STDERR_LIMIT)
+        self._stderr_collectors.append(window)
+        try:
+            result = await self._request(exec_frame(request_id, code), timeout)
+            if window.total:
+                # Only when Odoo actually said something. exec is the hot
+                # path — a trivial command runs in under a millisecond, and
+                # waiting out the drain on every one of them would cost more
+                # than the whole command.
+                await asyncio.sleep(STDERR_DRAIN)
+        finally:
+            self._stderr_collectors.remove(window)
+        result = {
+            **result,
+            "stderr": list(window.lines),
+            "stderr_truncated": window.truncated,
+        }
         self.journal.write("result", **_journal_fields(result))
         self.pending_commands += 1
 

@@ -160,9 +160,22 @@ def to_markdown(records: list[dict], meta: dict | None = None) -> str:
     lines = list(_markdown_header(meta)) if meta else []
     ordinals = {}
     next_ordinal = 0
+    pending_log: list[str] | None = None
+
+    def flush_log():
+        nonlocal pending_log
+        if pending_log:
+            lines.append("Odoo log:\n")
+            lines.append("```\n" + "\n".join(pending_log).rstrip() + "\n```\n")
+        pending_log = None
+
     for record in records:
         kind = record["kind"]
         stamp = record.get("ts", "")
+        if kind != "stderr":
+            # A run of log lines belongs where it happened, so it is written
+            # out before whatever came next.
+            flush_log()
         if kind == "session_open":
             if meta:  # already stated in the header
                 continue
@@ -227,9 +240,18 @@ def to_markdown(records: list[dict], meta: dict | None = None) -> str:
                 f"and was interrupted** — {stamp}\n"
             )
         elif kind == "stderr":
+            # Markdown is the default export, and dropping these made the
+            # transcript claim Odoo logged nothing — including the tracebacks
+            # Odoo logs rather than raises. Consecutive lines are one block.
+            line = record.get("line", "")
+            if pending_log is None:
+                pending_log = [line]
+            else:
+                pending_log.append(line)
             continue
         elif kind in ("session_close", "session_died"):
             lines.append(f"**{kind.replace('_', ' ').title()}** — {stamp}\n")
+    flush_log()
 
     return "\n".join(lines)
 

@@ -415,3 +415,40 @@ def test_feed_from_records_marks_a_late_result_as_abandoned():
     assert entry["status"] == "done"
     assert entry["abandoned"] is True, "a late result must not read as an ordinary success"
     assert entry["timed_out"] is True
+
+
+def test_markdown_keeps_the_odoo_log_it_used_to_drop():
+    """Markdown is the default export, and it silently dropped every stderr
+    record — which is what convinced an agent no log existed at all, and what
+    swallowed logged tracebacks that are not an exception result."""
+    records = [
+        {"kind": "exec", "id": 1, "code": "boom()", "ts": "12:00:00"},
+        {"kind": "stderr", "line": "INFO odoo: starting", "ts": "12:00:01"},
+        {"kind": "stderr", "line": "ERROR odoo: Traceback (most recent call last):",
+         "ts": "12:00:02"},
+        {"kind": "stderr", "line": '  File "x.py", line 1, in boom', "ts": "12:00:02"},
+        {"kind": "result", "id": 1, "stdout": "", "result": None, "error": None,
+         "duration": 0.1, "ts": "12:00:03"},
+    ]
+    text = journal.to_markdown(records)
+    assert "INFO odoo: starting" in text
+    assert "Traceback (most recent call last):" in text
+    assert 'File "x.py", line 1, in boom' in text
+    # One block per run of consecutive lines, labelled for what it is.
+    assert text.count("Odoo log") == 1
+
+
+def test_markdown_labels_the_log_between_two_commands_separately():
+    records = [
+        {"kind": "exec", "id": 1, "code": "a()", "ts": "12:00:00"},
+        {"kind": "stderr", "line": "first", "ts": "12:00:01"},
+        {"kind": "result", "id": 1, "stdout": "", "result": None, "error": None,
+         "duration": 0.1, "ts": "12:00:02"},
+        {"kind": "exec", "id": 2, "code": "b()", "ts": "12:00:03"},
+        {"kind": "stderr", "line": "second", "ts": "12:00:04"},
+        {"kind": "result", "id": 2, "stdout": "", "result": None, "error": None,
+         "duration": 0.1, "ts": "12:00:05"},
+    ]
+    text = journal.to_markdown(records)
+    assert text.count("Odoo log") == 2
+    assert text.index("first") < text.index("## Command 2")

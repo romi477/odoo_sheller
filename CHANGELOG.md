@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0] — 2026-09-05
 
 Odoo 15 through 19, not 19 alone. Nothing above the bootstrap changed to
 allow it: the frame protocol, the session state machine, the transport and
@@ -66,6 +66,36 @@ real container, not by reading sources.
   so all three runner paths and both transaction boundaries are covered
   without a container. `tests/test_e2e.py` no longer pins 19, so
   `PT_E2E_CONTAINER` can point it at any supported major.
+
+### The Odoo log
+
+- `exec` collects the log lines Odoo wrote while the command ran and returns
+  them as `stderr`, the way `run_test` already did, plus `stderr_truncated`.
+  The lines were always collected and always journalled; not handing them
+  back cost a real agent seven lines of its own `logging` handler to scrape
+  the log out of the process, because nothing in the response suggested a log
+  existed. Clipped from the end, since the last line is the one that says
+  what happened. The drain wait is paid only when lines actually arrived:
+  `exec` is the hot path and a trivial command finishes in under a
+  millisecond.
+- For an agent the log is opt-in: `os_exec` always reports `stderr_lines`, a
+  count, and `stderr=True` adds the lines. Both halves of that matter — a log
+  in every response is context spent on output nobody asked for, and a
+  response that says nothing about a log is what made an agent write its own
+  handler. The count is the part that cannot be guessed. `os_run_test` still
+  sends its log unasked, because there the log is the answer, and the journal
+  holds everything either way, so a log wanted after the fact is read instead
+  of re-produced — re-running a command that wrote to the database writes
+  again.
+- The Markdown transcript no longer drops `kind: "stderr"` records. It
+  renders them as an `Odoo log` block after the command they belong to,
+  consecutive lines in one fence. Markdown is the default export, so dropping
+  them made a transcript claim the session had logged nothing — and took with
+  it every traceback Odoo logs rather than raises, which is not an exception
+  result and had no other rendering.
+- `os_exec`'s tool description and the server instructions now say the log
+  comes back with the command and that `os_journal(fmt="json")` has the whole
+  of it. An agent told neither builds a logging handler instead.
 
 ### Agent access
 
@@ -477,7 +507,8 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
-[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/romi477/odoo_sheller/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/romi477/odoo_sheller/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/romi477/odoo_sheller/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/romi477/odoo_sheller/releases/tag/v1.0.0
