@@ -306,7 +306,7 @@ button.icon:hover:not(:disabled) {
 }
 
 #refresh.spinning {
-  color: var(--amber);
+  color: oklch(1 0 0);
   pointer-events: none;
 }
 
@@ -919,7 +919,9 @@ input {
   font-size: 13px;
   font-weight: 400;
   line-height: 1;
-  color: var(--amber);
+  /* White, not amber: amber is what a busy label and a lit latch use, and on
+     the turning glyph it read as one more state rather than as motion. */
+  color: oklch(1 0 0);
   content: "↻";
   animation: spin 0.8s linear infinite;
 }
@@ -944,7 +946,9 @@ input {
   font-size: 13px;
   font-weight: 400;
   line-height: 1;
-  color: var(--amber);
+  /* White, not amber: amber is what a busy label and a lit latch use, and on
+     the turning glyph it read as one more state rather than as motion. */
+  color: oklch(1 0 0);
   content: "↻";
   animation: spin 0.8s linear infinite;
 }

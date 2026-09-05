@@ -1444,7 +1444,7 @@ def test_new_key_spins_while_a_session_is_opening(app_js):
     assert mark is not None
     assert "animation:" in mark.group(1)
     assert "↻" in mark.group(1)
-    assert "var(--amber)" in mark.group(1)
+    assert "color: oklch(1 0 0)" in mark.group(1), "the glyph turns white"
 
 
 def test_start_button_spins_while_a_session_is_opening(app_js):
@@ -1459,7 +1459,7 @@ def test_start_button_spins_while_a_session_is_opening(app_js):
     assert mark is not None
     assert "animation:" in mark.group(1)
     assert "↻" in mark.group(1)
-    assert "var(--amber)" in mark.group(1)
+    assert "color: oklch(1 0 0)" in mark.group(1), "the glyph turns white"
 
 
 def test_connect_card_streams_stderr_while_the_registry_loads(app_js, markup):
@@ -1967,3 +1967,19 @@ def test_the_mode_keys_read_as_names(markup):
     page = (WEB / "index.html").read_text(encoding="utf-8")
     modes = dict(re.findall(r'data-connect-mode="(\w+)"[^>]*>([^<]+)</button>', page))
     assert modes == {"local": "Local", "odoosh": "Odoo.sh"}, modes
+
+
+def test_every_spinner_turns_white():
+    """Amber is this UI's "busy" colour on labels and latches. On the turning
+    glyph it read as another state; white reads as motion and nothing else."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    spinners = re.findall(r"\{([^}]*content: \"↻\";[^}]*)\}", css)
+    assert len(spinners) == 2, f"expected the two ::after spinners, got {len(spinners)}"
+    for rule in spinners:
+        assert "color: oklch(1 0 0)" in rule, rule
+        assert "var(--amber)" not in rule, rule
+    # The refresh glyph is the element itself, not a pseudo-element.
+    refresh = re.search(r"#refresh\.spinning\s*\{([^}]*)\}", css)
+    assert refresh is not None
+    assert "color: oklch(1 0 0)" in refresh.group(1)
+    assert "var(--amber)" not in refresh.group(1)
