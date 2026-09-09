@@ -39,15 +39,56 @@ MCP_CALL_BUDGET = float(os.environ.get("ODOO_SHELLER_MCP_BUDGET", "40"))
 # session id we hand back points at an idle session.
 RUN_START_GRACE = 5.0
 TEST_RESULT_POLL = 2.0  # how often os_test_result looks while it waits
+# Hosts deliver only the first 2048 characters of a server's instructions —
+# measured on two of them, cut mid-sentence at exactly this offset. Everything
+# past it never reaches the model, so INSTRUCTIONS has to fit and the rest
+# lives in HELP, behind os_help.
+INSTRUCTION_CAP = 2048
 MAX_STDOUT = 4000
 MAX_RESULT = 2000
 
 INSTRUCTIONS = """\
-odoo-sheller gives you a live Odoo shell inside a local Docker container, shared
-with the human who runs it. `env` and `self` are Odoo's own shell namespace, and
-variables persist between commands, so a session is a workspace rather than a
-series of one-off scripts.
+odoo-sheller runs Python inside a live Odoo shell. `env` and `self` are Odoo's
+own namespace and variables persist between commands: a session is a
+workspace, not a series of scripts.
 
+Hosts deliver only the first 2048 characters of this text. The rest is behind
+os_help(topic) — one cheap call, and cheaper than guessing:
+
+  sessions   opening, adopting, death, closing
+  ownership  handover, whose session it is
+  commit     the grant ritual
+  remote     an odoo.sh build, and production
+  limits     what never to attempt
+  orm        idioms instead of Python loops
+  code       which override actually runs
+  log        what Odoo logged, and where it is
+  records    reading a record whole
+  modules    installing, upgrading, migrations
+  jobs       with_delay, run inline
+  tests      running one, reading the outcome
+  watching   the human sees this live
+
+Read the topic before working around something. These rules arrive whatever a
+host truncates, and none of them are negotiable:
+
+- One command at a time per session; a second is `session_busy`, never
+  queued. Wait for it, or stop it with os_interrupt.
+- Rollback is the default. Nothing persists until a commit, and close, kill
+  or process death discard it. End experiments with os_rollback.
+- Commit is a right the human grants. On `commit_not_allowed`: stop, say
+  plainly what you want to write and why, then poll os_session until
+  allow_commit is true. Do not spin on os_commit and do not ask in chat —
+  os_session is how you know. `commit_forbidden` is never granted: read what
+  you came for and roll back.
+- Work only in a session you opened or were handed. `not_owner` means ask for
+  a handover, not a second session behind the human's back; never attach with
+  a write key you were not given.
+- Never touch ~/.odoo-sheller/ and never call the daemon's admin endpoints.
+"""
+
+HELP: dict[str, str] = {
+    "sessions": """\
 ## Sessions
 
 Open one with os_open_session, or adopt one the human hands you with
@@ -74,7 +115,8 @@ that is what a workspace is. When the work is finished and you do not plan
 to continue, close it with os_close_session. An idle session still holds a
 process inside the container. Closing discards uncommitted work, the same
 as rollback.
-
+""",
+    "ownership": """\
 ## Ownership
 
 Every session has one owner. Yours are owned by you; the human's are owned by
@@ -84,13 +126,15 @@ behind their back.
 
 A handover moves the right to type without disturbing the session: the process,
 the namespace and the open transaction all survive, so you continue exactly where
-the human left off — their variables are still there. Ownership can move back the
-same way, at any time, without warning to you.
+the human left off — their variables are still there, and so is their
+uncommitted work (see the commit topic: `inherited_pending`). Ownership can move
+back the same way, at any time, without warning to you.
 
 The human is the admin. They can watch any session live, interrupt a command,
 close or kill a session, hand ownership around and grant commit rights. You
 cannot do any of that to a session you do not own, and you must not try.
-
+""",
+    "commit": """\
 ## Transactions and commit
 
 Rollback is the default state of the world here. Everything you do lives in an
@@ -118,15 +162,23 @@ commit in this same session, with no need to repeat this ritual first. It
 lasts until the human revokes it, and does not survive a handover: check
 again after one, the same way as the first time.
 
-Uncommitted work travels with a session when ownership moves. If the human hands
-you a session with pending commands, a commit you make would write their work
-too. Say so before committing anything you did not do yourself.
-
+Uncommitted work travels with a session when ownership moves, and this is not
+left to your memory: os_session reports `inherited_pending`, and the first
+os_commit on such a session is refused as `inherited_pending` with the count.
+Say whose work is in the transaction and what you are about to write, then
+call os_commit(include_inherited=True) — or os_rollback to discard all of it.
+Any commit or rollback clears the count; after that the transaction is yours
+alone.
+""",
+    "remote": """\
 ## Sessions on someone else's Odoo
 
 A human may hand you a session that runs on a remote instance rather than a
 local container — an odoo.sh build, say. You cannot open one yourself: no tool
-here takes a host or a build, on purpose. You only ever receive one.
+here takes a host or a build, on purpose. You only ever receive one. That
+includes reopening a dead one: os_open_session(replace=...) on a session that
+ran remotely is refused and says so, because a journal records which build it
+was but not how to reach it. Ask for a handover rather than a way around.
 
 Two things differ there, and os_session shows both as `kind` and `stage`:
 
@@ -139,7 +191,8 @@ Two things differ there, and os_session shows both as `kind` and `stage`:
   `commit_not_allowed` means ask the human and then poll os_session, while
   `commit_forbidden` means nothing will ever grant it. Polling for that grant
   is an endless loop. Read what you came to read and end with os_rollback.
-
+""",
+    "limits": """\
 ## What you cannot do, and must not attempt
 
 - Grant yourself commit rights, or call the daemon's admin endpoints.
@@ -148,7 +201,8 @@ Two things differ there, and os_session shows both as `kind` and `stage`:
 
 These are not enforced by the keys you hold — they are the terms of using this
 tool at all.
-
+""",
+    "orm": """\
 ## Writing idiomatic ORM code
 
 A recordset is iterable, but a Python loop to pull one field, or to sum a
@@ -186,7 +240,8 @@ out of a dict. A helper that is only meant to run against a single record
 should open with `self.ensure_one()` rather than assuming — it raises
 immediately and clearly instead of the ambiguous behavior of reading a
 multi-record field.
-
+""",
+    "code": """\
 ## Reading the code you are debugging
 
 You are in a Python REPL inside the running instance, so the source is
@@ -224,7 +279,8 @@ reader, which is confined to the addons paths:
 `FileNotFoundError` for a path outside the addons directories, and will not
 create files. Use it instead of bare `open()`: a path that escapes the addons
 tree is refused rather than read.
-
+""",
+    "log": """\
 ## Seeing what Odoo logged
 
 Every command reports `stderr_lines`: how many lines Odoo logged while it
@@ -248,7 +304,8 @@ your own to capture the log; it is collected for you either way.
 
 `os_run_test` returns its `stderr` without being asked, because with a test
 run the log *is* the answer — which test failed and why.
-
+""",
+    "records": """\
 ## Reading a record
 
 To see what a record actually holds, read it whole rather than naming the
@@ -272,7 +329,8 @@ computed field evaluated — so read one record whole to learn its shape, then
 `read()` on several records returns one dict each, in no guaranteed order,
 and silently drops records that no longer exist. `read(load=None)` gives
 bare ids for relations instead of the `(id, display_name)` pairs.
-
+""",
+    "modules": """\
 ## Installing and updating a module
 
 A session loads the registry once, so a module's data, views and schema are
@@ -301,7 +359,8 @@ manifest version redoes schema and data but runs no script.
 Edited Python is not picked up: the process imported those files at startup
 and an upgrade does not re-import them. For a change in a `.py`, open a new
 session.
-
+""",
+    "jobs": """\
 ## Delayed jobs
 
 `with_delay()` enqueues a job; this session will not run the queue for you.
@@ -314,7 +373,8 @@ calls inherit it, so the whole chain runs on the spot:
 
 A recordset you already hold still has the old context: call
 `.with_context(queue_job__no_delay=True)` on it before `with_delay()`.
-
+""",
+    "tests": """\
 ## Running a test
 
 os_run_test runs one Odoo test method or a whole test class:
@@ -360,7 +420,8 @@ no tool here can name one. That session is not yours: it does not close
 itself, and you do not close it either. Watch `discarded_pending` there — if
 the human left work in it, Odoo's own runner rolled that back before testing.
 Passing both a session_id and a container is refused rather than guessed at.
-
+""",
+    "watching": """\
 ## Being watched
 
 Everything is journalled with its author: every command, its output, every
@@ -368,7 +429,9 @@ transaction boundary and every handover. The human watches sessions live and
 reads the transcript afterwards. Write commands that are legible on their own,
 prefer small steps over one large opaque script, and say what you are doing when
 it is not obvious from the code.
-"""
+""",
+}
+
 
 mcp = MCPServer("odoo-sheller", instructions=INSTRUCTIONS)
 
@@ -634,6 +697,39 @@ async def os_exec(
     )
 
     return answer
+
+
+@mcp.tool(
+    description=(
+        "The parts of this server's instructions a host did not deliver. "
+        "Hosts cut server instructions at 2048 characters, which is a small "
+        "fraction of what there is to say, so the rest is here by topic: "
+        "sessions, ownership, commit, remote, limits, orm, code, log, "
+        "records, modules, jobs, tests, watching. Call with no topic for the "
+        "list. Read-only, no session, no side effects — cheaper than working "
+        "around a rule you were never shown."
+    ),
+    annotations=ToolAnnotations(read_only_hint=True),
+)
+async def os_help(topic: str | None = None) -> Any:
+    if topic is None:
+
+        return {
+            "topics": list(HELP),
+            "instructions_truncated_at": INSTRUCTION_CAP,
+            "recovery": "call os_help(topic) for one of these",
+        }
+    text = HELP.get(topic)
+    if text is None:
+
+        return {
+            "error": "no_such_topic",
+            "topic": topic,
+            "topics": list(HELP),
+            "recovery": "call os_help(topic) with one of these, or os_help() for the list",
+        }
+
+    return {"topic": topic, "text": text}
 
 
 @mcp.tool(
@@ -924,16 +1020,46 @@ async def os_rollback(session_id: str | None = None) -> Any:
         "persists anything. Refused with commit_not_allowed unless a human has "
         "granted this session the right: if refused, say what you want to write "
         "and why, then poll os_session until allow_commit is true. Retrying "
-        "os_commit will not see the grant."
+        "os_commit will not see the grant. On a session handed to you with work "
+        "already pending, refused once as inherited_pending: that work is the "
+        "previous owner's and a commit writes it too, so say so, then call with "
+        "include_inherited=True."
     ),
     annotations=ToolAnnotations(destructive_hint=True),
 )
-async def os_commit(session_id: str | None = None) -> Any:
+async def os_commit(
+    session_id: str | None = None, include_inherited: bool = False
+) -> Any:
     target = _default_session(session_id)
 
     if isinstance(target, dict):
 
         return target
+    if not include_inherited:
+        # A handover carries the open transaction, so the first commit in a
+        # lent session would write the human's work under the agent's name.
+        # The rule was documented and an agent still had to remember it; this
+        # is the same rule, spent as one refusal instead.
+        described = await _call("GET", f"/api/sessions/{target}", target)
+        inherited = (described or {}).get("inherited_pending") or 0
+        if inherited:
+
+            return {
+                "error": "inherited_pending",
+                "session_id": target,
+                "inherited_pending": inherited,
+                "pending_commands": described.get("pending_commands"),
+                "reason": (
+                    f"{inherited} command(s) in this transaction were run by the "
+                    "previous owner; committing writes their work too"
+                ),
+                "recovery": (
+                    "tell the human whose work is in the transaction and what "
+                    "you are about to write, then call "
+                    "os_commit(include_inherited=True) — or os_rollback to "
+                    "discard all of it"
+                ),
+            }
 
     return _boundary_result(await _call("POST", f"/api/sessions/{target}/commit", target))
 

@@ -272,7 +272,12 @@ _TIMEOUT_ERROR = {
 
 
 def target_from_records(records: list[dict]) -> dict | None:
-    """Where a session ran, so a replacement can be opened on the same target."""
+    """Where a session ran, so a replacement can be opened on the same target.
+
+    `kind` comes along because a remote target must not be rebuilt from
+    fields that merely look right: a journal records the identity slot, not
+    how to reach a build over SSH.
+    """
     opened = next((r for r in records if r.get("kind") == "session_open"), None)
     if not opened or not opened.get("container") or not opened.get("database"):
 
@@ -282,6 +287,8 @@ def target_from_records(records: list[dict]) -> dict | None:
         "container": opened["container"],
         "database": opened["database"],
         "odoo_bin": opened.get("odoo_bin"),
+        "target_kind": opened.get("target_kind") or "docker",
+        "host": opened.get("host"),
     }
 
 

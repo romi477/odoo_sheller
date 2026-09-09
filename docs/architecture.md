@@ -477,6 +477,38 @@ including a credential or an API key — lands in the journal in plain text.
 See [security.md](security.md) for why this isn't "fixed" and what that means
 in practice.
 
+## The instruction budget
+
+A host delivers only the first **2048 characters** of an MCP server's
+instructions. This is measured rather than documented: two different hosts
+cut this server's text mid-sentence at exactly that offset, with a truncation
+marker, and no resource or tool call could reach the remainder. At 16 kB the
+server was sending eight times what arrives, and the loss was invisible from
+this side — the daemon has no way to know what the model was shown.
+
+The cost was not hypothetical. One agent built a `logging` handler to capture
+a log that `os_exec` already returns; another ran a queue job through
+`Job.load` because the two lines about `queue_job__no_delay` sat at offset
+13 000. Both had read everything they were given.
+
+The split that follows from the cap:
+
+- `INSTRUCTIONS` (1.8 kB) carries only rules an agent would break without
+  knowing they exist: one command per session, rollback as the default state,
+  the commit grant and the difference between `commit_not_allowed` and
+  `commit_forbidden`, ownership, and the paths and endpoints that are not
+  theirs. It also names every help topic, so what is missing stays
+  discoverable even when the text itself is cut.
+- `HELP` holds everything longer than a rule, addressed by topic, and
+  `os_help(topic)` fetches one. Read-only, opens no session, and cheaper than
+  the workaround an agent invents when a rule was never shown to it.
+- Per-tool guidance lives in that tool's `description`, which hosts deliver
+  whole — verified up to ~1 kB, the length of `os_run_test`'s.
+
+The test suite pins the cap (`INSTRUCTION_CAP`), that every topic is named in
+the delivered text, and that nothing which used to be in the instructions was
+deleted rather than moved.
+
 ## What's deliberately not here
 
 Outgoing HTTP call tracing, record-level "what changed" diffs, synchronous

@@ -5,6 +5,57 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] — 2026-09-09
+
+### Rules that enforce themselves
+
+Three things an agent could only get right by remembering them. Feedback from
+one working through a real task named all three; each is now structural.
+
+- A commit on a session handed over with work already in its transaction is
+  refused once as `inherited_pending`, with the count of commands that were
+  the previous owner's. Saying it out loud and passing
+  `include_inherited=True` goes ahead; `os_rollback` discards the lot. Any
+  boundary clears the count, so the transaction is the agent's alone after
+  that. `Session` tracks it and `os_session` reports it, so the UI can say
+  whose work is pending too.
+- `os_open_session(replace=...)` on a session that ran on an odoo.sh build now
+  says that a remote target is a human's to open. It used to fail with
+  "container, database and odoo_bin are required", because the journal has no
+  `odoo_bin` for a remote target — an agent read that as a client bug and went
+  hunting for a way around the rule instead of asking for a handover. The
+  journal's `session_open` record gained `target_kind` and `host` so the
+  refusal can be specific, and a journal written before that field still
+  refuses, on the missing `odoo_bin`.
+- The `commit`, `ownership` and `remote` help topics say all of the above, so
+  the mechanism and the explanation cannot drift apart.
+
+### The instruction budget
+
+- A host delivers only the **first 2048 characters** of an MCP server's
+  instructions. Measured, not assumed: two different hosts cut this server's
+  text mid-sentence at exactly that offset and marked it truncated, and no
+  resource or tool call reached the remainder. At 16 kB of instructions, 88%
+  never arrived — and the daemon has no way to see that from its side.
+- The cost was already paid twice. One agent wrote its own `logging` handler
+  to capture a log `os_exec` returns, because the section explaining it sat at
+  offset 9 000; another ran a queue job through `Job.load` rather than the
+  documented `queue_job__no_delay` at offset 13 000. Both had read everything
+  they were given.
+- `INSTRUCTIONS` is now 1.8 kB and carries only rules an agent would break
+  without knowing they exist: one command per session, rollback as the
+  default state of the world, how commit is granted and where it is refused
+  outright, whose session it is, and what is not theirs to touch. It also
+  names every help topic, so what is missing stays discoverable even if the
+  text is cut again by a stricter host.
+- `os_help(topic)` returns the rest — thirteen topics (`sessions`,
+  `ownership`, `commit`, `remote`, `limits`, `orm`, `code`, `log`, `records`,
+  `modules`, `jobs`, `tests`, `watching`), read-only, opening no session. No
+  guidance was deleted in the move, and a test pins that: every phrase that
+  used to be in the instructions still has a home.
+- Per-tool guidance stays in that tool's own description, which hosts deliver
+  whole — verified up to the ~1 kB of `os_run_test`'s.
+
 ## [1.3.0] — 2026-09-05
 
 Odoo 15 through 19, not 19 alone. Nothing above the bootstrap changed to
@@ -507,7 +558,8 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
-[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/romi477/odoo_sheller/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/romi477/odoo_sheller/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/romi477/odoo_sheller/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/romi477/odoo_sheller/compare/v1.0.0...v1.1.0

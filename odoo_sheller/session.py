@@ -141,6 +141,7 @@ class Session:
         self.former_keys: set[str] = set()
         self.hello: dict | None = None
         self.pending_commands = 0
+        self.inherited_pending = 0
         self._state = SessionState.STARTING
         self._closing = False
         self._on_event = on_event
@@ -195,6 +196,8 @@ class Session:
             "odoo": (self.hello or {}).get("odoo"),
             "python": (self.hello or {}).get("python"),
             "pending_commands": self.pending_commands,
+            # How many of those were run by a previous owner.
+            "inherited_pending": self.inherited_pending,
             "owner": dict(self.owner),
             "allow_commit": self.allow_commit,
             "client_token": self.client_token,
@@ -220,6 +223,11 @@ class Session:
             container=self.target.name,
             database=self.target.database,
             odoo_bin=self.target.odoo_bin,
+            # `kind` is the record's own type, so the target's goes under its
+            # own name. Without it a journal cannot say whether reopening the
+            # same target is even a thing a caller may do.
+            target_kind=self.target.kind,
+            host=self.target.host,
             odoo=self.hello.get("odoo"),
             python=self.hello.get("python"),
             pid=self.hello.get("pid"),
@@ -271,6 +279,11 @@ class Session:
         """
         previous = dict(self.owner)
         self.owner = dict(owner)
+        # Whatever is pending now belongs to whoever is leaving. A commit by
+        # the new owner would write it too, so the count is kept rather than
+        # left to be noticed: os_commit refuses on it once, and the UI can say
+        # whose work is in the transaction.
+        self.inherited_pending = self.pending_commands
         self.former_keys.add(self.write_key)
         self.write_key = secrets.token_urlsafe(24)
         # Humans confirm each commit in the UI. An agent starts without the
@@ -365,6 +378,7 @@ class Session:
         # we say so here. Whatever was pending is gone either way.
         discarded_pending = self.pending_commands > 0
         self.pending_commands = 0
+        self.inherited_pending = 0
         request_id = self._take_id()
         self.journal.write(
             "run_test", id=request_id, module=module, test_class=test_class,
@@ -412,7 +426,10 @@ class Session:
             kind, id=request_id, error=result.get("error"), actor=dict(self.owner)
         )
         if not result.get("error"):
+            # The transaction is over either way, so nobody's work is pending
+            # any more — including whatever a handover carried in.
             self.pending_commands = 0
+            self.inherited_pending = 0
 
         return result
 

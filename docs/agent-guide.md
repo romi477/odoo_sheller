@@ -43,11 +43,12 @@ no way for an agent to grant itself write access.
 | `os_run_test` | `test`, `container=None`, `database=None`, `odoo_bin=None`, `timeout=30.0`, `session_id=None` | runs one Odoo test method or a whole class; opens its own new session (which then closes itself), or runs in one it was handed |
 | `os_test_result` | `session_id` | waits for a run started by `os_run_test` and returns its outcome (read-only, no key needed) |
 | `os_rollback` | `session_id=None` | discards the open transaction |
-| `os_commit` | `session_id=None` | fails unless the human has granted commit |
+| `os_commit` | `session_id=None`, `include_inherited=False` | fails unless the human has granted commit; refused once as `inherited_pending` on a session handed over with work already in its transaction |
 | `os_interrupt` | `session_id=None` | stops a running command |
 | `os_close_session` | `session_id=None` | ends the session |
 | `os_history` | `session_id`, `limit=20` | recent commands and results, rebuilt from the journal |
 | `os_journal` | `session_id`, `fmt="markdown"` | the full transcript |
+| `os_help` | `topic=None` | the parts of this server's instructions the host did not deliver; no topic lists them (read-only, no session) |
 
 `session_id` defaults to the one session the server currently holds a key
 for; it becomes required once it holds more than one.
@@ -82,9 +83,38 @@ for; it becomes required once it holds more than one.
 
 ## What the server tells the model
 
-The MCP server ships its own instructions text, which an agent using it will
-see directly. In short:
+**A host delivers only the first 2048 characters of a server's instructions.**
+Measured, not assumed: two different hosts cut this server's text
+mid-sentence at exactly that offset and marked it truncated. At 16 kB of
+instructions that meant 88% never reached the model — and it showed. One
+agent wrote its own `logging` handler to scrape a log the instructions
+already explained; another reached for `Job.load` instead of the documented
+`queue_job__no_delay`. Both were reading everything they had.
 
+So `INSTRUCTIONS` is now under the cap (1.8 kB) and holds only what an agent
+would otherwise break unknowingly: one command at a time, rollback as the
+default, how commit is granted and where it is refused outright, whose
+session it is, and what never to touch. Everything longer than a rule moved
+into `HELP`, addressed by topic and fetched with `os_help(topic)` — a
+read-only call that opens nothing. The instructions name every topic, so the
+existence of the guidance survives any truncation even if the guidance itself
+does not.
+
+Tool descriptions are delivered whole (this server's longest is ~1 kB), so
+anything that belongs to one tool lives in its description rather than in the
+shared text.
+
+The topics: `sessions`, `ownership`, `commit`, `remote`, `limits`, `orm`,
+`code`, `log`, `records`, `modules`, `jobs`, `tests`, `watching`.
+
+In short, what the instructions and the topics between them say:
+
+- A commit on a session handed over with work already pending would write the
+  previous owner's work too. `os_session` reports `inherited_pending`, and the
+  first `os_commit` is refused with that code and the count, so the agent has
+  to say whose work it is before passing `include_inherited=True`. Any commit
+  or rollback clears the count. This was documented before and an agent still
+  had to remember it; one refusal costs less than one wrong commit.
 - Commit writes to a real database — only call `os_commit` after the human
   has granted it. A grant happens in the UI and is not announced in chat:
   poll `os_session` until `allow_commit` is true, then commit. Once granted,
@@ -216,6 +246,13 @@ no host or build; so does `os_run_test`. There is no way for an agent to
 *name* a remote instance, staging or production, and nothing to forget to
 enforce. It reaches one only through a handover a human performed after
 looking at what the instance said it was.
+
+Reopening one is refused too: `os_open_session(replace=...)` on a session
+that ran remotely says so in as many words. It used to fail with "container,
+database and odoo_bin are required" — which reads as a serialisation
+complaint, and an agent that met it went looking for a way around the rule
+rather than asking for a handover. A refusal that names the rule is the only
+version of that rule an agent can act on.
 
 Once handed one, two things differ, and `os_session` reports both as `kind`
 and `stage`:

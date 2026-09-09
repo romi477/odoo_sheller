@@ -362,6 +362,8 @@ def test_session_history_reads_a_closed_journal(tmp_path):
             "container": "integra19",
             "database": "integra_db_19",
             "odoo_bin": None,
+            "target_kind": "docker",
+            "host": None,
         },
         "journal": "/api/journals/d6227894a75c",
         "recovery": "open a new session on the same target; variables are lost",

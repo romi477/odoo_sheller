@@ -1090,3 +1090,37 @@ async def test_exec_stderr_excludes_lines_from_before_the_call(tmp_path):
     result = await session.execute("anything")
     assert not any("OLD noise" in line for line in result["stderr"])
     await session.close()
+
+
+async def test_a_handover_remembers_whose_pending_work_it_carries(tmp_path):
+    """The rule was documented and the agent promised to check it by hand.
+    Making it a field is what stops the next one committing someone's work."""
+    session = await make_session(tmp_path)
+    await session.start()
+    await session.execute("a")
+    await session.execute("b")
+    assert session.describe()["inherited_pending"] == 0, "nothing inherited yet"
+    session.transfer_owner({"kind": "agent", "label": "claude"})
+    described = session.describe()
+    assert described["pending_commands"] == 2
+    assert described["inherited_pending"] == 2, "both were the human's"
+    # The new owner's own work is theirs, and the inherited count stays put.
+    await session.execute("c")
+    assert session.describe()["inherited_pending"] == 2
+    await session.close()
+
+
+async def test_a_transaction_boundary_clears_what_was_inherited(tmp_path):
+    session = await make_session(tmp_path)
+    await session.start()
+    await session.execute("a")
+    session.transfer_owner({"kind": "agent", "label": "claude"})
+    assert session.describe()["inherited_pending"] == 1
+    await session.rollback()
+    assert session.describe()["inherited_pending"] == 0
+    await session.execute("b")
+    session.transfer_owner({"kind": "human", "label": "browser"})
+    assert session.describe()["inherited_pending"] == 1
+    await session.commit()
+    assert session.describe()["inherited_pending"] == 0
+    await session.close()

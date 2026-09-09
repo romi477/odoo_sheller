@@ -24,7 +24,11 @@ class FakeSession:
         self.owner = {"kind": "agent", "label": "mcp-agent"}
         self.allow_commit = False
         self.pending_commands = 0
+        self.inherited_pending = 0
         self.calls = []
+        # What a test wants to override in the description without reaching
+        # into the session's own bookkeeping.
+        self.described: dict = {}
 
     def describe(self):
 
@@ -36,9 +40,11 @@ class FakeSession:
             "odoo": "19.0",
             "python": "3.12.13",
             "pending_commands": self.pending_commands,
+            "inherited_pending": self.inherited_pending,
             "owner": dict(self.owner),
             "allow_commit": self.allow_commit,
             "activity": None,
+            **self.described,
         }
 
     def stderr_tail(self, limit=200):
@@ -66,7 +72,11 @@ class FakeSession:
     async def commit(self):
         from odoo_sheller.session import CommitNotAllowed
 
-        raise CommitNotAllowed("not granted")
+        if not self.allow_commit:
+            raise CommitNotAllowed("not granted")
+        self.calls.append(("commit",))
+
+        return {"error": None}
 
     async def run_test(self, module, test_class, test_method=None, timeout=300.0):
         self.calls.append(("run_test", module, test_class, test_method, timeout))
@@ -114,6 +124,18 @@ class FakeRegistry:
         self.open_kwargs = kwargs
 
         return self.session
+
+
+def guidance() -> str:
+    """Everything this server tells the model, wherever it now lives.
+
+    A host delivers only the first `INSTRUCTION_CAP` characters of
+    INSTRUCTIONS, so anything longer than a rule moved into HELP behind
+    os_help. Which of the two holds a given sentence is a budget decision and
+    may change; that it is *somewhere* is the contract these tests pin.
+    """
+
+    return server.INSTRUCTIONS + "\n" + "\n".join(server.HELP.values())
 
 
 @pytest.fixture
@@ -537,13 +559,13 @@ async def test_history_shapes_a_run_test_entry_with_its_outcome(wired, monkeypat
 
 def test_the_instructions_explain_every_refusal_the_agent_can_meet():
     """A refusal code with no explanation leaves the agent guessing or retrying."""
-    text = server.INSTRUCTIONS
+    text = guidance()
     for code in ("session_busy", "session_gone", "not_owner", "commit_not_allowed"):
         assert code in text, code
 
 
 def test_the_instructions_say_how_to_obtain_commit_rights():
-    text = server.INSTRUCTIONS.lower()
+    text = guidance().lower()
     assert "grant commit" in text, "the agent must know where the human grants it"
     assert "do not retry" in text
     assert "rollback is the default" in text
@@ -551,7 +573,7 @@ def test_the_instructions_say_how_to_obtain_commit_rights():
 
 def test_the_instructions_say_a_granted_commit_needs_no_further_check_in():
     """Otherwise a cautious model repeats the ask-first ritual on every commit."""
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "the right stays granted" in text
     assert "call os_commit directly" in text
     assert "no need to repeat this ritual" in text
@@ -559,13 +581,13 @@ def test_the_instructions_say_a_granted_commit_needs_no_further_check_in():
 
 def test_the_instructions_say_exec_is_never_gated_by_commit_rights():
     """Grant commit answers one question only: can this session persist."""
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "running code is never gated by it" in text
     assert "os_exec always works" in text
 
 
 def test_the_instructions_state_what_a_handover_does_and_does_not_move():
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "write key" in text
     assert "namespace" in text
     assert "does not survive a handover" in text, "a granted right must not look permanent"
@@ -573,7 +595,7 @@ def test_the_instructions_state_what_a_handover_does_and_does_not_move():
 
 def test_the_instructions_point_the_agent_at_mapped_instead_of_a_loop():
     """Without this, code that could be one mapped() call arrives as a for-loop."""
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "records.mapped('name')" in text
     assert "partner_id.bank_ids" in text, "the dotted-path union behavior is the non-obvious part"
     assert "lambda" in text
@@ -582,20 +604,20 @@ def test_the_instructions_point_the_agent_at_mapped_instead_of_a_loop():
 
 def test_the_instructions_push_filtering_into_search_not_python():
     """Fetching broadly then filtering in Python defeats the point of a domain."""
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "search_count(domain)" in text
     assert "search([('is_company', '=', True)])" in text
 
 
 def test_the_instructions_mention_set_operators_and_ensure_one():
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "intersection" in text and "difference" in text
     assert "self.ensure_one()" in text
     assert "one-record recordsets" in text
 
 
 def test_the_instructions_explain_os_run_test():
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "os_run_test" in text
     assert "module.TestClass" in text
     assert "discards" in text.lower() or "discarded" in text.lower()
@@ -604,7 +626,7 @@ def test_the_instructions_explain_os_run_test():
 def test_the_instructions_say_not_to_retry_a_run_that_is_still_going():
     """Retrying would start a brand-new, duplicate run instead of waiting on
     the slow one already in flight."""
-    text = server.INSTRUCTIONS.lower()
+    text = guidance().lower()
     assert "never answer a `status: \"running\"` by calling os_run_test again" in text
     assert "duplicate run" in text
     assert "os_test_result" in text
@@ -665,7 +687,7 @@ async def test_os_list_tests_passes_an_explicit_container(wired, monkeypatch):
 
 
 def test_the_instructions_point_at_os_list_tests():
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "os_list_tests" in text
     assert "inventing" in text.lower()
     assert "parallel" in text.lower()
@@ -683,20 +705,20 @@ async def test_os_session_reports_whether_commit_is_granted(wired):
 
 def test_the_instructions_say_to_poll_os_session_for_a_grant():
     """'Wait' without a tool leaves the agent asking the human if they granted it."""
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "os_session" in text
     assert "allow_commit" in text
     assert "will not be told in chat" in text.lower()
 
 
 def test_the_instructions_say_to_close_a_finished_session():
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "os_close_session" in text
     assert "more steps" in text
 
 
 def test_the_instructions_say_how_to_run_with_delay_inline():
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "queue_job__no_delay" in text
     assert "with_delay()" in text
     assert "env = env(context=dict(env.context, queue_job__no_delay=True))" in text
@@ -895,13 +917,13 @@ async def test_os_test_result_reports_a_run_that_died_with_its_process(monkeypat
 
 def test_the_instructions_no_longer_ask_for_a_manual_close_after_a_test():
     """The session closes itself now; telling the agent otherwise wastes a call."""
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "one os_run_test call, one session, one close" not in text.lower()
     assert "closes itself" in text
 
 
 def test_the_instructions_explain_waiting_out_a_long_run():
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "os_test_result" in text
     assert "status" in text and "running" in text
 
@@ -1106,14 +1128,14 @@ async def test_the_run_test_tool_description_matches_what_it_now_does():
 
 def test_the_instructions_say_how_to_find_the_code_being_debugged():
     """An agent that cannot see which override wins is guessing."""
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "inspect.getsource" in text
     assert "__mro__" in text
 
 
 def test_the_instructions_say_how_to_read_a_whole_record():
     """Naming fields one at a time is how an agent misses the field it needed."""
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert ".read()[0]" in text, "read() always returns a list"
     assert "read(load=None)" in text
     # The two things read() does not do, both of which surprise a caller:
@@ -1124,7 +1146,7 @@ def test_the_instructions_say_how_to_read_a_whole_record():
 
 def test_the_instructions_say_how_to_update_a_module():
     """Only what works: the ORM call, what it costs, and what it cannot do."""
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "button_immediate_upgrade" in text
     # It commits on its own, so the human's consent comes first, and it does
     # not re-import Python.
@@ -1142,7 +1164,7 @@ def test_the_instructions_say_how_to_update_a_module():
 
 def test_the_instructions_say_how_to_read_non_python_files():
     """Views and data files are XML; inspect cannot reach them."""
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "file_open" in text
     assert "filter_ext" in text
 
@@ -1170,7 +1192,7 @@ def test_no_mcp_tool_offers_a_remote_target():
 
 def test_the_instructions_distinguish_the_two_commit_refusals():
     """One says ask; the other says never. Polling the second one is a loop."""
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "commit_forbidden" in text
     assert "production" in text
 
@@ -1224,7 +1246,7 @@ async def test_run_test_in_a_lent_session_reports_discarded_work(wired, monkeypa
 
 
 def test_the_instructions_say_how_to_test_on_a_lent_session():
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "os_run_test(session_id" in text or "session_id=" in text
 
 
@@ -1303,10 +1325,126 @@ async def test_the_exec_tool_says_the_log_comes_back_with_it():
     description = tools["os_exec"].description
     assert "stderr" in description
     assert "stderr_lines" in description, "the count is what says a log exists"
-    text = server.INSTRUCTIONS
+    text = guidance()
     assert "os_exec" in text
     # Three halves, really: the count is free, the lines are on request, and
     # the whole log is on the journal without re-running anything.
     assert "stderr_lines" in text
     assert "stderr=True" in text
     assert "os_journal" in text
+
+
+# --- the host truncates server instructions -------------------------------
+#
+# Measured, not guessed: two different hosts delivered this server's
+# instructions cut at exactly 2048 characters — mid-sentence, at the same
+# offset, with a truncation marker. Everything past that simply does not
+# reach the model, which is why one agent wrote its own logging handler and
+# another reached for `Job.load` instead of `queue_job__no_delay`.
+INSTRUCTION_CAP = 2048
+
+
+def test_the_instructions_fit_in_what_the_host_delivers():
+    assert len(server.INSTRUCTIONS) <= INSTRUCTION_CAP, (
+        f"{len(server.INSTRUCTIONS)} chars: everything past {INSTRUCTION_CAP} "
+        "is dropped before the model sees it"
+    )
+
+
+def test_the_instructions_spend_the_budget_on_what_cannot_be_asked_for():
+    """What must arrive unprompted: the rules an agent would break unknowingly."""
+    text = server.INSTRUCTIONS
+    for must in (
+        "session_busy",        # one command at a time
+        "os_rollback",         # rollback is the default
+        "commit_not_allowed",  # the grant ritual
+        "commit_forbidden",    # and where nothing will ever grant it
+        "os_session",          # how a grant is observed
+        "not_owner",           # whose session it is
+        "~/.odoo-sheller",     # what never to touch
+        "os_help",             # and where the rest lives
+    ):
+        assert must in text, must
+
+
+def test_every_help_topic_is_named_in_the_instructions_and_answers():
+    text = server.INSTRUCTIONS
+    assert server.HELP, "the long-form guidance has to live somewhere"
+    for topic in server.HELP:
+        assert topic in text, f"{topic} is unreachable: nothing names it"
+        assert len(server.HELP[topic]) > 200, topic
+
+
+async def test_os_help_without_a_topic_lists_them():
+    out = await server.os_help()
+    assert set(out["topics"]) == set(server.HELP)
+    assert out["instructions_truncated_at"] == INSTRUCTION_CAP
+
+
+async def test_os_help_returns_one_topic_in_full():
+    out = await server.os_help("jobs")
+    assert out["topic"] == "jobs"
+    assert "queue_job__no_delay" in out["text"]
+
+
+async def test_os_help_refuses_an_unknown_topic_with_the_list():
+    out = await server.os_help("nonsense")
+    assert out["error"] == "no_such_topic"
+    assert set(out["topics"]) == set(server.HELP)
+
+
+def test_nothing_that_used_to_be_instructions_was_simply_deleted():
+    """The cap forces a move, not a loss: every rule still has a home."""
+    everywhere = server.INSTRUCTIONS + "\n".join(server.HELP.values())
+    for must in (
+        "queue_job__no_delay",       # delayed jobs
+        "__mro__",                   # which override runs
+        "inspect.getsource",
+        "file_open",                 # views and data
+        "stderr_lines",              # the log, and that it is opt-in
+        "os_journal",
+        ".read()[0]",                # reading a record
+        "button_immediate_install",  # installing a module
+        "button_immediate_upgrade",
+        "discarded_pending",         # a lent session and a test run
+        "os_list_tests",
+        "os_test_result",
+        "mapped(",                   # ORM idioms
+        "ensure_one",
+        "session_gone",
+    ):
+        assert must in everywhere, must
+
+
+async def test_os_commit_refuses_to_write_work_it_inherited(wired):
+    """The agent promised to check `pending_commands` by hand before its first
+    commit on a handed-over session. A promise is not a mechanism."""
+    session = wired.session
+    session.allow_commit = True
+    session.pending_commands = 3
+    session.described["inherited_pending"] = 2
+    out = await server.os_commit("s1")
+    assert out["error"] == "inherited_pending"
+    assert out["inherited_pending"] == 2
+    assert "os_commit" in out["recovery"], "and how to go ahead once said out loud"
+    assert ("commit",) not in session.calls, "nothing was committed"
+
+
+async def test_os_commit_writes_inherited_work_once_it_is_acknowledged(wired):
+    session = wired.session
+    session.allow_commit = True
+    session.pending_commands = 3
+    session.described["inherited_pending"] = 2
+    out = await server.os_commit("s1", include_inherited=True)
+    assert out.get("error") is None, out
+    assert ("commit",) in session.calls
+
+
+async def test_os_commit_on_your_own_work_asks_nothing(wired):
+    session = wired.session
+    session.allow_commit = True
+    session.pending_commands = 2
+    session.described["inherited_pending"] = 0
+    out = await server.os_commit("s1")
+    assert out.get("error") is None, out
+    assert ("commit",) in session.calls

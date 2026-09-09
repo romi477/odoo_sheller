@@ -125,6 +125,19 @@ class Registry:
             previous = self.target_of_past_session(replace)
             if previous is None:
                 raise KeyError(f"no journal for session {replace}")
+            if previous.get("target_kind") != DOCKER or not previous.get("odoo_bin"):
+                # Saying "container, database and odoo_bin are required" here
+                # reads as a serialisation complaint, and an agent that met it
+                # went looking for a way around instead of asking. Name the
+                # rule: a remote target is a human's to open, and the journal
+                # has no way back to it anyway.
+                raise ValueError(
+                    f"session {replace} did not run on a local container "
+                    f"({previous['container']} on "
+                    f"{previous.get('host') or previous.get('target_kind')}); a "
+                    "remote target is a human's to open from the UI — ask for a "
+                    "handover instead of reopening it"
+                )
             container = container or previous["container"]
             database = database or previous["database"]
             odoo_bin = odoo_bin or previous["odoo_bin"]

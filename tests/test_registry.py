@@ -1,7 +1,9 @@
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from odoo_sheller.journal import Journal, journal_path
 from odoo_sheller.registry import Registry
 from odoo_sheller.session import SessionDead, SessionState
 from odoo_sheller.transport import Target
@@ -453,3 +455,22 @@ async def test_replacing_a_lost_session_stays_local_only(tmp_path, monkeypatch):
     )
     with pytest.raises(ValueError):
         await registry.open(replace="gone", kind="odoosh")
+
+
+async def test_replacing_a_remote_session_says_it_is_not_yours_to_open(tmp_path, monkeypatch):
+    """An agent read the generic validation error as a client bug and went
+    hunting for a way around it. The refusal has to name the actual rule."""
+    registry = Registry(journal_root=tmp_path)
+    journal = Journal(
+        journal_path(tmp_path, "old1", "36887345", "build_db", datetime.now(UTC))
+    )
+    journal.write(
+        "session_open", container="36887345", database="build_db",
+        odoo_bin=None, target_kind="odoosh", host="build.dev.odoo.com", odoo="19.0",
+    )
+    with pytest.raises(ValueError) as excinfo:
+        await registry.open(replace="old1", owner={"kind": "agent", "label": "claude"})
+    message = str(excinfo.value)
+    assert "remote" in message
+    assert "build.dev.odoo.com" in message, "and which instance it was"
+    assert "handover" in message, "and it has to say what to do instead"
