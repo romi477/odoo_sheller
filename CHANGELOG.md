@@ -5,6 +5,65 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] — 2026-09-09
+
+### Reading source
+
+- `os_source` reads Odoo source from inside the running instance, in one
+  call. By path: `os_source(path="module/models/thing.py", first=363,
+  last=470)` — module-relative or absolute inside an addons directory,
+  1-based inclusive, through `odoo.tools.file_open`, so anything outside
+  those directories is refused. By model:
+  `os_source(model="account.move", method="_post")` — the source of the
+  override that actually runs, with `defined_in`, `file`, `line`, and every
+  module extending that model in resolution order.
+- The reason it exists is ergonomic, not informational. An agent still
+  reached for `docker exec ... sed -n '363,470p'` after the guidance against
+  it was written, because the guidance sat behind an `os_help` call it had no
+  reason to make for what looked like "read a file", and because writing the
+  equivalent snippet by hand cost more than the shortcut. A rule only holds
+  when following it is the cheaper path.
+- A method read lists the modules that **define** it, not everything in the
+  MRO: `overrides` is the `super()` chain in resolution order, first the one
+  that runs, last the base. Measured on `account.move.action_post` in a real
+  database: three modules — `integration:43`, `sale:83`, `account:6179` —
+  against fifty-two classes in the MRO. `module=` reads one link instead of
+  the winner, and a module that does not define the method comes back as
+  `not_in_that_module` with the chain to pick from.
+- `os_source(path=<directory>)` lists a module's files with their line counts
+  — 266 for `integration_shopify`, bytecode and `__pycache__` dropped. The
+  question "what is in this module" comes before "read me line 363", and
+  leaving that one to the shell is what keeps the shell a habit.
+- Fixed before it shipped, by a live container rather than a test: with no
+  `first`/`last` the generated snippet carried `json.dumps(None)` — a
+  JavaScript `null`, a `NameError` in Python. Every unit test passed because
+  they mock the session and never run the snippet. Two tests now do: one
+  compiles it in every argument form, one executes it against a stub
+  `odoo.tools`.
+- The `code` topic said `file_open` was for "files that are not Python",
+  which is untrue — it reads any file inside the addons tree, `.py`
+  included; only `filter_ext` narrows it. That sentence is what sent the
+  agent to the shell, and it is gone. Verified on a live container: the same
+  file, the same line range, and `/etc/passwd` refused.
+- The delivered instructions now carry one line about it, since a rule
+  nobody reads is not a rule: "Read Odoo source with os_source, never with
+  docker exec".
+- The snippet leaves no names in the session: one function, imports and
+  locals inside it, and it pops its own name before doing any work — so a
+  read that raises cleans up too.
+
+### Fixed
+
+- A session tab the daemon no longer has can be dismissed again. Sessions do
+  not outlive the daemon, so a restart takes every one of them with it — and
+  the tabs stayed: Close answered `404 session_gone` and alerted, Kill
+  answered the same and alerted, and nothing on the card could remove it
+  short of reloading the page. `session_gone` is the state Close was asking
+  for, so it now takes the same path as a successful close.
+- Reattaching prunes as well as adopts: a session the daemon does not list is
+  dropped from the browser rather than left as a tab that can be neither
+  typed into nor closed.
+
 ## [1.4.0] — 2026-09-09
 
 ### Rules that enforce themselves
@@ -558,7 +617,8 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
-[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/romi477/odoo_sheller/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/romi477/odoo_sheller/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/romi477/odoo_sheller/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/romi477/odoo_sheller/compare/v1.1.0...v1.2.0

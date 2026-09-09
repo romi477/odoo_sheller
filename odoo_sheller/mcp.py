@@ -9,7 +9,9 @@ daemon started as a child of this process would take every live session down
 with it on each restart.
 """
 
+import ast
 import asyncio
+import json
 import logging
 import os
 import secrets
@@ -45,6 +47,13 @@ TEST_RESULT_POLL = 2.0  # how often os_test_result looks while it waits
 # lives in HELP, behind os_help.
 INSTRUCTION_CAP = 2048
 MAX_STDOUT = 4000
+# A source read is what an agent would otherwise get with `sed`, so the budget
+# is larger than a command's output — but still a budget: a whole file is
+# rarely the question, and a range is one argument away.
+MAX_SOURCE = 8000
+# A module listing is counted in files, not characters: a truncated path is a
+# path that leads nowhere.
+MAX_LISTING = 400
 MAX_RESULT = 2000
 
 INSTRUCTIONS = """\
@@ -85,6 +94,7 @@ host truncates, and none of them are negotiable:
   a handover, not a second session behind the human's back; never attach with
   a write key you were not given.
 - Never touch ~/.odoo-sheller/ and never call the daemon's admin endpoints.
+- Read Odoo source with os_source, never with docker exec: os_help('code').
 """
 
 HELP: dict[str, str] = {
@@ -244,6 +254,38 @@ multi-record field.
     "code": """\
 ## Reading the code you are debugging
 
+Reading source is one tool call, not a shell:
+
+    os_source(path="integration_shopify")              # what files exist
+    os_source(path="integration_shopify/models/external/external_payout.py",
+              first=363, last=470)                     # 1-based, inclusive
+    os_source(model="account.move", method="action_post")
+    os_source(model="account.move", method="action_post", module="account")
+
+A directory lists every file under it with its line count, so "what is in
+this module" is answered before you guess a path. A file takes a
+module-relative path or an absolute one inside an addons directory; anything
+outside them is refused.
+
+A method answers what a file cannot. `text` is the implementation that
+actually runs, and `overrides` is the chain of modules that define it, in
+resolution order — first is the one that runs, last is the base; everything
+between them is reached by `super()`. On `account.move.action_post` that is
+three modules, while the model's MRO is fifty-two classes, so the chain is
+the answer and the MRO is noise. `module=` reads one link instead of the
+winner, and naming a module that does not define the method comes back as
+`not_in_that_module` with the chain to choose from. Without `method`, the
+model form gives the class source and every module extending the model.
+
+All of it needs a session you own, reads from the instance this session runs
+in, and leaves nothing in its namespace.
+
+Never `docker exec ... sed` for this: that reads a disk this session may not
+even be running from, and a file cannot say which override is in effect.
+
+The rest of this topic is for when a read is not enough — searching, walking
+a class, comparing two overrides — and all of it goes in os_exec.
+
 You are in a Python REPL inside the running instance, so the source is
 readable — and reading it through the *loaded registry* answers a question
 the filesystem cannot: which override actually wins.
@@ -267,18 +309,29 @@ than fetching it whole and losing the end:
     src = inspect.getsource(cls._compute_display_name).splitlines()
     src[:40]
 
-For files that are not Python — views, data, manifests — use Odoo's own
-reader, which is confined to the addons paths:
+To read a file rather than a method — a view, a data file, a manifest, or a
+.py you want by path and line range — use Odoo's own reader, which is
+confined to the addons paths. It reads any file inside them, Python
+included; only `filter_ext` narrows that:
 
     from odoo.tools import file_path, file_open
     file_path('sale')                      # the module's directory
     with file_open('sale/views/sale_views.xml') as f:
         head = f.read(4000)
 
-`file_open` takes `filter_ext=('.xml',)` to refuse anything else, raises
-`FileNotFoundError` for a path outside the addons directories, and will not
-create files. Use it instead of bare `open()`: a path that escapes the addons
-tree is refused rather than read.
+A line range, the way you would reach for `sed`. Both an absolute path
+inside an addons directory and a module-relative one work:
+
+    with file_open('account_accountant/models/account_bank_statement.py') as f:
+        lines = f.read().splitlines()
+    "\n".join(lines[362:470])            # lines 363-470, 1-based
+
+Never shell into the container for this — `docker exec ... sed` reads a
+disk this session may not even be running from, and tells you nothing about
+which override is in effect. `file_open` raises `FileNotFoundError` for a
+path outside the addons directories (including one that climbs out with
+`..`), refuses anything but `filter_ext` when you pass it, and will not
+create files. Use it instead of bare `open()`.
 """,
     "log": """\
 ## Seeing what Odoo logged
@@ -697,6 +750,243 @@ async def os_exec(
     )
 
     return answer
+
+
+@mcp.tool(
+    description=(
+        "Read Odoo source from inside the running instance, instead of "
+        "shelling into the container — that reads a disk this session may not "
+        "run from, and cannot say which override is in effect. Three forms. "
+        "A directory: os_source(path='sale') lists every file in the module "
+        "with its line count. A file: os_source(path='sale/models/sale_order"
+        ".py', first=100, last=180) — module-relative or absolute inside an "
+        "addons directory, 1-based inclusive, anything outside refused. A "
+        "method: os_source(model='sale.order', method='action_confirm') "
+        "returns the source that actually runs plus `overrides`, the modules "
+        "defining it in resolution order — first is the one that runs, last "
+        "is the base. Add module='sale' to read that link instead. Needs a "
+        "session you own; leaves no names in its namespace."
+    ),
+    annotations=ToolAnnotations(read_only_hint=True),
+)
+async def os_source(
+    path: str | None = None,
+    model: str | None = None,
+    method: str | None = None,
+    module: str | None = None,
+    first: int | None = None,
+    last: int | None = None,
+    session_id: str | None = None,
+) -> Any:
+    if path and model:
+
+        return {
+            "error": "ambiguous_request",
+            "recovery": "pass path (a file) or model (the code that runs), not both",
+        }
+    if not path and not model:
+
+        return {
+            "error": "nothing_to_read",
+            "recovery": (
+                "pass path='module/dir/file.py' with an optional first/last line "
+                "range, or model='res.partner' with an optional method"
+            ),
+        }
+    if method and not model:
+
+        return {"error": "method_without_model", "recovery": "pass model= as well"}
+    if module and not method:
+
+        return {
+            "error": "module_without_method",
+            "recovery": (
+                "module= picks one link out of a method's override chain, so "
+                "name the method too"
+            ),
+        }
+    target = _default_session(session_id)
+    if isinstance(target, dict):
+
+        return target
+
+    code = _source_snippet(path, model, method, first, last, module)
+    result = await _call("POST", f"/api/sessions/{target}/exec", target, json={"code": code})
+    if result.get("error") and "stdout" not in result:
+
+        return result
+    failure = result.get("error")
+    if failure:
+
+        return {
+            "error": "unreadable",
+            "reason": f"{failure.get('type')}: {failure.get('message')}",
+            "recovery": (
+                "a path must be inside an addons directory and a model must be "
+                "in the registry; os_help('code') has the rules"
+            ),
+        }
+    try:
+        # The session hands back the repr of the JSON string the snippet
+        # returned, which is exactly one literal.
+        payload = json.loads(ast.literal_eval(result.get("result") or "'{}'"))
+    except (ValueError, SyntaxError):
+
+        return {"error": "unreadable", "reason": "the read produced no payload"}
+    if payload.get("error"):
+
+        return payload
+    if payload.get("directory"):
+
+        return _clip_listing(payload)
+    text, clipped = _clip(payload.get("text") or "", MAX_SOURCE)
+    payload["text"] = text
+    payload["truncated"] = clipped
+    if clipped:
+        payload["recovery"] = (
+            "narrow it with first= and last=, or read one method by model="
+        )
+
+    return payload
+
+
+def _clip_listing(payload: dict) -> dict:
+    """A module can hold hundreds of files; a listing is still an answer."""
+    entries = payload.get("entries") or []
+    if len(entries) > MAX_LISTING:
+        payload["entries"] = entries[:MAX_LISTING]
+        payload["truncated"] = True
+        payload["recovery"] = (
+            f"{len(entries)} files: ask for a subdirectory, e.g. "
+            f"path='{payload.get('path')}/models'"
+        )
+    else:
+        payload["truncated"] = False
+
+    return payload
+
+
+def _source_snippet(path, model, method, first, last, module=None) -> str:
+    """Python for the session to run, returning the payload as a JSON string.
+
+    Everything happens inside one function so its imports and locals never
+    reach the session, and the function pops its own name on the way out: a
+    session is the human's workspace and a read has no business appearing in
+    it. The value is returned rather than printed — this server's stdout is
+    JSON-RPC, and a habit of printing is how that gets broken.
+    """
+    if path:
+        # Python literals, not JSON ones: `json.dumps(None)` is `null`, which
+        # is a NameError in the container and nowhere else — a mocked session
+        # never runs this, so only a live one ever said so.
+        opening = repr(int(first)) if first else "1"
+        closing = repr(int(last)) if last else "len(lines)"
+        body = f"""\
+    import os
+    from odoo.tools import file_open, file_path
+    target = file_path({path!r})
+    if os.path.isdir(target):
+        # Entries are rooted at the module, not at the target's parent, so
+        # every path that comes back can be handed straight back in.
+        root = target
+        while root != os.path.dirname(root):
+            if os.path.exists(os.path.join(root, "__manifest__.py")):
+                break
+            root = os.path.dirname(root)
+        base = os.path.dirname(root)
+        # "What is in this module" is the question that comes before "read me
+        # line 363", and it must not be the one thing left to the shell.
+        entries = []
+        for root, dirs, names in os.walk(target):
+            dirs[:] = sorted(d for d in dirs if d != "__pycache__")
+            for name in sorted(names):
+                if name.endswith((".pyc", ".pyo")):
+                    continue
+                full = os.path.join(root, name)
+                rel = os.path.relpath(full, base)
+                try:
+                    with open(full, "rb") as handle:
+                        count = sum(1 for _ in handle)
+                except OSError:
+                    count = None
+                entries.append({{"path": rel, "lines": count}})
+        payload = {{"path": {path!r}, "directory": True,
+                   "entries": entries, "files": len(entries)}}
+    else:
+        with file_open({path!r}) as handle:
+            lines = handle.read().splitlines()
+        first = {opening}
+        last = min({closing}, len(lines))
+        payload = {{"path": {path!r}, "total_lines": len(lines),
+                   "first": first, "last": last,
+                   "text": chr(10).join(lines[first - 1:last])}}
+"""
+    else:
+        # Every class in the MRO extends the model; almost none of them define
+        # the method. On account.move.action_post that is 3 classes out of 52,
+        # and the other 49 are noise in the answer.
+        body = f"""\
+    import inspect
+    cls = type(env[{model!r}])
+    method = {method!r}
+    wanted = {module!r}
+
+    def addon(klass):
+        parts = klass.__module__.split(".")
+        return parts[2] if klass.__module__.startswith("odoo.addons.") else parts[0]
+
+    def link(klass):
+        fn = klass.__dict__[method]
+        try:
+            line = inspect.getsourcelines(fn)[1]
+        except (OSError, TypeError):
+            line = None
+        return {{"module": addon(klass), "where": klass.__module__,
+                "file": inspect.getsourcefile(klass), "line": line}}
+
+    if method:
+        definers = [klass for klass in cls.__mro__ if method in klass.__dict__]
+        chain = [link(klass) for klass in definers]
+        if wanted:
+            picked = [klass for klass in definers if addon(klass) == wanted]
+            if not picked:
+                payload = {{"error": "not_in_that_module", "model": {model!r},
+                           "method": method, "module": wanted, "overrides": chain,
+                           "recovery": "pick one of the modules in overrides, "
+                                       "or drop module= for the one that runs"}}
+                return json.dumps(payload)
+            obj = picked[0].__dict__[method]
+            owner = picked[0]
+        else:
+            obj = getattr(cls, method)
+            owner = definers[0] if definers else cls
+        payload = {{"model": {model!r}, "method": method, "module": wanted,
+                   "file": inspect.getsourcefile(obj),
+                   "line": inspect.getsourcelines(obj)[1],
+                   "defined_in": getattr(owner, "__module__", None),
+                   "overrides": chain,
+                   "text": inspect.getsource(obj)}}
+    else:
+        payload = {{"model": {model!r}, "method": None,
+                   "file": inspect.getsourcefile(cls),
+                   "line": inspect.getsourcelines(cls)[1],
+                   "defined_in": cls.__module__,
+                   "overrides": [addon(klass) for klass in cls.__mro__
+                                 if klass.__module__.startswith("odoo.addons.")],
+                   "text": inspect.getsource(cls)}}
+"""
+
+    return (
+        "def _os_read(_os_ns=globals()):\n"
+        # First, not last: the call has already resolved the object, and a
+        # read that raises must not leave the name behind either.
+        '    _os_ns.pop("_os_read", None)\n'
+        "    import json\n"
+        + body
+        + "    return json.dumps(payload)\n"
+        "\n"
+        "_os_read()"
+    )
 
 
 @mcp.tool(

@@ -5,6 +5,8 @@ these are integration tests of the pair — no network, no daemon, but the actua
 routes, authorization and status codes.
 """
 
+import ast
+import json
 import re
 from pathlib import Path
 
@@ -53,6 +55,18 @@ class FakeSession:
 
     async def execute(self, code, timeout=300.0):
         self.calls.append(("execute", code))
+        if getattr(self, "source_payload", None) is not None and "_os_read" in code:
+            import json
+
+            return {
+                "id": 1,
+                "stdout": "",
+                "stdout_truncated": False,
+                "result": repr(json.dumps(self.source_payload)),
+                "result_truncated": False,
+                "error": None,
+                "duration": 0.01,
+            }
 
         return {
             "id": 1,
@@ -1448,3 +1462,260 @@ async def test_os_commit_on_your_own_work_asks_nothing(wired):
     out = await server.os_commit("s1")
     assert out.get("error") is None, out
     assert ("commit",) in session.calls
+
+
+def test_the_code_topic_does_not_send_python_to_the_shell():
+    """Our own wording sent an agent to `docker exec sed`: it framed file_open
+    as the reader for files that are *not* Python. It reads any file inside
+    the addons tree, .py included — verified on a live container."""
+    code = server.HELP["code"]
+    assert "not Python" not in code, "the sentence that caused it"
+    assert ".py" in code, "say plainly that Python files are readable too"
+    # And the thing sed was reached for: a line range.
+    assert "splitlines()" in code
+    assert "[362:470]" in code or "first" in code
+
+
+def test_the_delivered_rules_forbid_shelling_into_the_container():
+    """The one line an agent needs without having to ask for a topic first."""
+    text = server.INSTRUCTIONS
+    assert "docker" in text
+    assert len(text) <= server.INSTRUCTION_CAP
+
+
+async def test_os_source_reads_a_line_range_the_way_sed_would(wired):
+    """The shortcut it has to beat is `docker exec ... sed -n '363,470p'`."""
+    session = wired.session
+    session.source_payload = {
+        "path": "account_accountant/models/account_bank_statement.py",
+        "total_lines": 2026, "first": 363, "last": 470,
+        "text": "    def _try_auto_reconcile_statement_lines(self):\n        pass\n",
+    }
+    out = await server.os_source(
+        path="account_accountant/models/account_bank_statement.py", first=363, last=470
+    )
+    assert out["path"].endswith("account_bank_statement.py")
+    assert out["first"] == 363
+    assert out["total_lines"] == 2026
+    assert "_try_auto_reconcile_statement_lines" in out["text"]
+    sent = [call for call in session.calls if call[0] == "execute"][-1][1]
+    assert "file_open" in sent, "Odoo's own reader, confined to the addons paths"
+    assert "docker" not in sent
+
+
+async def test_os_source_of_a_method_says_whose_override_won(wired):
+    """The question the filesystem cannot answer, and the reason to prefer this."""
+    session = wired.session
+    session.source_payload = {
+        "model": "account.move", "method": "_post",
+        "file": "/opt/enterprise/account_accountant/models/account_move.py",
+        "line": 1204,
+        "defined_in": "odoo.addons.account_accountant.models.account_move",
+        "overrides": [
+            {"module": "account_accountant", "line": 1204},
+            {"module": "account", "line": 6179},
+        ],
+        "text": "def _post(self, soft=True):\n    return super()._post(soft)\n",
+    }
+    out = await server.os_source(model="account.move", method="_post")
+    assert out["defined_in"].endswith("account_accountant.models.account_move")
+    assert out["overrides"][0]["module"] == "account_accountant", "winner first"
+    assert out["line"] == 1204
+    sent = [call for call in session.calls if call[0] == "execute"][-1][1]
+    assert "__mro__" in sent
+    assert "getsource" in sent
+
+
+async def test_os_source_leaves_no_names_behind_in_the_workspace(wired):
+    """A session is the human's workspace; a read must not litter it."""
+    wired.session.source_payload = {"path": "sale/__manifest__.py", "total_lines": 3,
+                                    "first": 1, "last": 3, "text": "{}"}
+    await server.os_source(path="sale/__manifest__.py")
+    sent = [call for call in wired.session.calls if call[0] == "execute"][-1][1]
+    # One function, whose imports and locals stay inside it, and which pops
+    # its own name on the way out.
+    assert sent.count("\ndef ") == 0 and sent.startswith("def _os_read(")
+    # Popped first, so a read that raises leaves nothing behind either.
+    body = sent.splitlines()
+    assert body[1].strip() == '_os_ns.pop("_os_read", None)'
+    assert sent.strip().endswith("_os_read()")
+    # And it returns rather than prints: this server's stdout is JSON-RPC.
+    assert "print(" not in sent
+
+
+async def test_os_source_refuses_a_call_that_names_nothing(wired):
+    out = await server.os_source()
+    assert out["error"] == "nothing_to_read"
+    assert "path" in out["recovery"] and "model" in out["recovery"]
+
+
+async def test_os_source_refuses_a_path_and_a_model_at_once(wired):
+    out = await server.os_source(path="sale/__manifest__.py", model="sale.order")
+    assert out["error"] == "ambiguous_request"
+
+
+async def test_os_source_clips_a_long_read_and_says_how_to_narrow_it(wired):
+    wired.session.source_payload = {
+        "path": "big/file.py", "total_lines": 9000, "first": 1, "last": 9000,
+        "text": "x" * 40_000,
+    }
+    out = await server.os_source(path="big/file.py")
+    assert len(out["text"]) <= server.MAX_SOURCE
+    assert out["truncated"] is True
+    assert "first" in out["recovery"] and "last" in out["recovery"]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"path": "sale/models/sale_order.py"},
+        {"path": "sale/models/sale_order.py", "first": 10},
+        {"path": "sale/models/sale_order.py", "last": 40},
+        {"path": "sale/models/sale_order.py", "first": 10, "last": 40},
+        {"model": "sale.order"},
+        {"model": "sale.order", "method": "action_confirm"},
+    ],
+)
+def test_the_source_snippet_is_python_in_every_form(kwargs):
+    """A mocked session never runs the snippet, so a snippet that is not even
+    Python passes every other test here. It did: `json.dumps(None)` put a
+    JavaScript `null` in the source, and only a live container noticed."""
+    code = server._source_snippet(
+        kwargs.get("path"), kwargs.get("model"), kwargs.get("method"),
+        kwargs.get("first"), kwargs.get("last"),
+    )
+    compile(code, "<snippet>", "exec")
+    assert "null" not in code
+
+
+def test_the_source_snippet_actually_reads_with_stubs(monkeypatch, tmp_path):
+    """Run it for real against a stub `odoo.tools` — the cheapest thing that
+    exercises the code path a mocked session leaves untouched."""
+    import sys
+    import types
+
+    sample = tmp_path / "thing.py"
+    sample.write_text("\n".join(f"line {n}" for n in range(1, 51)), encoding="utf-8")
+
+    tools = types.ModuleType("odoo.tools")
+    tools.file_open = lambda path, *a, **kw: open(sample, encoding="utf-8")  # noqa: SIM115
+    # file_path resolves a module-relative path; here everything resolves to
+    # the one sample file, so the read branch is what runs.
+    tools.file_path = lambda path, *a, **kw: str(sample)
+    odoo = types.ModuleType("odoo")
+    odoo.tools = tools
+    monkeypatch.setitem(sys.modules, "odoo", odoo)
+    monkeypatch.setitem(sys.modules, "odoo.tools", tools)
+
+    def run(**kwargs):
+        code = server._source_snippet(
+            kwargs.get("path"), kwargs.get("model"), kwargs.get("method"),
+            kwargs.get("first"), kwargs.get("last"),
+        )
+        namespace: dict = {}
+        tree = ast.parse(code)
+        tail = ast.Expression(tree.body.pop().value)
+        ast.fix_missing_locations(tail)
+        exec(compile(tree, "<snippet>", "exec"), namespace)  # noqa: S102
+        out = json.loads(eval(compile(tail, "<snippet>", "eval"), namespace))
+        assert "_os_read" not in namespace, "the read must leave nothing behind"
+
+        return out
+
+    whole = run(path="module/thing.py")
+    assert whole["total_lines"] == 50
+    assert whole["first"] == 1 and whole["last"] == 50
+    assert whole["text"].startswith("line 1\n")
+    assert whole["text"].rstrip().endswith("line 50")
+
+    ranged = run(path="module/thing.py", first=10, last=12)
+    assert ranged["text"] == "line 10\nline 11\nline 12"
+
+    open_ended = run(path="module/thing.py", first=48)
+    assert open_ended["last"] == 50
+
+    past_the_end = run(path="module/thing.py", first=45, last=9999)
+    assert past_the_end["last"] == 50, "clamped to what the file has"
+
+
+def test_a_method_read_lists_only_the_modules_that_define_it():
+    """On account.move.action_post the MRO is 52 classes and exactly three of
+    them define the method. Listing all 52 answers a question nobody asked."""
+    code = server._source_snippet(None, "account.move", "action_post", None, None)
+    assert "__dict__" in code, "definers, not everything in the MRO"
+    assert "for klass in cls.__mro__" in code
+
+
+async def test_a_method_read_can_be_pinned_to_one_module_in_the_chain(wired):
+    session = wired.session
+    session.source_payload = {
+        "model": "account.move", "method": "action_post", "module": "sale",
+        "file": "/opt/odoo/addons/sale/models/account_move.py", "line": 83,
+        "defined_in": "odoo.addons.sale.models.account_move",
+        "overrides": [{"module": "integration", "line": 43},
+                      {"module": "sale", "line": 83},
+                      {"module": "account", "line": 6179}],
+        "text": "    def action_post(self):\n        return super().action_post()\n",
+    }
+    out = await server.os_source(
+        model="account.move", method="action_post", module="sale"
+    )
+    assert out["line"] == 83
+    assert out["defined_in"].endswith("sale.models.account_move")
+    sent = [call for call in session.calls if call[0] == "execute"][-1][1]
+    assert "'sale'" in sent or '"sale"' in sent
+
+
+async def test_a_module_without_the_method_refuses_with_the_chain(wired):
+    wired.session.source_payload = {
+        "error": "not_in_that_module",
+        "model": "account.move", "method": "action_post", "module": "stock",
+        "overrides": [{"module": "integration", "line": 43},
+                      {"module": "account", "line": 6179}],
+    }
+    out = await server.os_source(model="account.move", method="action_post", module="stock")
+    assert out["error"] == "not_in_that_module"
+    assert [link["module"] for link in out["overrides"]] == ["integration", "account"]
+
+
+async def test_pinning_a_module_needs_a_method(wired):
+    out = await server.os_source(model="account.move", module="sale")
+    assert out["error"] == "module_without_method"
+
+
+async def test_os_source_of_a_directory_lists_what_is_in_it(wired):
+    """The question before "read me line 363" is "what files are there".
+    Answering it in the same tool keeps that from being a shell command too."""
+    wired.session.source_payload = {
+        "path": "integration_shopify",
+        "directory": True,
+        "entries": [
+            {"path": "integration_shopify/__manifest__.py", "lines": 42},
+            {"path": "integration_shopify/models/external/external_payout.py", "lines": 1080},
+            {"path": "integration_shopify/data/ir_config_parameter_data.xml", "lines": 17},
+        ],
+        "files": 3,
+    }
+    out = await server.os_source(path="integration_shopify")
+    assert out["directory"] is True
+    assert out["files"] == 3
+    assert any(e["path"].endswith("external_payout.py") for e in out["entries"])
+    sent = [call for call in wired.session.calls if call[0] == "execute"][-1][1]
+    assert "isdir" in sent, "one call answers for a file or a directory"
+    assert "walk" in sent
+
+
+def test_a_module_tree_is_confined_the_way_a_file_read_is():
+    """A listing must not become the way out of the addons paths."""
+    code = server._source_snippet("integration_shopify", None, None, None, None)
+    assert "file_path" in code, "Odoo resolves the module directory, not us"
+    assert "os.walk" in code
+
+
+def test_a_listing_returns_paths_you_can_ask_for():
+    """A subdirectory listed paths relative to its own parent — `external/x.py`
+    — which is not something os_source can be called with. Every entry has to
+    be module-relative, the way the caller writes them."""
+    code = server._source_snippet("integration_shopify/models/external", None, None,
+                                  None, None)
+    assert "__manifest__.py" in code, "the module root is where a path is rooted"

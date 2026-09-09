@@ -184,6 +184,7 @@ hint always explains why a key is inert.
 | **Grant access** | See Ownership, above |
 | **Close** | Graceful: the bootstrap leaves its loop, Odoo rolls back and closes the cursor, the process exits. If it hasn't exited after ten seconds — a long command can hold it open — the daemon escalates to a kill on its own |
 | **Kill** | `SIGKILL` immediately, no waiting, no Odoo teardown. Postgres rolls back the transaction on its own. Journalled as `killed`, so an ordinary close is never confused with one that had to be forced |
+| Either, on a session the daemon no longer has | Removes the tab. `session_gone` is the state Close was asking for, not a failure — and a daemon restart puts every open tab in that state at once |
 | **Interrupt** | Enabled while `busy`. Sends `SIGINT` into the container; the command ends as `KeyboardInterrupt` and the session stays alive |
 | **Rollback** | Discards the open transaction, invalidates the cache, leaves a marker in the feed |
 | **Commit** | The only key that writes anything. Confirms first, naming the database |

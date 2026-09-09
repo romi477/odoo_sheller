@@ -48,6 +48,7 @@ no way for an agent to grant itself write access.
 | `os_close_session` | `session_id=None` | ends the session |
 | `os_history` | `session_id`, `limit=20` | recent commands and results, rebuilt from the journal |
 | `os_journal` | `session_id`, `fmt="markdown"` | the full transcript |
+| `os_source` | `path`/`model`, `method=None`, `module=None`, `first=None`, `last=None`, `session_id=None` | Odoo source from inside the instance: a module's file tree, a file's line range, or the method that actually runs plus the chain of modules overriding it |
 | `os_help` | `topic=None` | the parts of this server's instructions the host did not deliver; no topic lists them (read-only, no session) |
 
 `session_id` defaults to the one session the server currently holds a key

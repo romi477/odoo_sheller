@@ -1983,3 +1983,27 @@ def test_every_spinner_turns_white():
     assert refresh is not None
     assert "color: oklch(1 0 0)" in refresh.group(1)
     assert "var(--amber)" not in refresh.group(1)
+
+
+def test_closing_a_session_the_daemon_no_longer_has_removes_the_tab(app_js):
+    """A daemon restart takes every session with it. The tabs stayed, Close
+    answered 404 and alerted, Kill answered 404 and alerted — a card that
+    could not be dismissed by any button on it."""
+    closer = re.search(r"async function closeSession\(.*?\n\}", app_js, re.DOTALL)
+    assert closer is not None
+    body = closer.group(0)
+    assert "session_gone" in body, "the one refusal that means the goal is reached"
+    # And it must take the same path as a successful close, not the alert.
+    assert "forgetSession(" in body
+    forget = re.search(r"function forgetSession\(.*?\n\}", app_js, re.DOTALL)
+    assert forget is not None
+    assert "state.sessions.delete(" in forget.group(0)
+    assert "forgetKey(" in forget.group(0)
+
+
+def test_a_daemon_that_lost_its_sessions_does_not_leave_ghost_tabs(app_js):
+    """Reattach is what runs after a restart; it must prune as well as adopt."""
+    reattach = re.search(r"async function reattachSessions\(.*?\n\}", app_js, re.DOTALL)
+    assert reattach is not None
+    body = reattach.group(0)
+    assert "forgetSession(" in body, "sessions the daemon does not list are gone"

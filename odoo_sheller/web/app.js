@@ -2046,24 +2046,41 @@ async function closeSession(id, force, options = {}) {
       }
       await request(send);
     }
-    record.socket?.close();
-    dropTestingTimer(record);
-    state.sessions.delete(id);
-    forgetKey(id);
-    forgetCloseKey(id);
-    if (state.activeSession === id) {
-      state.activeSession = state.sessions.keys().next().value || null;
-    }
-    renderTargets();
-    renderSessions();
-    if (!state.sessions.size) {
-      showScreen('connect');
-    }
+    forgetSession(id);
   } catch (error) {
+    // A session the daemon no longer has is the state Close was asking for.
+    // It used to alert instead, which left a card that no button on it could
+    // dismiss — Close said 404, Kill said 404, and the tab stayed until the
+    // page was reloaded. A daemon restart puts every tab in that state at
+    // once, so this is the ordinary case, not the exotic one.
+    if (error.detail?.error === 'session_gone') {
+      forgetSession(id);
+
+      return;
+    }
     record.closing = false;
     record.closingForce = false;
     renderSessions();
     alert(`${force ? 'Force kill' : 'Close'} failed: ${error.message}`);
+  }
+}
+
+function forgetSession(id) {
+  const record = state.sessions.get(id);
+  record?.socket?.close();
+  if (record) {
+    dropTestingTimer(record);
+  }
+  state.sessions.delete(id);
+  forgetKey(id);
+  forgetCloseKey(id);
+  if (state.activeSession === id) {
+    state.activeSession = state.sessions.keys().next().value || null;
+  }
+  renderTargets();
+  renderSessions();
+  if (!state.sessions.size) {
+    showScreen('connect');
   }
 }
 
@@ -2758,6 +2775,11 @@ function connectRegistrySocket() {
 async function reattachSessions() {
   try {
     const sessions = await request(() => api.get('/api/sessions'));
+    // What the daemon does not list, it does not have: a restart takes every
+    // session with it, and a tab for one of those can neither be typed into
+    // nor closed. Drop them rather than leave them to be clicked at.
+    const live = new Set(sessions.map((info) => info.id));
+    [...state.sessions.keys()].filter((id) => !live.has(id)).forEach((id) => forgetSession(id));
     sessions.forEach((info) => attachSession(info, true));
     await Promise.all(sessions.map((info) => loadSessionHistory(info.id)));
   } catch (_error) {

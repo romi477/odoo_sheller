@@ -477,6 +477,43 @@ including a credential or an API key — lands in the journal in plain text.
 See [security.md](security.md) for why this isn't "fixed" and what that means
 in practice.
 
+## Reading source from inside the instance
+
+An agent debugging Odoo needs to read code, and the shortcut is
+`docker exec <container> sed -n '363,470p' <path>`. One did exactly that
+after the guidance telling it not to had been written — twice over: the
+`code` topic sits behind an `os_help` call it had no reason to make for what
+looked like "read a file", and the topic's own wording said `file_open` was
+for files that are *not* Python, which is false and sent it to the shell.
+
+`os_source` closes the ergonomic gap that the wording alone could not:
+
+- `os_source(path=..., first=, last=)` reads a file through
+  `odoo.tools.file_open`, which is confined to the addons paths — a path
+  outside them, or one climbing out with `..`, raises `FileNotFoundError`
+  rather than reading. Absolute and module-relative paths both work, and the
+  range is 1-based inclusive, like `sed`.
+- `os_source(model=..., method=...)` reads through the *loaded registry*:
+  `text` is the implementation that actually runs, and `overrides` is the
+  chain of modules that define that method, in resolution order — first runs,
+  last is the base, and `super()` walks the rest. Only classes with the method
+  in their `__dict__` count: on `account.move.action_post` that is three
+  modules against fifty-two in the MRO, and listing all fifty-two answers a
+  question nobody asked. `module=` reads one link of the chain instead of the
+  winner. This is the answer a filesystem cannot give, and the reason the
+  shell shortcut is wrong rather than merely unsupported.
+- `os_source(path=<a directory>)` lists every file under it with its line
+  count, `__pycache__` and bytecode dropped. "What is in this module" is the
+  question that precedes "read me line 363", and leaving it to the shell is
+  what makes the shell the habit.
+
+The snippet it runs is one function whose imports and locals stay inside it,
+and which pops its own name from the session before doing anything — so a
+read that raises leaves the workspace as clean as one that succeeds. It
+returns the payload as a JSON string rather than printing it: this server's
+stdout carries JSON-RPC, and the test that forbids `print(` anywhere in the
+module is the reason the habit never starts.
+
 ## The instruction budget
 
 A host delivers only the first **2048 characters** of an MCP server's
