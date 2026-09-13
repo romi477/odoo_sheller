@@ -2,6 +2,7 @@
 
 mod daemon;
 mod docker;
+mod mcp;
 
 use std::process::Child;
 use std::sync::Mutex;
@@ -118,13 +119,13 @@ fn start_daemon(app: &AppHandle) -> Result<(), String> {
         PortState::OurDaemon => Ok(()),
         PortState::Occupied => Err(occupied_message()),
         PortState::Free => {
-            let root = daemon::repo_root().ok_or_else(|| {
-                "could not find the odoo-sheller repository (no pyproject.toml above \
-                 this binary). Set ODOO_SHELLER_ROOT to the checkout."
-                    .to_string()
-            })?;
+            let resource = app.path().resource_dir().ok();
+            let kind = daemon::resolve_daemon(
+                resource.as_deref(),
+                daemon::repo_root().as_deref(),
+            )?;
             let docker = docker::resolve_docker();
-            let child = daemon::spawn_daemon(root.as_path(), docker.as_deref())?;
+            let child = daemon::spawn_daemon(&kind, docker.as_deref())?;
             // Recorded before the wait, not after: a quit during startup has
             // to find this child, or it outlives the app that started it.
             let state = app.state::<Supervisor>();
@@ -204,6 +205,13 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         true,
         Some("CmdOrCtrl+Q"),
     )?;
+    let configure = MenuItem::with_id(
+        app,
+        "mcp-config",
+        "MCP Configuration…",
+        true,
+        None::<&str>,
+    )?;
     let app_menu = Submenu::with_items(
         app,
         "odoo-sheller",
@@ -211,6 +219,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         &[
             &PredefinedMenuItem::hide(app, None)?,
             &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &configure,
             &PredefinedMenuItem::separator(app)?,
             &quit,
         ],
@@ -250,6 +260,33 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+fn show_mcp_config(app: &AppHandle) {
+    let resource = app.path().resource_dir().ok();
+    let launch = match daemon::resolve_mcp(resource.as_deref(), daemon::repo_root().as_deref()) {
+        Ok(launch) => launch,
+        Err(message) => {
+            app.dialog()
+                .message(message)
+                .title("odoo-sheller")
+                .kind(MessageDialogKind::Error)
+                .blocking_show();
+            return;
+        }
+    };
+    let mut text = mcp::instructions(&launch);
+    // Copying is the whole convenience here, so a failure has to be visible:
+    // a dialog that claims the clipboard holds something it does not is worse
+    // than no clipboard at all.
+    if let Err(err) = mcp::copy_to_clipboard(&launch.snippet("mcpServers")) {
+        text.push_str(&format!("\n(clipboard unavailable: {err})"));
+    }
+    app.dialog()
+        .message(text)
+        .title("MCP Configuration")
+        .kind(MessageDialogKind::Info)
+        .blocking_show();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -268,6 +305,7 @@ pub fn run() {
             build_menu(&handle)?;
             app.on_menu_event(|app, event| match event.id().0.as_str() {
                 "quit" => app.exit(0),
+                "mcp-config" => show_mcp_config(app),
                 // A reload while the daemon is missing is a retry, not a
                 // navigation to a port with nothing behind it.
                 "reload" => {
@@ -297,6 +335,17 @@ pub fn run() {
             RunEvent::ExitRequested { api, .. } => {
                 if !should_allow_exit(app) {
                     api.prevent_exit();
+                }
+            }
+            // The last word, and not a duplicate of the branch above: a Quit
+            // Apple event — Dock, right-click, Quit — tears the app down
+            // without ever raising ExitRequested, and the daemon we started
+            // was left holding 8765 with launchd as its parent. `stop` takes
+            // the child out of the handle, so the ordinary path runs it once
+            // and this finds nothing.
+            RunEvent::Exit => {
+                if let Some(state) = app.try_state::<Supervisor>() {
+                    state.stop();
                 }
             }
             #[cfg(target_os = "macos")]

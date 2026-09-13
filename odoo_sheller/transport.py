@@ -19,10 +19,10 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+from odoo_sheller.paths import bootstrap_path
 from odoo_sheller.protocol import FRAME_LINE_LIMIT
 
 HEREDOC_MARKER = "OSBOOT"
-_BOOTSTRAP_PATH = Path(__file__).with_name("bootstrap.py")
 
 DOCKER = "docker"
 ODOOSH = "odoosh"
@@ -107,7 +107,7 @@ class Target:
 
 def bootstrap_source() -> str:
 
-    return _BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    return bootstrap_path().read_text(encoding="utf-8")
 
 
 def _script(target: Target, source: str) -> str:

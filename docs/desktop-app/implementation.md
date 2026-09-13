@@ -35,10 +35,7 @@ readable at a glance.
 
 | # | Question | Why it matters | Blocks |
 |---|---|---|---|
-| 1 | onefile or onedir for the daemon? | onefile is one artifact and plugs straight into `externalBin`, but unpacks on every launch and rubs against the hardened runtime. onedir starts faster and signs cleanly, but is not a sidecar — it ships under `resources/` and is spawned by absolute path. | Stage 4 |
 | 3 | Terminal in the first release, or after it? | It is the only piece that widens the attack surface, and it is independent of everything else. | Stage 6 |
-| 5 | Where does the MCP binary live: a copy in Application Support, or a path inside the bundle? | A copy survives moving the `.app` but goes stale on update; a bundle path updates for free but breaks if the app is moved. | Stage 5 |
-| 8 | How does the packaged daemon run **without the window**? | The daemon is needed headless: an agent over MCP and a browser tab on 8765 are both ordinary clients of it, and neither wants a window. Today a shell function covers this by running the checkout's `odoo-sheller` script. After stage 4 a user with no checkout has no way to do it at all — the app *is* the window. Three answers: document a stable path to the bundled daemon and let a shell function point at it; give the app a windowless mode (a menu-bar item holding the daemon), which is a new surface and not in the design; or leave headless use to people with a checkout, and say so. | Stage 4 |
 
 ## Decided
 
@@ -50,6 +47,10 @@ readable at a glance.
 | 7 | Does the app refuse a daemon older than itself? | **No version gate.** All it needs from an attached daemon is `/web`, which every version serves. The version from `/health` is recorded, not enforced — see [architecture.md](architecture.md#the-port-is-fixed-at-8765). |
 | 9 | Paid Developer ID, or ad-hoc? | **Ad-hoc** (`signingIdentity: "-"`). There is no Apple Developer Program membership. Gatekeeper refuses a downloaded copy until the person clears it in System Settings → Privacy & Security → Open Anyway. |
 | 10 | Apple Silicon only, or universal? | **arm64 only** for now. CI builds `aarch64-apple-darwin`; an Intel Mac gets nothing. Revisit when someone actually has one — a universal build also needs universal2 wheels for `pydantic-core`, `uvloop` and `httptools`. |
+| 1 | onefile or onedir for the daemon? | **onedir.** onefile unpacks on every launch and fights the hardened runtime. onedir is not a Tauri sidecar (`externalBin` wants one file), so it ships under `Contents/Resources/` and is spawned by absolute path. |
+| 5 | Where does the MCP binary live? | **Inside the bundle**, next to the daemon. An update replaces it, and **MCP Configuration…** always shows the current path, so a copy in Application Support would only go stale. |
+| 11 | Does the app write agent config files? | **No, and not behind a confirmation.** It shows the entry and copies it to the clipboard; the person pastes it where they want it. Those files are the user's, they hold servers we know nothing about, `~/.claude.json` is live state a running Claude Code rewrites, and creating the rest invents configs for apps that are not installed. Nothing in the app opens them for writing. |
+| 8 | How does the packaged daemon run without the window? | **Document the stable path** and point a shell function at it. No menu-bar extra surface. |
 
 ## Work in this repository
 
@@ -68,15 +69,19 @@ as the rest of it: a test per change, `uv run python -m pytest`, `ruff` clean.
   stopping. Before this the daemon had no shutdown hook at all, which was
   survivable while it was stopped by hand and is not once quitting the app is
   how a working day ends.
-- **A frozen-binary smoke test**: build with PyInstaller, run the artifact, open
-  a session against a container, close it. This is the only thing that catches
-  `bootstrap.py` or `web/` not being bundled as data. It cannot live in the unit
-  suite (it needs Docker and a build); it belongs beside `tests/test_e2e.py`
-  with its own marker.
-- **Packaging metadata**: the `--add-data` list for `odoo_sheller/web` and
-  `odoo_sheller/bootstrap.py`, plus `--copy-metadata odoo-sheller`, kept in the
-  repository rather than in someone's build script, so it is reviewed when
-  those paths change.
+- **A frozen-binary smoke test** — *done.* `uv run pytest tests/test_frozen.py -v -m frozen`
+  after `packaging/freeze.sh`. Builds are not in the unit suite; the marker
+  sits beside `e2e`. The daemon is started on an ephemeral port so a
+  developer's 8765 is left alone.
+- **Packaging metadata** — *done.* `packaging/bundle.py` holds `--add-data`
+  for `odoo_sheller/web` and `bootstrap.py`, plus `--copy-metadata odoo-sheller`
+  and `--collect-submodules uvicorn`. Invoked by `packaging/freeze.sh`, which
+  `tauri build` runs as `beforeBuildCommand`.
+- **`packaging/app.sh`** — *done.* `build`, `dmg`, `install`. The one step
+  worth a reviewed script is `install`: it deletes a directory tree. It quits
+  a running copy first, and refuses any destination whose
+  `CFBundleIdentifier` is not ours, so a typo in `APP_DEST` cannot take
+  something else with it.
 - **Console scripts** — *done.* `odoo-sheller` runs the daemon and
   `odoo-sheller-mcp` the agent server, so neither is spelled as a `python -m`
   invocation in a config file or a shell function. They are named after the
@@ -107,6 +112,14 @@ Two things that are easy to get wrong and are part of "done", not polish:
   the standard one, and a quit item built without an accelerator leaves ⌘Q
   inert — which quietly makes the confirm-before-quit path unreachable by the
   only route anyone uses.
+- **`ExitRequested` is not every way out.** A Quit Apple event — Dock,
+  right-click, Quit — tears the app down without raising it, and the daemon we
+  started was left holding 8765 with launchd for a parent. Stopping it in
+  `RunEvent::Exit` as well is what makes "quitting stops that process" true on
+  every path. The confirmation is not recoverable there: on that path macOS
+  never offers us the chance to refuse, so ⌘Q and the menu item ask about live
+  sessions and Dock → Quit does not. Worth knowing before someone reads the
+  list below as unconditional.
 
 Done when:
 
@@ -150,10 +163,11 @@ warn on the first launch of a download. That is accepted.
 
 The bundle config is in the repository:
 
-- `odoo-sheller-app/src-tauri/Entitlements.plist` — JIT for the WebView, client
-  network for `127.0.0.1:8765`. Not sandboxed. The PyInstaller entitlements
-  (`disable-library-validation`, sometimes `allow-dyld-environment-variables`)
-  wait for Stage 4.
+- `odoo-sheller-app/src-tauri/Entitlements.plist` — not sandboxed and empty.
+  Not even `disable-library-validation`: the frozen daemon is a separate
+  process with its own PyInstaller ad-hoc signature and does not inherit this
+  app's hardened runtime. Verified by signing a bundle with an empty plist and
+  watching it spawn the daemon, serve `/health` and probe containers.
 - `tauri.conf.json > bundle > macOS` — `hardenedRuntime: true`, entitlements
   path, `signingIdentity: "-"`. The `-` is Tauri's ad-hoc identity
   ([docs](https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing)): it
@@ -169,8 +183,7 @@ The bundle config is in the repository:
   named `..._0.1.0_aarch64.dmg`.
 
 ```bash
-cd odoo-sheller-app
-cargo tauri build --bundles dmg
+packaging/app.sh dmg        # or: build, install
 ```
 
 The `.dmg` lands in
@@ -204,7 +217,7 @@ xattr -p com.apple.quarantine /Applications/odoo-sheller.app   # confirm it took
 
 Done when:
 
-- `cargo tauri build --bundles dmg` produces the artifact and
+- `packaging/app.sh dmg` produces the artifact and
   `codesign -dvvv` reports `flags=0x10002(adhoc,runtime)`.
 - `codesign -d --entitlements -` on the bundle prints an empty set.
 - A **quarantined** copy, on a machine that did not build it, opens after
@@ -214,12 +227,32 @@ Done when:
 
 ### Stage 4 — package the daemon
 
-PyInstaller per decision 1, `--add-data` for `web/` and `bootstrap.py`,
-`--copy-metadata odoo-sheller`, hidden imports for uvicorn. Sign the nested
-binary ad-hoc the same way as the empty app, then rebuild the `.dmg`. This is
-also where `tauri-plugin-shell` comes back if the daemon is shipped as a
-sidecar — it was removed after Stage 1 rather than left initialised and unused,
-since Stage 1 spawns with `std::process::Command`.
+PyInstaller onedir per decision 1. Specs in `packaging/`. Tauri copies the
+trees with map-syntax `bundle.resources` so they land at a stable path, not
+under `_up_`:
+
+```
+Contents/Resources/odoo-sheller/odoo-sheller
+Contents/Resources/odoo-sheller/_internal/
+Contents/Resources/odoo-sheller-mcp/odoo-sheller-mcp
+Contents/Resources/odoo-sheller-mcp/_internal/
+```
+
+That first executable is also the headless daemon (decision 8). Spawn order:
+bundled binary if present, else `uv run python -m odoo_sheller` from a
+checkout (`tauri dev`), else an error. No compile-time path. `std::process::Command`
+is enough; `tauri-plugin-shell` stays out — onedir is not a sidecar.
+
+Headless, with no window and no checkout:
+
+```bash
+/Applications/odoo-sheller.app/Contents/Resources/odoo-sheller/odoo-sheller
+```
+
+`SKIP_FREEZE=1` skips PyInstaller when both trees are already in
+`packaging/dist/`. For iteration on the Rust side only: nothing checks that
+those trees match the current Python, so a build made that way can ship
+yesterday's daemon without saying so. Release builds do not set it.
 
 Done when:
 
@@ -229,28 +262,37 @@ Done when:
 - `/web` serves the UI from the frozen daemon, including `/vendor`.
 - `GET /health` reports the real version, not `"unknown"` — that is what proves
   `--copy-metadata` took.
-- The bundled daemon's path inside the `.app` is written down in this document,
-  whatever decision 8 turns out to be. Both answers need it, and a path found by
-  poking around a bundle is a path that breaks on the next release.
-- The smoke test from "Work in this repository" runs in one command.
+- The bundled daemon's path inside the `.app` is the one written above.
+- `uv run pytest tests/test_frozen.py -v -m frozen` is the one-command smoke
+  test.
 
 ### Stage 5 — MCP integration
 
-Place the MCP binary per decision 5. A command in the **application menu** —
-not a button in the web UI, which is a remote origin with no Tauri IPC — that
-merges our entry into the agent configs: Claude Desktop
-(`~/Library/Application Support/Claude/claude_desktop_config.json`, `mcpServers`),
-Claude Code (`~/.claude.json`, or `.mcp.json` in a project), Cursor
-(`~/.cursor/mcp.json`), Zed (`settings.json`, `context_servers`, a different
-shape). Back up before writing; write atomically (temp file, rename). No secrets
-in those files: `admin.key` stays in `~/.odoo-sheller/`.
+The MCP binary lives at `Contents/Resources/odoo-sheller-mcp/odoo-sheller-mcp`
+(decision 5). **MCP Configuration…** in the application menu — not a button in
+the web UI, which is a remote origin with no Tauri IPC — renders the entry
+with that path filled in, in both shapes (`mcpServers` for Claude Desktop,
+Claude Code and Cursor; `context_servers` for Zed), lists where those files
+live, and puts the `mcpServers` form on the clipboard. Under `tauri dev` the
+command is `uv --directory <checkout> run python -m odoo_sheller.mcp` instead.
+
+**It writes nothing** (decision 11). No merge, no backup, no atomic rename —
+there is no write path in the code at all. Agent configs hold servers we know
+nothing about, `~/.claude.json` is live state that a running Claude Code
+rewrites under us, and creating the others would invent configs for apps that
+are not installed. No secrets either way: `admin.key` stays in
+`~/.odoo-sheller/`.
 
 Done when:
 
-- Running the command twice leaves one entry, not two, and leaves every other
-  server in the file untouched.
-- A config with a syntax error is reported, not overwritten.
-- After the merge, an agent with no prior setup can call `os_list_containers`.
+- The menu item shows the bundled binary's absolute path, and the same item
+  under `tauri dev` shows the `uv` form.
+- The snippet pasted into a config with other servers in it leaves them alone
+  — because pasting is all that happens.
+- After pasting, an agent with no prior setup can call `os_list_containers`.
+- `grep -rn "fs::write\|fs::rename\|OpenOptions" odoo-sheller-app/src-tauri/src/mcp.rs`
+  finds nothing. That is the invariant, and it is cheaper to check than to
+  argue about.
 
 ### Stage 6 — the terminal
 

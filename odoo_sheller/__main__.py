@@ -38,14 +38,30 @@ def main() -> None:
     print(f"ui:   http://{args.host}:{args.port}/web")
     print(f"docs: http://{args.host}:{args.port}/docs")
 
+    # The import-string form is for ``--reload`` only. A freeze has no source
+    # tree to watch, and uvicorn's string import is how hidden imports get
+    # missed; passing the app object is what a packaged binary can actually
+    # start.
+    if args.reload:
+        uvicorn.run(
+            "odoo_sheller.api:create_app",
+            factory=True,
+            host=args.host,
+            port=args.port,
+            reload=True,
+            reload_dirs=[str(Path(__file__).parent)],
+            reload_excludes=["web/*"],
+            timeout_graceful_shutdown=5,
+        )
+
+        return
+
+    from odoo_sheller.api import create_app
+
     uvicorn.run(
-        "odoo_sheller.api:create_app",
-        factory=True,
+        create_app(),
         host=args.host,
         port=args.port,
-        reload=args.reload,
-        reload_dirs=[str(Path(__file__).parent)] if args.reload else None,
-        reload_excludes=["web/*"] if args.reload else None,
         timeout_graceful_shutdown=5,
     )
 

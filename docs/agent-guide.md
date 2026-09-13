@@ -280,7 +280,9 @@ back a mid-transaction cursor before it tests.
 ## Running under Claude Desktop
 
 Claude Desktop starts the server itself, from
-`~/Library/Application Support/Claude/claude_desktop_config.json`:
+`~/Library/Application Support/Claude/claude_desktop_config.json`.
+**MCP Configuration…** in the application menu shows that entry with the right path filled in and copies it to the clipboard. It never writes to an agent's config: those files are yours, they hold other servers, and one of them is live state a running Claude Code rewrites. Zed wants the same entry under `context_servers`. From a checkout,
+the same shape with `uv`:
 
 ```json
 {

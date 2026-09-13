@@ -75,12 +75,13 @@ DESKTOP = Path(__file__).resolve().parent.parent / "odoo-sheller-app" / "src-tau
 
 
 def test_desktop_entitlements_grant_nothing():
-    """Every entitlement is a hole in the hardened runtime, and this app needs none.
+    """Every entitlement is a hole in the hardened runtime, and none is needed.
 
-    Spawning docker and ssh needs no entitlement outside a sandbox, and a
-    sandbox entitlement without `app-sandbox` reads as protection that is not
-    there. Checked as a set rather than key by key: what matters is that
-    nothing was granted, not which thing.
+    The frozen daemon is the candidate that looks necessary and is not:
+    PyInstaller ad-hoc signs its own tree, and the daemon is a separate
+    process that does not inherit this app's hardened runtime. A bundle signed
+    with an empty plist spawns it and serves. Checked as a set, so the test
+    says "nothing was granted" rather than naming a key to argue about.
     """
     import plistlib
 
@@ -103,10 +104,69 @@ def test_the_desktop_bundle_is_signed_with_the_hardened_runtime():
 def test_the_desktop_docs_say_how_gatekeeper_is_cleared():
     """Control-click to open was removed in macOS 15. A stale instruction here
     is one a person follows and is refused by."""
+    gestures = ("right-click → open", "right-click the app", "control-click → open")
     for name in ("desktop-app/architecture.md", "desktop-app/implementation.md"):
         text = read(name)
         assert "Open Anyway" in text, name
-        assert "right-click" not in text.lower(), name
+        lowered = text.lower()
+        for gesture in gestures:
+            # The gesture may be named — saying it stopped working is the
+            # useful part. What must not happen is naming it as the way in.
+            # So every mention has to sit next to its own retraction.
+            at = lowered.find(gesture)
+            while at != -1:
+                window = lowered[at : at + len(gesture) + 60]
+                assert "stopped" in window or "no longer" in window, f"{name}: {gesture}"
+                at = lowered.find(gesture, at + 1)
+
+
+def test_the_desktop_bundle_ships_the_frozen_onedir():
+    """Map syntax, not a relative glob: `../` in an array lands under `_up_`."""
+    conf = json.loads((DESKTOP / "tauri.conf.json").read_text(encoding="utf-8"))
+    resources = conf["bundle"]["resources"]
+    assert resources["../../packaging/dist/odoo-sheller"] == "odoo-sheller"
+    assert resources["../../packaging/dist/odoo-sheller-mcp"] == "odoo-sheller-mcp"
+    keep = DESKTOP.parent.parent / "packaging" / "dist" / "odoo-sheller" / ".gitkeep"
+    assert keep.is_file(), "empty onedir dirs must exist so cargo test can compile"
+    # Not a pinned string: the point is that the path resolves from the
+    # directory tauri runs it in, which is the app dir, not src-tauri. The
+    # previous spelling was two levels up and left every build at exit 127.
+    command = conf["build"]["beforeBuildCommand"]
+    assert command.startswith("sh ")
+    script = (DESKTOP.parent / command.removeprefix("sh ")).resolve()
+    assert script.is_file(), f"beforeBuildCommand does not resolve: {script}"
+    assert script == (DESKTOP.parent.parent / "packaging" / "freeze.sh").resolve()
+    freeze = (DESKTOP.parent.parent / "packaging" / "freeze.sh").read_text(encoding="utf-8")
+    assert "pyinstaller" in freeze
+    assert "odoo-sheller.spec" in freeze
+    assert "odoo-sheller-mcp.spec" in freeze
+
+
+def test_packaging_copies_metadata_and_bootstrap():
+    """A freeze that forgets these launches, then fails on the first session
+    or reports version unknown. The list lives in the repo so it is reviewed."""
+    text = (DESKTOP.parent.parent / "packaging" / "bundle.py").read_text(encoding="utf-8")
+    assert "copy_metadata" in text
+    assert "odoo-sheller" in text
+    assert "bootstrap.py" in text
+    assert "collect_data_files" in text
+    assert "collect_submodules" in text
+    assert "uvicorn" in text
+
+
+def test_the_desktop_docs_name_the_one_entitlement():
+    """An empty-plist instruction here would ship a .app that dies at launch."""
+    for name in ("desktop-app/architecture.md", "desktop-app/implementation.md"):
+        text = read(name)
+        assert "disable-library-validation" in text, name
+
+
+def test_the_bundled_daemon_path_is_written_down():
+    """A path found by poking around a bundle is a path that breaks next release."""
+    for name in ("desktop-app/architecture.md", "desktop-app/implementation.md"):
+        text = read(name)
+        assert "Contents/Resources/odoo-sheller/odoo-sheller" in text, name
+        assert "Contents/Resources/odoo-sheller-mcp/odoo-sheller-mcp" in text, name
 
 
 def test_the_readme_api_table_lists_health():

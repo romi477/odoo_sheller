@@ -8,3 +8,10 @@ docs_/
 
 *.egg-info/
 .pytest_cache/
+
+packaging/build/
+packaging/dist/**
+!packaging/dist/odoo-sheller/
+!packaging/dist/odoo-sheller/.gitkeep
+!packaging/dist/odoo-sheller-mcp/
+!packaging/dist/odoo-sheller-mcp/.gitkeep

@@ -9,11 +9,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Desktop app
 
-- The empty app (no frozen daemon yet) ships as an ad-hoc signed `.dmg`,
-  Apple Silicon only: hardened runtime, no entitlements at all, no Apple
-  Developer account and no notarization. A downloaded copy is refused by
-  Gatekeeper until the person clears it in System Settings → Privacy &
-  Security → Open Anyway. The Mac App Store is out.
+- Frozen onedir trees of the daemon and the MCP server ship inside the
+  `.app` at `Contents/Resources/odoo-sheller/odoo-sheller` and
+  `Contents/Resources/odoo-sheller-mcp/odoo-sheller-mcp`. No Python, no
+  `uv`, no checkout. The first path is also how the daemon runs headless.
+  `GET /health` reports the real version because `--copy-metadata` is in
+  `packaging/bundle.py`. A smoke test (`pytest -m frozen`) is the check
+  that `bootstrap.py` and `web/` actually shipped.
+- **MCP Configuration…** in the application menu shows the entry to paste
+  into an agent's config — both shapes, `mcpServers` and Zed's
+  `context_servers` — with the bundled binary's path filled in, and copies
+  it to the clipboard. **It writes nothing.** Those files are the user's,
+  they hold servers this app knows nothing about, and `~/.claude.json` is
+  live state a running Claude Code rewrites. No secrets go in them either
+  way: `admin.key` stays in `~/.odoo-sheller/`.
+- Entitlements stay empty. The frozen daemon looked like a reason to open
+  `disable-library-validation` and is not one: PyInstaller ad-hoc signs its
+  own tree, and the daemon is a separate process that does not inherit the
+  app's hardened runtime. Still not sandboxed, still no JIT, still no App
+  Store.
+- Quitting stops the daemon on every path, not only ⌘Q. A Quit Apple event
+  (Dock → right-click → Quit) never raises `ExitRequested`, and the daemon
+  was left holding 8765 with launchd for a parent.
 - The bundle identifier is `com.odoo-sheller.desktop`. It was
   `com.odoo-sheller.app`, and `.app` is the bundle extension on macOS, which
   Tauri refuses to recommend. Anyone holding the earlier build has a second

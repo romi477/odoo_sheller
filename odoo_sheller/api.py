@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from odoo_sheller import discovery, journal
+from odoo_sheller.paths import web_dir
 from odoo_sheller.registry import Registry, load_admin_key
 from odoo_sheller.session import (
     CommitForbidden,
@@ -24,7 +25,7 @@ from odoo_sheller.session import (
     SessionState,
 )
 
-WEB = Path(__file__).with_name("web")
+WEB = web_dir()
 NO_STORE = {"Cache-Control": "no-store"}
 
 

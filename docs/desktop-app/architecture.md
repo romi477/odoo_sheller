@@ -47,45 +47,23 @@ daemon, and quitting the app ends every session it owns.
 odoo-sheller-app/
 ├── src-tauri/
 │   ├── src/lib.rs             ← commands, events, lifecycle
-│   ├── binaries/              ← sidecar: the daemon
-│   ├── resources/             ← the MCP binary, icons
+│   ├── src/daemon.rs          ← probe, spawn bundled onedir or uv+checkout
+│   ├── src/mcp.rs             ← merge agent configs
 │   ├── capabilities/          ← permissions (2.x replaced the 1.x allowlist)
 │   └── tauri.conf.json
-└── package.json               ← only if we ever bundle our own frontend
+├── src/                       ← splash only; the UI comes from the daemon
+packaging/                     ← PyInstaller onedir; copied into Resources/
 ```
 
 **Use the 2.x API.** Most examples on the web are Tauri 1.x and will not
-compile: `tauri::api::process` is gone, sidecars moved into the shell plugin,
-and `emit_all` became `emit` on the `Emitter` trait.
+compile. The daemon is an onedir tree under `Contents/Resources/`, spawned
+with `std::process::Command` by absolute path — not a sidecar.
+`externalBin` wants one file; onedir is not one file. `tauri-plugin-shell`
+is not used.
 
-```rust
-use tauri::Emitter;
-use tauri_plugin_shell::ShellExt;
-use tauri_plugin_shell::process::CommandEvent;
-
-let sidecar = app.shell().sidecar("odoo-sheller-daemon")?;
-let (mut rx, mut child) = sidecar.spawn()?;
-
-tauri::async_runtime::spawn(async move {
-    while let Some(event) = rx.recv().await {
-        if let CommandEvent::Stderr(bytes) = event {
-            app.emit("daemon-log", String::from_utf8_lossy(&bytes).to_string()).ok();
-        }
-    }
-});
-```
-
-Permissions live in `src-tauri/capabilities/*.json`:
-
-```json
-{
-  "permissions": [
-    "core:default",
-    { "identifier": "shell:allow-execute",
-      "allow": [{ "name": "binaries/odoo-sheller-daemon", "sidecar": true, "args": true }] }
-  ]
-}
-```
+Permissions live in `src-tauri/capabilities/*.json`. This app grants the
+core defaults and dialogs; spawning is `std::process::Command` in Rust, so
+there is no `shell:allow-execute` sidecar permission.
 
 ## The port is fixed at 8765
 
@@ -104,7 +82,8 @@ Startup policy, in `setup()`:
 3. **Something else holds the port** → show a clear error naming the port and
    start nothing. Silently moving to another port sends every agent to the
    wrong place.
-4. **Port free** → spawn the sidecar and poll until it answers.
+4. **Port free** → spawn the bundled daemon (or `uv` from a checkout) and
+   poll until it answers.
 
 If a dynamic port is ever genuinely needed, it is a separate piece of work:
 the chosen port has to be written into the `env` of every agent config entry
@@ -186,13 +165,12 @@ Two things in our package are read as **data**, not imported, and both fail
 silently if they are not bundled as such:
 
 1. **`odoo_sheller/bootstrap.py`** is read as text at runtime
-   (`transport.py`: `_BOOTSTRAP_PATH.read_text()`). In a onefile build the
-   package is unpacked into `_MEIPASS`, and the path must resolve there. If it
-   does not, the app starts fine and fails on the first attempt to open a
+   (`odoo_sheller.paths.bootstrap_path()`). In onedir, data lives under
+   `sys._MEIPASS` (`_internal/` beside the executable). If that path is
+   wrong, the app starts fine and fails on the first attempt to open a
    session — which a "does it launch" check will not catch.
 2. **`odoo_sheller/web`** (332 KB, of which 184 KB is the vendored editor) is
-   mounted from `Path(__file__).with_name("web")`. Without `--add-data`, `/web`
-   returns 404.
+   mounted from the same helper. Without `--add-data`, `/web` returns 404.
 3. **Our own dist-info.** `importlib.metadata.version("odoo-sheller")` raises
    `PackageNotFoundError` in a frozen build unless the metadata is bundled
    (`--copy-metadata odoo-sheller`). `/health` guards the call and answers
@@ -207,11 +185,11 @@ Also:
   `--collect-submodules uvicorn` and hidden imports.
 - Two binaries, very different weights: the daemon (FastAPI, uvicorn, pydantic)
   and the MCP server (`mcp[cli]` plus httpx2, a thin client).
-- **onefile vs onedir** is an open question. onefile unpacks into
-  `/var/folders` on every launch — slower, and more friction under the hardened
-  runtime. onedir signs more cleanly, but `externalBin` expects a single file,
-  so onedir means shipping under `resources/` and spawning by absolute path
-  rather than using the sidecar mechanism.
+- **onedir**, not onefile. onefile unpacks into `/var/folders` on every
+  launch and fights the hardened runtime. The trees land at
+  `Contents/Resources/odoo-sheller/odoo-sheller` and
+  `Contents/Resources/odoo-sheller-mcp/odoo-sheller-mcp`. The first of those
+  is also the headless daemon: no window, no checkout.
 - Expect 40–70 MB of Python payload. The Tauri shell being a few megabytes does
   not change that.
 
@@ -306,18 +284,17 @@ Silicon a signature of some kind is required at all.
 
 - **Hardened runtime stays on** (`codesign --options runtime`). It does not
   need a paid certificate.
-- PyInstaller almost always needs
-  `com.apple.security.cs.disable-library-validation`, or Python cannot load
-  `.so` files signed with a different key. Sometimes
-  `com.apple.security.cs.allow-dyld-environment-variables` as well. Verify on a
-  real build rather than assuming. Stage 4, not now.
 - **Do not use `--deep`** — Apple deprecated it and it signs less than it
   appears to. Sign nested binaries first, then the bundle; Tauri already
   does that.
-- **Entitlements are empty, and that is the point.** Every one of them is a
-  hole in the hardened runtime. Spawning `docker`, `ssh` and later a shell
-  needs none outside a sandbox; `com.apple.security.network.client` does
-  nothing without `app-sandbox`; and WKWebView's JIT runs in Apple's own
+- **Entitlements are empty, and stay empty.** The frozen daemon looks like
+  the obvious reason to open `disable-library-validation`, and it is not one:
+  PyInstaller ad-hoc signs its own tree, and the daemon is a separate process
+  that does not inherit this app's hardened runtime. A bundle signed with an
+  empty plist spawns it, serves `/health` and probes containers. Spawning
+  `docker`, `ssh` and later a shell needs no entitlement
+  outside a sandbox; `com.apple.security.network.client` does nothing without
+  `app-sandbox`; and WKWebView's JIT runs in Apple's own
   `com.apple.WebKit.WebContent.xpc`, which carries `allow-jit` under Apple's
   signature, so granting it to our process would buy nothing.
 - **The Mac App Store is out.** The app must spawn `docker`, `ssh` and an
@@ -349,7 +326,7 @@ file has, which is more than was asked for.
   line and the documentation all look there (`admin.key`, journals, SSH control
   sockets). Moving it to Application Support would split the world in two.
 - **Daemon logs** belong in `~/Library/Logs/odoo-sheller/`, written by Rust from
-  the sidecar's stdout and stderr — that is where macOS and Console.app expect
+  the daemon child's stdout and stderr — that is where macOS and Console.app expect
   them.
 - **Journals are unmasked** and can contain credentials read out of a database.
   That is documented and accepted for the web tool; an app should add a "Reveal
@@ -384,9 +361,9 @@ odoo-sheller.app  (ad-hoc signed, hardened runtime, not notarized)
 │
 ├── Rust core
 │   ├── startup: probe 8765 → attach to a foreign daemon OR spawn our own
-│   ├── sidecar: the daemon (127.0.0.1:8765, logs to ~/Library/Logs)
+│   ├── spawn: Contents/Resources/odoo-sheller/odoo-sheller
 │   ├── PTY: HashMap<session_id, PtyPair> — one $SHELL per terminal tab
-│   ├── once: place the MCP binary, merge agent configs
+│   ├── menu: MCP Configuration — show the entry to paste, write nothing
 │   └── exit: confirm with live sessions; kill our daemon, never a foreign one
 │
 ├── WKWebView

@@ -250,7 +250,8 @@ Full tool list and defaults: [docs/agent-guide.md](docs/agent-guide.md). Short
 version:
 
 `odoo_sheller/mcp.py` exposes the same API to an agent over stdio. Claude Desktop
-starts it from `~/Library/Application Support/Claude/claude_desktop_config.json`:
+starts it from `~/Library/Application Support/Claude/claude_desktop_config.json`.
+**MCP Configuration…** in the application menu shows that entry with the right path filled in and copies it to the clipboard. It never writes to an agent's config: those files are yours, they hold other servers, and one of them is live state a running Claude Code rewrites. From a checkout:
 
 ```json
 {
@@ -380,17 +381,21 @@ dies.
 
 ```bash
 # Unit tests (no Docker required)
-uv run pytest -m "not e2e"
+uv run pytest -m "not e2e and not frozen"
 
 # Live Odoo 19 container
 uv run pytest tests/test_e2e.py -v -m e2e
+
+# Frozen daemon (after packaging/freeze.sh)
+uv run pytest tests/test_frozen.py -v -m frozen
 ```
 
 Without uv, use `.venv/bin/pytest` the same way.
 
-A bare `pytest` also collects the e2e tests. They need a running target
-(defaults below). Creating and deleting records there is expected; tests use
-the prefix `pt-e2e-` and clean up after themselves.
+A bare `pytest` also collects the e2e and frozen tests. They need a running
+target (defaults below). Creating and deleting records there is expected;
+tests use the prefix `pt-e2e-` and clean up after themselves. Frozen tests
+also need `packaging/dist/odoo-sheller/odoo-sheller` (or `ODOO_SHELLER_FROZEN`).
 
 | Variable | Default |
 |---|---|

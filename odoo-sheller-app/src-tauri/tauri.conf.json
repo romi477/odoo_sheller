@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.odoo-sheller.desktop",
   "build": {
-    "frontendDist": "../src"
+    "frontendDist": "../src",
+    "beforeBuildCommand": "sh ../packaging/freeze.sh"
   },
   "app": {
     "withGlobalTauri": true,
@@ -38,6 +39,10 @@
       "minimumSystemVersion": "11.0",
       "entitlements": "./Entitlements.plist",
       "signingIdentity": "-"
+    },
+    "resources": {
+      "../../packaging/dist/odoo-sheller": "odoo-sheller",
+      "../../packaging/dist/odoo-sheller-mcp": "odoo-sheller-mcp"
     }
   }
 }

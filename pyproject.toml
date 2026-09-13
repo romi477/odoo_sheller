@@ -19,7 +19,7 @@ odoo-sheller-mcp = "odoo_sheller.mcp:main"
 [project.optional-dependencies]
 # httpx2, not httpx: starlette>=1.0 imports httpx2 in starlette.testclient and
 # warns that httpx is deprecated there.
-dev = ["pytest>=8", "pytest-asyncio>=0.24", "httpx2>=2", "ruff>=0.6"]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "httpx2>=2", "ruff>=0.6", "pyinstaller>=6.11"]
 
 # uv sync installs the `dev` group by default. Keep in sync with the extra above
 # so `pip install -e ".[dev]"` still works.
@@ -29,6 +29,7 @@ dev = [
     "pytest-asyncio>=0.24",
     "httpx2>=2",
     "ruff>=0.6",
+    "pyinstaller>=6.11",
 ]
 
 [build-system]
@@ -40,7 +41,10 @@ include = ["odoo_sheller*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-markers = ["e2e: needs a running Odoo 19 container"]
+markers = [
+    "e2e: needs a running Odoo 19 container",
+    "frozen: needs a PyInstaller build and a running Odoo container",
+]
 
 [tool.ruff]
 line-length = 100

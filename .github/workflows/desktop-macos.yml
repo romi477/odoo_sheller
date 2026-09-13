@@ -45,10 +45,16 @@ jobs:
           PY
 
       # A draft release is still something people download. The suite is
-      # thirteen tests and seconds long; shipping past it is not a saving.
+      # seconds long; shipping past it is not a saving.
       - name: Test
         working-directory: odoo-sheller-app/src-tauri
         run: cargo test
+
+      # beforeBuildCommand freezes the daemon into packaging/dist/. uv is
+      # how this repo installs Python; the freeze is the app, not an extra.
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
 
       - uses: tauri-apps/tauri-action@v1
         env:

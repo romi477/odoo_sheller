@@ -11,25 +11,58 @@ cargo tauri dev --manifest-path odoo-sheller-app/src-tauri/Cargo.toml
 ```
 
 Port **8765** is fixed. If a daemon is already there, the app attaches and
-does not kill it on quit. If the port is free, it spawns
+does not kill it on quit. If the port is free, it spawns the bundled
+`Contents/Resources/odoo-sheller/odoo-sheller` when that file exists, otherwise
 `uv run python -m odoo_sheller` from this repository. If something else holds
 the port, it says so and starts nothing.
 
 The window loads `http://127.0.0.1:8765/web`. There is no second API and no
-bundled copy of the UI.
+bundled copy of the UI. **MCP Configuration…** in the application menu shows
+the entry to paste into an agent's config, with the bundled binary's path
+filled in, and copies it to the clipboard. It writes nothing.
+
+## Building
+
+One script, so the step that deletes something is reviewed rather than
+retyped:
+
+```bash
+packaging/app.sh build      # the .app
+packaging/app.sh dmg        # the .dmg to hand someone
+packaging/app.sh install    # build, then replace /Applications/odoo-sheller.app
+```
+
+`build` is `cargo tauri build --bundles app`, which runs `packaging/freeze.sh`
+as `beforeBuildCommand` and copies both onedir trees into the bundle. There is
+no separate PyInstaller step to forget.
+
+`install` quits a running copy first — replacing a bundle underneath itself
+leaves the old process alive holding a deleted tree — and refuses to delete
+anything whose `CFBundleIdentifier` is not `com.odoo-sheller.desktop`.
+`APP_DEST` overrides where it goes.
+
+`SKIP_FREEZE=1` reuses `packaging/dist/` instead of running PyInstaller. For
+iterating on the Rust side only: nothing checks that those trees match the
+current Python, so a build made that way can ship yesterday's daemon.
 
 ## After a change
 
-Nothing here builds the daemon: it is spawned as `uv run python -m odoo_sheller`
-from this checkout, so Python changes need no Rust build at all. That stops
-being true at stage 4, when the daemon is frozen into the bundle.
+Day to day you do not build at all. `shellerd app` runs the daemon from the
+checkout and the window from `cargo tauri dev`; building is for the artifact,
+or to test what dev mode cannot show — a minimal `PATH`, the hardened runtime,
+the frozen daemon.
 
-| Changed | Do |
-|---|---|
-| `odoo_sheller/web/**` | **⌘R.** The daemon serves those files with `Cache-Control: no-store`, so a reload is the whole cycle. |
-| `odoo_sheller/**.py` | Restart the daemon process, then **⌘R**. |
-| `odoo-sheller-app/src-tauri/**.rs` | Nothing — `cargo tauri dev` rebuilds and relaunches the window itself. |
-| `odoo-sheller-app/src/**` | Nothing — the dev server reloads the splash. |
+| Changed | In `shellerd app` | In the installed `.app` |
+|---|---|---|
+| `odoo_sheller/web/**` | ⌘R | ⌘R — the daemon serves them |
+| `odoo_sheller/**.py` | `shellerd restart`, then ⌘R | `packaging/app.sh install` |
+| `odoo-sheller-app/src-tauri/**.rs` | nothing, the watcher rebuilds | `packaging/app.sh install` |
+| `odoo-sheller-app/src/**` | nothing, the watcher reloads | `packaging/app.sh install` |
+
+The right-hand column is for a bundle that carries its own frozen daemon. An
+installed app with nothing frozen in it attaches to whatever daemon is on
+8765, so a Python change reaches it after `shellerd restart` like anywhere
+else.
 
 Restarting the daemon kills every live session, by design: the daemon owns the
 pipes. ⌘Q says so first when any session is open.
@@ -143,8 +176,7 @@ build is ad-hoc signed: drag the app onto Applications, or download it
 from a GitHub Release.
 
 ```bash
-cd odoo-sheller-app
-cargo tauri build --bundles dmg
+packaging/app.sh dmg
 ```
 
 `signingIdentity` is `"-"` in `tauri.conf.json`, so this needs no

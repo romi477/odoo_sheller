@@ -179,8 +179,66 @@ pub fn log_dir() -> PathBuf {
         .join("Library/Logs/odoo-sheller")
 }
 
-fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// onedir trees Tauri copies into Contents/Resources/. The executable sits
+/// next to `_internal/`; PyInstaller finds that from the executable, not cwd.
+pub fn bundled_bin(resource_dir: Option<&Path>, name: &str) -> Option<PathBuf> {
+    let exe = resource_dir?.join(name).join(name);
+    crate::docker::is_executable(&exe).then_some(exe)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DaemonKind {
+    Bundled { exe: PathBuf },
+    Checkout { uv: PathBuf, root: PathBuf },
+}
+
+pub fn resolve_daemon(
+    resource_dir: Option<&Path>,
+    repo_root: Option<&Path>,
+) -> Result<DaemonKind, String> {
+    if let Some(exe) = bundled_bin(resource_dir, "odoo-sheller") {
+        return Ok(DaemonKind::Bundled { exe });
+    }
+    if let Some(root) = repo_root {
+        let uv = resolve_uv().ok_or_else(|| {
+            "uv not found. Install it, or run the daemon yourself: uv run python -m odoo_sheller"
+                .to_string()
+        })?;
+
+        return Ok(DaemonKind::Checkout {
+            uv,
+            root: root.to_path_buf(),
+        });
+    }
+
+    Err(
+        "could not find a bundled daemon or the odoo-sheller repository \
+         (no pyproject.toml above this binary). Set ODOO_SHELLER_ROOT to the checkout."
+            .to_string(),
+    )
+}
+
+pub fn resolve_mcp(
+    resource_dir: Option<&Path>,
+    repo_root: Option<&Path>,
+) -> Result<crate::mcp::Launch, String> {
+    if let Some(exe) = bundled_bin(resource_dir, "odoo-sheller-mcp") {
+        return Ok(crate::mcp::Launch::bundled(&exe));
+    }
+    let root = repo_root.ok_or_else(|| {
+        "could not find a bundled MCP server or the odoo-sheller repository. \
+         Set ODOO_SHELLER_ROOT, or run Configure Agents from a packaged app."
+            .to_string()
+    })?;
+    let uv = resolve_uv().ok_or_else(|| {
+        "uv not found, and this build has no bundled MCP server.".to_string()
+    })?;
+
+    Ok(crate::mcp::Launch::from_checkout(&uv, root))
 }
 
 pub fn repo_root() -> Option<PathBuf> {
@@ -228,18 +286,21 @@ pub fn resolve_uv() -> Option<PathBuf> {
     )
 }
 
-pub fn spawn_daemon(repo_root: &Path, docker: Option<&Path>) -> Result<Child, String> {
-    let uv = resolve_uv().ok_or_else(|| {
-        "uv not found. Install it, or run the daemon yourself: uv run python -m odoo_sheller"
-            .to_string()
-    })?;
+pub fn spawn_daemon(kind: &DaemonKind, docker: Option<&Path>) -> Result<Child, String> {
     let logs = log_dir();
     fs::create_dir_all(&logs).map_err(|err| err.to_string())?;
     let log = File::create(logs.join("daemon.log")).map_err(|err| err.to_string())?;
-    let mut command = Command::new(uv);
+    let mut command = match kind {
+        DaemonKind::Bundled { exe } => Command::new(exe),
+        DaemonKind::Checkout { uv, root } => {
+            let mut command = Command::new(uv);
+            command
+                .args(["run", "python", "-m", "odoo_sheller"])
+                .current_dir(root);
+            command
+        }
+    };
     command
-        .args(["run", "python", "-m", "odoo_sheller"])
-        .current_dir(repo_root)
         .stdin(Stdio::null())
         .stdout(log.try_clone().map_err(|err| err.to_string())?)
         .stderr(log);
@@ -362,5 +423,33 @@ mod tests {
     #[test]
     fn ui_stays_on_the_fixed_port() {
         assert_eq!(ui_url(), "http://127.0.0.1:8765/web");
+    }
+
+    #[test]
+    fn a_bundled_onedir_wins_over_a_checkout() {
+        let root = std::env::temp_dir().join(format!(
+            "odoo-sheller-daemon-test-{}",
+            std::process::id()
+        ));
+        let bin_dir = root.join("odoo-sheller");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let exe = bin_dir.join("odoo-sheller");
+        fs::write(&exe, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let kind = resolve_daemon(Some(&root), Some(Path::new("/checkout"))).unwrap();
+        assert_eq!(kind, DaemonKind::Bundled { exe: exe.clone() });
+        assert_eq!(bundled_bin(Some(&root), "odoo-sheller").as_deref(), Some(exe.as_path()));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn missing_bundle_and_checkout_is_an_error() {
+        let err = resolve_daemon(None, None).unwrap_err();
+        assert!(err.contains("bundled daemon"));
+        assert!(err.contains("ODOO_SHELLER_ROOT"));
     }
 }

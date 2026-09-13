@@ -3,8 +3,8 @@
 <plist version="1.0">
 <dict>
 	<!--
-	  Deliberately empty. The hardened runtime is on; nothing here has to be
-	  opened for the app to do its job, and every entitlement is a hole in it.
+	  Deliberately empty. The hardened runtime is on; every entitlement is a
+	  hole in it, and nothing here needs one.
 
 	  Not sandboxed. The Mac App Store is out: this app must spawn docker and
 	  ssh, and later a login shell. Spawning children needs no entitlement
@@ -13,16 +13,17 @@
 	  com.apple.security.app-sandbox — it would read as protection that is
 	  not there.
 
-	  No com.apple.security.cs.allow-jit either. WKWebView's JavaScript JIT
-	  runs in Apple's own com.apple.WebKit.WebContent.xpc, which carries that
+	  No com.apple.security.cs.allow-jit. WKWebView's JavaScript JIT runs in
+	  Apple's own com.apple.WebKit.WebContent.xpc, which carries that
 	  entitlement under Apple's signature; granting it here would let *our*
 	  process map writable-executable memory for nothing.
 
-	  Stage 4 is where this file stops being empty:
-	  com.apple.security.cs.disable-library-validation, so a frozen Python
-	  can load .so files signed with another key, and possibly
-	  com.apple.security.cs.allow-dyld-environment-variables. Add them when
-	  a real build needs them, not before.
+	  No com.apple.security.cs.disable-library-validation either, though the
+	  frozen daemon is the obvious candidate. It does not need it: PyInstaller
+	  ad-hoc signs its own tree, and the daemon is a separate process that
+	  does not inherit this app's hardened runtime. Verified by signing a
+	  bundle with an empty plist and watching it spawn the frozen daemon,
+	  serve /health and probe containers.
 	-->
 </dict>
 </plist>
