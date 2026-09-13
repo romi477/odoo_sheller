@@ -9,6 +9,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Desktop app
 
+- The empty app (no frozen daemon yet) ships as an ad-hoc signed `.dmg`,
+  Apple Silicon only: hardened runtime, no entitlements at all, no Apple
+  Developer account and no notarization. A downloaded copy is refused by
+  Gatekeeper until the person clears it in System Settings → Privacy &
+  Security → Open Anyway. The Mac App Store is out.
+- The bundle identifier is `com.odoo-sheller.desktop`. It was
+  `com.odoo-sheller.app`, and `.app` is the bundle extension on macOS, which
+  Tauri refuses to recommend. Anyone holding the earlier build has a second
+  app with a different identity: the two do not see each other, and both can
+  run at once.
+- The window carries its own background colour, so nothing flashes white
+  between the splash and the UI the daemon serves.
 - `GET /health` answers liveness and the package version, with no session
   data and no admin key. The desktop app probes this instead of
   `/api/sessions`.

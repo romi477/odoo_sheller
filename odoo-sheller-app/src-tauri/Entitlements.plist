@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Deliberately empty. The hardened runtime is on; nothing here has to be
+	  opened for the app to do its job, and every entitlement is a hole in it.
+
+	  Not sandboxed. The Mac App Store is out: this app must spawn docker and
+	  ssh, and later a login shell. Spawning children needs no entitlement
+	  outside a sandbox, and a sandbox entitlement such as
+	  com.apple.security.network.client does nothing without
+	  com.apple.security.app-sandbox — it would read as protection that is
+	  not there.
+
+	  No com.apple.security.cs.allow-jit either. WKWebView's JavaScript JIT
+	  runs in Apple's own com.apple.WebKit.WebContent.xpc, which carries that
+	  entitlement under Apple's signature; granting it here would let *our*
+	  process map writable-executable memory for nothing.
+
+	  Stage 4 is where this file stops being empty:
+	  com.apple.security.cs.disable-library-validation, so a frozen Python
+	  can load .so files signed with another key, and possibly
+	  com.apple.security.cs.allow-dyld-environment-variables. Add them when
+	  a real build needs them, not before.
+	-->
+</dict>
+</plist>

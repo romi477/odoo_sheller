@@ -2,6 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- Before styles.css, for the same reason as the daemon's own page: the
+         canvas is white until something says otherwise, and a stylesheet is
+         a separate request. -->
+    <meta name="color-scheme" content="dark" />
+    <style>
+      html,
+      body {
+        background: #04030e;
+      }
+    </style>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>odoo-sheller</title>
     <link rel="stylesheet" href="styles.css" />

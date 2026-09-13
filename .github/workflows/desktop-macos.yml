@@ -1,0 +1,72 @@
+# Builds an Apple Silicon .dmg, ad-hoc signed. There is no Apple Developer
+# account and no notarization, so Gatekeeper refuses a downloaded copy until
+# the person clears it in System Settings > Privacy & Security > Open Anyway.
+#
+# Official ad-hoc identity: https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing
+
+name: desktop-macos
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "desktop-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: odoo-sheller-app/src-tauri
+
+      # The bundle version is the app's own, not the daemon's, and nothing
+      # else keeps it in step with the tag. Without this a desktop-v0.2.0 tag
+      # would publish a file named ..._0.1.0_aarch64.dmg.
+      - name: Take the bundle version from the tag
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        run: |
+          version="${GITHUB_REF_NAME#desktop-v}"
+          python3 - "$version" <<'PY'
+          import json, pathlib, sys
+          path = pathlib.Path("odoo-sheller-app/src-tauri/tauri.conf.json")
+          conf = json.loads(path.read_text())
+          conf["version"] = sys.argv[1]
+          path.write_text(json.dumps(conf, indent=2) + "\n")
+          PY
+
+      # A draft release is still something people download. The suite is
+      # thirteen tests and seconds long; shipping past it is not a saving.
+      - name: Test
+        working-directory: odoo-sheller-app/src-tauri
+        run: cargo test
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: odoo-sheller-app
+          args: --bundles dmg --target aarch64-apple-darwin
+          uploadWorkflowArtifacts: true
+          tagName: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && format('odoo-sheller desktop {0}', github.ref_name) || '' }}
+          releaseBody: >
+            Apple Silicon only. Drag odoo-sheller.app onto Applications. The
+            build is ad-hoc signed and not notarized, so macOS refuses it the
+            first time as an unidentified developer. Open System Settings >
+            Privacy & Security, scroll to Security, and click Open Anyway —
+            the button appears for about an hour after the app is refused.
+            Control-click > Open no longer clears this on macOS 15 and later.
+            The blunt alternative, before the first launch:
+            `xattr -dr com.apple.quarantine /Applications/odoo-sheller.app`.
+          releaseDraft: true
+          prerelease: false

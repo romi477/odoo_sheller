@@ -2,6 +2,18 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <!-- Before any stylesheet, on purpose. The canvas is painted from
+       `color-scheme` the moment the document starts rendering, and the
+       stylesheet that would say "dark" is a separate request: without these
+       two lines the page is white for as long as that request takes, which
+       in a desktop window reads as a flash on every launch. -->
+  <meta name="color-scheme" content="dark">
+  <style>
+    html,
+    body {
+      background: #04030e;
+    }
+  </style>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>odoo-sheller</title>
   <link rel="icon" href="/static/logo.svg" type="image/svg+xml">

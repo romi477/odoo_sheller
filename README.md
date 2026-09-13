@@ -160,12 +160,25 @@ alias sheller='uv --project="$ODOO_SHELLER_ROOT" run python -m odoo_sheller'
 shellerd() {
   local dir=${ODOO_SHELLER_ROOT:?set ODOO_SHELLER_ROOT to your odoo-sheller checkout}
   local pidfile=~/.odoo-sheller/daemon.pid log=~/.odoo-sheller/daemon.log
+  local health=http://127.0.0.1:8765/health
   local pid; pid=$(cat "$pidfile" 2>/dev/null)
+  # Two halves of the truth. The pid file says what this function started; the
+  # port says whether a daemon is there at all. They come apart — the desktop
+  # app runs a daemon of its own and writes no pid file — so "we have no pid"
+  # and "nothing is running" are different answers. Confusing them is how you
+  # start a second daemon that dies on the bind and leaves a pid file pointing
+  # at a corpse.
+  local ours=""; [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && ours=$pid
+  local up="";   curl -fsS -m 1 "$health" >/dev/null 2>&1 && up=1
   case "$1" in
     start)
-      if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-        echo "already running (pid $pid)"; return 1
+      if [ -n "$ours" ]; then echo "already running (pid $ours)"; return 1; fi
+      if [ -n "$up" ]; then
+        echo "a daemon already answers on 8765 and this function did not start it."
+        echo "It belongs to something else — use it, or stop that first."
+        return 1
       fi
+      rm -f "$pidfile"
       if [ ! -x "$dir/.venv/bin/odoo-sheller" ]; then
         echo "no odoo-sheller in $dir/.venv — point ODOO_SHELLER_ROOT at your"
         echo "checkout and run: uv sync"; return 1
@@ -176,20 +189,29 @@ shellerd() {
       echo "started (pid $!) — http://127.0.0.1:8765/web"
       ;;
     stop)
-      [ -n "$pid" ] || { echo "not running"; return 1; }
-      kill "$pid" 2>/dev/null
+      if [ -z "$ours" ]; then
+        rm -f "$pidfile"
+        if [ -n "$up" ]; then
+          echo "a daemon answers on 8765, but this function did not start it."
+          echo "It goes down with whatever owns it, not from here."
+        else
+          echo "not running"
+        fi
+        return 1
+      fi
+      kill "$ours" 2>/dev/null
       # SIGTERM is the graceful one: the daemon closes its live sessions and
       # journals them on the way down, which takes a few seconds. Escalate
       # only if it really will not go — a kill -9 loses those records.
-      for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
-      if kill -0 "$pid" 2>/dev/null; then echo "stuck, forcing"; kill -9 "$pid"; fi
+      for _ in $(seq 1 20); do kill -0 "$ours" 2>/dev/null || break; sleep 0.5; done
+      if kill -0 "$ours" 2>/dev/null; then echo "stuck, forcing"; kill -9 "$ours"; fi
       rm -f "$pidfile"; echo "stopped"
       ;;
     restart) shellerd stop; shellerd start ;;
     status)
-      if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
-        then echo "running (pid $pid)"
-        else echo "not running"; fi
+      if [ -n "$ours" ]; then echo "running (pid $ours)"
+      elif [ -n "$up" ]; then echo "running on 8765, but not ours"
+      else echo "not running"; fi
       ;;
     log) tail -f "$log" ;;
     key) cat ~/.odoo-sheller/admin.key ;;
@@ -200,7 +222,7 @@ shellerd — odoo-sheller daemon
   start      start it in the background, detached from this terminal
   stop       ask it to stop, wait for it, force it only if it will not go
   restart    stop then start — live sessions do not survive this
-  status     whether it is running, and its pid
+  status     ours, somebody else's on 8765, or nothing
   log        follow ~/.odoo-sheller/daemon.log
   key        print the admin key the web UI asks for
   help       this list

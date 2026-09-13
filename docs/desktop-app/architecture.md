@@ -296,25 +296,52 @@ Since the UI is served by the daemon, the terminal lives in its own Tauri
 window or tab rather than inside that page — otherwise xterm.js would have to
 be vendored into the Python package.
 
-## Signing, notarization, entitlements
+## Signing and entitlements
 
-- Sign each nested binary first, then the bundle, then notarize.
-- **Hardened runtime is required**: `codesign --options runtime --timestamp`.
+There is no Apple Developer Program membership and no notarization. The
+build is **ad-hoc**: Tauri's `signingIdentity` is `"-"`, which is
+`codesign -s -` on each nested binary and then on the bundle. That is
+enough for the app to run on the machine that built it, and on Apple
+Silicon a signature of some kind is required at all.
+
+- **Hardened runtime stays on** (`codesign --options runtime`). It does not
+  need a paid certificate.
 - PyInstaller almost always needs
   `com.apple.security.cs.disable-library-validation`, or Python cannot load
   `.so` files signed with a different key. Sometimes
   `com.apple.security.cs.allow-dyld-environment-variables` as well. Verify on a
-  real build rather than assuming.
+  real build rather than assuming. Stage 4, not now.
 - **Do not use `--deep`** — Apple deprecated it and it signs less than it
-  appears to.
-- After notarization, `xcrun stapler staple`, or the first offline Gatekeeper
-  check fails.
+  appears to. Sign nested binaries first, then the bundle; Tauri already
+  does that.
+- **Entitlements are empty, and that is the point.** Every one of them is a
+  hole in the hardened runtime. Spawning `docker`, `ssh` and later a shell
+  needs none outside a sandbox; `com.apple.security.network.client` does
+  nothing without `app-sandbox`; and WKWebView's JIT runs in Apple's own
+  `com.apple.WebKit.WebContent.xpc`, which carries `allow-jit` under Apple's
+  signature, so granting it to our process would buy nothing.
 - **The Mac App Store is out.** The app must spawn `docker`, `ssh` and an
   arbitrary shell; the App Store sandbox does not allow it. Distribution is
-  Developer ID and direct download.
-- A universal binary needs universal2 wheels for the native dependencies
-  (`pydantic-core`, `uvloop`, `httptools`). Where a wheel is missing, build per
-  architecture and `lipo` them together.
+  an ad-hoc `.dmg` — handed to someone, or downloaded from GitHub.
+
+First launch of a download is **System Settings → Privacy & Security →
+Open Anyway**. Control-click → Open stopped clearing Gatekeeper in macOS 15;
+Apple's own instructions are the Settings route, and the button there is
+offered for about an hour after the app is first refused. The blunt
+alternative is to drop the quarantine flag before launching:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/odoo-sheller.app
+```
+
+`-d com.apple.quarantine`, not `-c`: `-c` clears every extended attribute the
+file has, which is more than was asked for.
+
+- **Apple Silicon only** for now: the CI builds `aarch64-apple-darwin` and
+  nothing else. A universal binary is a later decision, and it needs
+  universal2 wheels for the native dependencies (`pydantic-core`, `uvloop`,
+  `httptools`); where a wheel is missing, build per architecture and `lipo`
+  them together.
 
 ## Data, logs, privacy
 
@@ -353,7 +380,7 @@ Store, a dynamic port.
 ## Process diagram
 
 ```
-odoo-sheller.app  (Developer ID, hardened runtime, notarized)
+odoo-sheller.app  (ad-hoc signed, hardened runtime, not notarized)
 │
 ├── Rust core
 │   ├── startup: probe 8765 → attach to a foreign daemon OR spawn our own

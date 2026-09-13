@@ -48,6 +48,8 @@ readable at a glance.
 | 4 | May the app stop a daemon it did not start? | **No**, and not behind a confirmation either. The developer running `shellerd` in a terminal is the ordinary case, not an obstacle. |
 | 6 | Does the app live in this repository? | **Yes**, in `odoo-sheller-app/`, `Cargo.lock` committed. It is versioned with the daemon it drives, and the repository-side changes it needs (`ODOO_SHELLER_DOCKER`, `/health`) are reviewed in the same diff. |
 | 7 | Does the app refuse a daemon older than itself? | **No version gate.** All it needs from an attached daemon is `/web`, which every version serves. The version from `/health` is recorded, not enforced — see [architecture.md](architecture.md#the-port-is-fixed-at-8765). |
+| 9 | Paid Developer ID, or ad-hoc? | **Ad-hoc** (`signingIdentity: "-"`). There is no Apple Developer Program membership. Gatekeeper refuses a downloaded copy until the person clears it in System Settings → Privacy & Security → Open Anyway. |
+| 10 | Apple Silicon only, or universal? | **arm64 only** for now. CI builds `aarch64-apple-darwin`; an Intel Mac gets nothing. Revisit when someone actually has one — a universal build also needs universal2 wheels for `pydantic-core`, `uvloop` and `httptools`. |
 
 ## Work in this repository
 
@@ -139,22 +141,85 @@ Done when:
 - A build launched from Finder (not from a terminal) lists containers.
 - With Docker Desktop stopped, the UI shows the probe's own error text.
 
-### Stage 3 — signing and notarization, on an empty app
+### Stage 3 — ad-hoc signing, on an empty app
 
-Do this before there is any Python in the bundle. The first notarization always
-produces surprises; they are cheaper on a small artifact.
+Do this before there is any Python in the bundle. There is no Apple Developer
+Program membership and no notarization. The Mac App Store is out: a `.dmg`
+someone downloads or is sent, signed ad-hoc (`codesign -s -`). Gatekeeper will
+warn on the first launch of a download. That is accepted.
 
-Done when: a downloaded `.dmg` of the placeholder app opens on a machine that
-has never seen it, with Gatekeeper enabled and the network off (so the staple is
-doing the work).
+The bundle config is in the repository:
+
+- `odoo-sheller-app/src-tauri/Entitlements.plist` — JIT for the WebView, client
+  network for `127.0.0.1:8765`. Not sandboxed. The PyInstaller entitlements
+  (`disable-library-validation`, sometimes `allow-dyld-environment-variables`)
+  wait for Stage 4.
+- `tauri.conf.json > bundle > macOS` — `hardenedRuntime: true`, entitlements
+  path, `signingIdentity: "-"`. The `-` is Tauri's ad-hoc identity
+  ([docs](https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing)): it
+  signs each nested binary, then the bundle, with the hardened runtime. Do
+  not add `--deep` — Apple deprecated it and it signs less than it appears
+  to. The bundle identifier is `com.odoo-sheller.desktop`, not `*.app` —
+  that suffix is the bundle extension on macOS, and Tauri refuses to
+  recommend it.
+- `.github/workflows/desktop-macos.yml` — Apple Silicon `.dmg` on
+  `desktop-v*` tags and on demand. No Apple secrets. The tag sets the bundle
+  version: `tauri.conf.json` carries the app's own version, which is not the
+  daemon's, and without this step a `desktop-v0.2.0` tag would ship a file
+  named `..._0.1.0_aarch64.dmg`.
+
+```bash
+cd odoo-sheller-app
+cargo tauri build --bundles dmg
+```
+
+The `.dmg` lands in
+`odoo-sheller-app/src-tauri/target/release/bundle/dmg/`. Drag the app onto
+Applications.
+
+First launch of a download is **System Settings → Privacy & Security →
+Open Anyway**. Control-click → Open stopped clearing Gatekeeper in macOS 15;
+Apple's own instructions are the Settings route, and the button there is
+offered for about an hour after the app is first refused. The blunt
+alternative is to drop the quarantine flag before launching:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/odoo-sheller.app
+```
+
+`-d com.apple.quarantine`, not `-c`: `-c` clears every extended attribute the
+file has, which is more than was asked for.
+
+**A locally built copy proves nothing about any of this.** Gatekeeper acts on
+`com.apple.quarantine`, an extended attribute that the *downloader* sets —
+Safari, Mail, Messages, AirDrop. A `.dmg` you built yourself has no such
+attribute, so the app opens with no questions asked and the whole path a
+recipient will walk is left untested. To test it, use a quarantined copy:
+download the artifact from the Release, or mark one by hand.
+
+```bash
+xattr -w com.apple.quarantine "0081;00000000;manual;" /Applications/odoo-sheller.app
+xattr -p com.apple.quarantine /Applications/odoo-sheller.app   # confirm it took
+```
+
+Done when:
+
+- `cargo tauri build --bundles dmg` produces the artifact and
+  `codesign -dvvv` reports `flags=0x10002(adhoc,runtime)`.
+- `codesign -d --entitlements -` on the bundle prints an empty set.
+- A **quarantined** copy, on a machine that did not build it, opens after
+  System Settings → Privacy & Security → Open Anyway.
+- The window paints its own background from the first frame: no white flash
+  between the splash and the daemon's UI.
 
 ### Stage 4 — package the daemon
 
 PyInstaller per decision 1, `--add-data` for `web/` and `bootstrap.py`,
 `--copy-metadata odoo-sheller`, hidden imports for uvicorn. Sign the nested
-binary, re-notarize. This is also where `tauri-plugin-shell` comes back if the
-daemon is shipped as a sidecar — it was removed after Stage 1 rather than left
-initialised and unused, since Stage 1 spawns with `std::process::Command`.
+binary ad-hoc the same way as the empty app, then rebuild the `.dmg`. This is
+also where `tauri-plugin-shell` comes back if the daemon is shipped as a
+sidecar — it was removed after Stage 1 rather than left initialised and unused,
+since Stage 1 spawns with `std::process::Command`.
 
 Done when:
 
@@ -217,7 +282,8 @@ developer's machine is never in.
 | App restarts while an agent holds a session | Agent sees `session_gone`, not a hang |
 | Browser tab open on 8765 alongside the app | Both views stay in sync; the one without the key is a watcher |
 | Machine with no Python | Everything works |
-| Gatekeeper enabled, first run from a download | Opens without a warning |
+| Gatekeeper enabled, first run from a download | Refused as an unidentified developer; opens after System Settings → Privacy & Security → Open Anyway |
+| Locally built copy, never downloaded | Opens with no prompt — it carries no `com.apple.quarantine`, so this proves nothing about the row above |
 
 ## Reviewing the result
 
