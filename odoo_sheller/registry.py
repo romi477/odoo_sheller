@@ -210,12 +210,14 @@ class Registry:
 
         return self.sessions[session_id]
 
-    async def close(self, session_id: str, force: bool = False) -> None:
+    async def close(
+        self, session_id: str, force: bool = False, timeout: float = 10.0
+    ) -> None:
         session = self.sessions[session_id]
         if force:
             await session.kill()
         else:
-            await session.close()
+            await session.close(timeout)
         self.sessions.pop(session_id, None)
         self._broadcast({"kind": "session_closed", "session": session_id})
 

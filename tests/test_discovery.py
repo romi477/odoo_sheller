@@ -18,6 +18,27 @@ def fake_runner(responses):
     return runner
 
 
+async def test_list_containers_uses_the_docker_override(monkeypatch):
+    monkeypatch.setenv("ODOO_SHELLER_DOCKER", "/custom/bin/docker")
+    runner = fake_runner([(0, '{"Names":"c","Image":"i","Status":"Up","ID":"1"}\n', "")])
+    await discovery.list_containers(runner=runner)
+    assert runner.calls[0][0][0] == "/custom/bin/docker"
+
+
+async def test_probe_uses_the_docker_override(monkeypatch):
+    monkeypatch.setenv("ODOO_SHELLER_DOCKER", "/custom/bin/docker")
+    runner = fake_runner([(1, "", "no docker")])
+    await discovery.probe("integra19", runner=runner)
+    assert runner.calls[0][0][0] == "/custom/bin/docker"
+
+
+async def test_list_tests_uses_the_docker_override(monkeypatch):
+    monkeypatch.setenv("ODOO_SHELLER_DOCKER", "/custom/bin/docker")
+    runner = fake_runner([(1, "", "no docker")])
+    await discovery.list_tests("integra19", "sale", runner=runner)
+    assert runner.calls[0][0][0] == "/custom/bin/docker"
+
+
 async def test_list_containers_parses_docker_ps_json_lines():
     payload = (
         '{"Names":"integra19","Image":"odoo:19","Status":"Up 2 hours","ID":"abc"}\n'

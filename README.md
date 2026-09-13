@@ -112,7 +112,12 @@ Start the daemon from the project root:
 uv run python -m odoo_sheller
 ```
 
-Without uv: `.venv/bin/python -m odoo_sheller`.
+Without uv: `.venv/bin/python -m odoo_sheller`. An install also puts two
+commands on the venv's `bin`: `odoo-sheller` for the daemon and
+`odoo-sheller-mcp` for the agent server. They are named after the package
+rather than `shellerd`, because a shell function by that name is the
+documented way to run the daemon detached — and a function shadows a command
+on `PATH`, so one of the two would silently never run.
 
 Flags: `--host` (default `127.0.0.1`), `--port` (default `8765`), and
 `--reload` for development. **Reload kills every live session** — the daemon
@@ -133,6 +138,89 @@ Then open <http://127.0.0.1:8765/web>. Swagger for the HTTP API is at
 3. **Transaction** — **Rollback** discards, **Commit** keeps. Both are explicit;
    nothing is written otherwise.
 4. **Journals** — past sessions, exportable as JSONL or Markdown.
+
+### Keeping it in the background
+
+The daemon in a terminal tab is fine until you want that tab back. This shell
+function detaches it and gives you the few things worth having: a pid you can
+trust, a log, and a stop that does not lose data. Copy it into `~/.zshrc` (it
+works in bash too) and point `ODOO_SHELLER_ROOT` at your checkout:
+
+```zsh
+# Your odoo-sheller checkout. Exported, not just set: the desktop app reads
+# the same variable, and so would anything else launched from this shell.
+export ODOO_SHELLER_ROOT=${ODOO_SHELLER_ROOT:-$HOME/odoo-sheller}
+
+# The daemon in the foreground, exactly as the Usage section runs it.
+alias sheller='uv --project="$ODOO_SHELLER_ROOT" run python -m odoo_sheller'
+
+# The same daemon, detached. Runs the venv's console script rather than
+# `uv run`, so the pid we save is the daemon itself and not a wrapper whose
+# child would survive the kill and keep holding the port.
+shellerd() {
+  local dir=${ODOO_SHELLER_ROOT:?set ODOO_SHELLER_ROOT to your odoo-sheller checkout}
+  local pidfile=~/.odoo-sheller/daemon.pid log=~/.odoo-sheller/daemon.log
+  local pid; pid=$(cat "$pidfile" 2>/dev/null)
+  case "$1" in
+    start)
+      if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        echo "already running (pid $pid)"; return 1
+      fi
+      if [ ! -x "$dir/.venv/bin/odoo-sheller" ]; then
+        echo "no odoo-sheller in $dir/.venv — point ODOO_SHELLER_ROOT at your"
+        echo "checkout and run: uv sync"; return 1
+      fi
+      mkdir -p ~/.odoo-sheller; ( umask 077; touch "$log" )
+      nohup "$dir/.venv/bin/odoo-sheller" >>"$log" 2>&1 &
+      echo $! >"$pidfile"
+      echo "started (pid $!) — http://127.0.0.1:8765/web"
+      ;;
+    stop)
+      [ -n "$pid" ] || { echo "not running"; return 1; }
+      kill "$pid" 2>/dev/null
+      # SIGTERM is the graceful one: the daemon closes its live sessions and
+      # journals them on the way down, which takes a few seconds. Escalate
+      # only if it really will not go — a kill -9 loses those records.
+      for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
+      if kill -0 "$pid" 2>/dev/null; then echo "stuck, forcing"; kill -9 "$pid"; fi
+      rm -f "$pidfile"; echo "stopped"
+      ;;
+    restart) shellerd stop; shellerd start ;;
+    status)
+      if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+        then echo "running (pid $pid)"
+        else echo "not running"; fi
+      ;;
+    log) tail -f "$log" ;;
+    key) cat ~/.odoo-sheller/admin.key ;;
+    help|-h|--help|"")
+      cat <<'SHELLERD_HELP'
+shellerd — odoo-sheller daemon
+
+  start      start it in the background, detached from this terminal
+  stop       ask it to stop, wait for it, force it only if it will not go
+  restart    stop then start — live sessions do not survive this
+  status     whether it is running, and its pid
+  log        follow ~/.odoo-sheller/daemon.log
+  key        print the admin key the web UI asks for
+  help       this list
+SHELLERD_HELP
+      ;;
+    *) echo "shellerd: no such command: $1"; shellerd help; return 1 ;;
+  esac
+}
+```
+
+It expects the venv to exist — `uv sync` once in the checkout. Two details are
+deliberate rather than incidental:
+
+- **`restart` takes every live session with it.** The daemon owns the pipes, so
+  the container-side processes die with it. That is the same rule as `--reload`,
+  and it is why the daemon is not restarted casually.
+- **`stop` is `SIGTERM` first.** The daemon closes its sessions on the way down
+  and writes `session_close` to each journal. `kill -9` skips that, and the
+  transcript then simply stops with no record of how it ended. The escalation
+  after ten seconds is the last resort, not the normal path.
 
 ## Agent access (MCP)
 
@@ -344,6 +432,7 @@ answers `409` until that command's result finally arrives. Use `interrupt`, or
 
 | Method | Path | Purpose |
 |---|---|---|
+| `GET` | `/health` | liveness and version; no session data, no admin key |
 | `GET` | `/api/containers` | running containers |
 | `POST` | `/api/probe` | probe one container |
 | `POST` | `/api/probe/odoosh` | probe an odoo.sh build (`{"build", "host"}`); answers `stage`, `db_name`, version |

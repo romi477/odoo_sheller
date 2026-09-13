@@ -1,4 +1,4 @@
-"""Run the daemon: python -m odoo_sheller [--reload]."""
+"""Run the daemon: odoo-sheller [--reload], or python -m odoo_sheller."""
 
 import argparse
 from pathlib import Path

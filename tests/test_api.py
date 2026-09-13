@@ -1,6 +1,7 @@
 import json
 import re
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError
 
 import pytest
 from fastapi.testclient import TestClient
@@ -114,7 +115,7 @@ class FakeSession:
         }
 
     async def close(self, timeout=10.0):
-        self.calls.append(("close",))
+        self.calls.append(("close", timeout))
         self.state = SessionState.CLOSED
 
     async def kill(self):
@@ -159,9 +160,9 @@ class FakeRegistry:
 
         return self.sessions[session_id]
 
-    async def close(self, session_id, force=False):
+    async def close(self, session_id, force=False, timeout=10.0):
         session = self.get(session_id)
-        await (session.kill() if force else session.close())
+        await (session.kill() if force else session.close(timeout))
         del self.sessions[session_id]
 
     def subscribe(self, session_id, queue):
@@ -180,6 +181,41 @@ def client():
     with TestClient(app, headers={"X-OS-Session-Key": OWNER_KEY}) as test_client:
         test_client.registry = registry
         yield test_client
+
+
+def test_health_answers_before_any_session():
+    """The desktop app probes liveness; /api/sessions would couple that to the registry."""
+    from importlib.metadata import version
+
+    app = create_app(registry=Registry(admin_key=ADMIN_KEY))
+    with TestClient(app) as client:
+        response = client.get("/health")
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {"ok": True, "version": version("odoo-sheller")}
+    assert "sessions" not in body
+
+
+def test_health_survives_a_build_without_metadata(monkeypatch):
+    """A frozen build ships no dist-info by default; liveness must not 500 on that."""
+
+    def missing(_name):
+        raise PackageNotFoundError("odoo-sheller")
+
+    monkeypatch.setattr("odoo_sheller.api.version", missing)
+    app = create_app(registry=Registry(admin_key=ADMIN_KEY))
+    with TestClient(app) as client:
+        response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "version": "unknown"}
+
+
+def test_shutdown_closes_live_sessions(client):
+    """The app stops the daemon on quit: a journal must not just stop mid-transcript."""
+    session = client.registry.sessions["s1"]
+    client.__exit__(None, None, None)
+    assert ("close", 1.5) in session.calls
+    assert client.registry.sessions == {}
 
 
 def test_exec_returns_the_result(client):
@@ -407,7 +443,7 @@ def test_transaction_and_control_routes(client):
 
 def test_delete_closes_and_force_kills(client):
     assert client.delete("/api/sessions/s1").status_code == 200
-    assert ("close",) in client.registry.session.calls
+    assert ("close", 10.0) in client.registry.session.calls
 
 
 def test_sessions_and_logs(client):

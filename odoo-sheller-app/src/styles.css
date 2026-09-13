@@ -1,0 +1,72 @@
+:root {
+  color-scheme: dark;
+  --background: oklch(0.11 0.03 290);
+  --text: oklch(0.88 0.025 290);
+  --muted: oklch(0.67 0.04 290);
+  --cyan: oklch(0.72 0.09 205);
+  --sans: system-ui, -apple-system, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--background);
+  color: var(--text);
+  font-family: var(--sans);
+}
+
+main {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.mark {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+  color: var(--cyan);
+}
+
+.status {
+  margin: 0;
+  color: var(--muted);
+}
+
+.status.error {
+  max-width: 46ch;
+  text-align: center;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+}
+
+button {
+  font: inherit;
+  padding: 6px 16px;
+  border-radius: 7px;
+  border: 1px solid var(--cyan);
+  background: transparent;
+  color: var(--cyan);
+  cursor: pointer;
+}
+
+button.quiet {
+  border-color: oklch(0.3 0.02 290);
+  color: var(--muted);
+}

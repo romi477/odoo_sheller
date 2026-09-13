@@ -9,6 +9,13 @@ dependencies = [
     "uvicorn[standard]>=0.30",
 ]
 
+# Named after the package, not `shellerd`: a shell function by that name is
+# the documented way to run the daemon detached, and a function shadows a
+# command on PATH — one of the two would silently never run.
+[project.scripts]
+odoo-sheller = "odoo_sheller.__main__:main"
+odoo-sheller-mcp = "odoo_sheller.mcp:main"
+
 [project.optional-dependencies]
 # httpx2, not httpx: starlette>=1.0 imports httpx2 in starlette.testclient and
 # warns that httpx is deprecated there.

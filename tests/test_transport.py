@@ -14,6 +14,18 @@ from odoo_sheller.transport import (
 TARGET = Target(container="integra19", database="integra_db_19", odoo_bin="/opt/odoo/odoo-bin")
 
 
+def test_build_command_uses_the_docker_override(monkeypatch):
+    monkeypatch.setenv("ODOO_SHELLER_DOCKER", "/custom/bin/docker")
+    argv = build_command(TARGET, "print('boot')")
+    assert argv[0] == "/custom/bin/docker"
+    assert argv[1:4] == ["exec", "-i", "integra19"]
+
+
+def test_signal_command_uses_the_docker_override(monkeypatch):
+    monkeypatch.setenv("ODOO_SHELLER_DOCKER", "/custom/bin/docker")
+    assert signal_command(TARGET, 42, "INT")[0] == "/custom/bin/docker"
+
+
 def test_command_keeps_the_pipe_on_fd_3_before_odoo_takes_stdin():
     argv = build_command(TARGET, "print('boot')")
     assert argv[:4] == ["docker", "exec", "-i", "integra19"]

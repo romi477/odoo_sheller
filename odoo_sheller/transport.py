@@ -14,6 +14,7 @@ SSH unchanged.
 """
 
 import asyncio
+import os
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,18 @@ _BOOTSTRAP_PATH = Path(__file__).with_name("bootstrap.py")
 
 DOCKER = "docker"
 ODOOSH = "odoosh"
+
+
+def docker_bin() -> str:
+    """The docker CLI on this host.
+
+    A GUI app inherits a minimal PATH; Docker Desktop is not on it. The
+    desktop wrapper resolves the binary and passes the path through
+    ODOO_SHELLER_DOCKER. Default stays the name, so a terminal session
+    is unchanged.
+    """
+
+    return os.environ.get("ODOO_SHELLER_DOCKER") or "docker"
 
 # What odoo.sh calls its instances. Only this one refuses a commit outright.
 PRODUCTION = "production"
@@ -133,7 +146,7 @@ def build_command(target: Target, source: str) -> list[str]:
         # does not survive getting it wrong in either direction.
         return ["ssh", *SSH_OPTS, target.ssh_dest, f"sh -c {shlex.quote(script)}"]
 
-    return ["docker", "exec", "-i", target.container, "sh", "-c", script]
+    return [docker_bin(), "exec", "-i", target.container, "sh", "-c", script]
 
 
 def signal_command(target: Target, pid: int, signal_name: str) -> list[str]:
@@ -142,7 +155,7 @@ def signal_command(target: Target, pid: int, signal_name: str) -> list[str]:
 
         return ["ssh", *SSH_OPTS, target.ssh_dest, "kill", *signal]
 
-    return ["docker", "exec", target.container, "kill", *signal]
+    return [docker_bin(), "exec", target.container, "kill", *signal]
 
 
 async def spawn(argv: list[str]) -> asyncio.subprocess.Process:

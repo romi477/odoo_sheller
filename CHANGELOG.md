@@ -5,6 +5,34 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Desktop app
+
+- `GET /health` answers liveness and the package version, with no session
+  data and no admin key. The desktop app probes this instead of
+  `/api/sessions`.
+- `ODOO_SHELLER_DOCKER` overrides the docker CLI path in discovery and
+  transport. A GUI app inherits a minimal PATH; the wrapper resolves the
+  binary and passes it in.
+- The version in `/health` is guarded: a frozen build carries no package
+  metadata unless the packaging step asks for it, and liveness must not
+  depend on packaging. It answers `"unknown"` there rather than `500`.
+
+### Entry points
+
+- `odoo-sheller` and `odoo-sheller-mcp` are installed as commands, so neither
+  the daemon nor the agent server has to be spelled as `python -m` in a config
+  file or a shell function.
+
+### Sessions
+
+- The daemon closes its live sessions when it is asked to stop, so their
+  journals end with `session_close` instead of simply stopping. Sessions have
+  never been able to outlive the daemon; until now they died without saying
+  so, which was survivable while the daemon was stopped by hand and is not
+  once quitting an app is how a working day ends.
+
 ## [1.5.0] — 2026-09-09
 
 ### Reading source

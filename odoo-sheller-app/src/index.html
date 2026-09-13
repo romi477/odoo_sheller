@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>odoo-sheller</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <p class="mark">odoo-sheller</p>
+      <p class="status" id="status">Starting…</p>
+      <div class="actions" id="actions" hidden>
+        <button id="retry" type="button">Try again</button>
+        <button id="quit" type="button" class="quiet">Quit</button>
+      </div>
+    </main>
+    <script>
+      const { invoke } = window.__TAURI__.core;
+      const { listen } = window.__TAURI__.event;
+      const status = document.getElementById("status");
+      const actions = document.getElementById("actions");
+
+      // The window exists before the daemon does. Render whatever the
+      // supervisor is on right now, then follow it — asking first is what
+      // keeps this page from missing an event it was not yet listening for.
+      function render(state) {
+        if (state.phase === "error") {
+          status.textContent = state.message;
+          status.classList.add("error");
+          actions.hidden = false;
+          return;
+        }
+        status.textContent =
+          state.phase === "ready" ? "Opening the interface…" : "Starting…";
+        status.classList.remove("error");
+        actions.hidden = true;
+      }
+
+      document.getElementById("retry").addEventListener("click", () => {
+        render({ phase: "starting" });
+        invoke("retry_startup");
+      });
+      document.getElementById("quit").addEventListener("click", () => {
+        invoke("quit_app");
+      });
+
+      listen("startup", (event) => render(event.payload));
+      invoke("startup_state").then(render);
+    </script>
+  </body>
+</html>

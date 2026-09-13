@@ -68,3 +68,13 @@ def test_the_readme_api_table_lists_every_session_route():
         if path.startswith("/api/sessions/{session_id}/"):
             leaf = path.rsplit("/", 1)[-1]
             assert leaf in text, path
+
+
+def test_the_readme_api_table_lists_health():
+    """The table reads as exhaustive; a missing /health row hides the liveness probe."""
+    from odoo_sheller.api import create_app
+
+    text = README.read_text(encoding="utf-8")
+    paths = {getattr(route, "path", "") for route in create_app().routes}
+    assert "/health" in paths
+    assert "| `GET` | `/health` |" in text

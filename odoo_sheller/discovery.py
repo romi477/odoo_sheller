@@ -4,7 +4,7 @@ import asyncio
 import json
 import re
 
-from odoo_sheller.transport import SSH_OPTS
+from odoo_sheller.transport import SSH_OPTS, docker_bin
 
 # 15 through 19. Everything the bootstrap rests on is the same in all five:
 # the non-tty branch of `console()`, the names `env` and `self`, the rollback
@@ -325,7 +325,7 @@ async def _docker(argv: list[str], stdin: str | None = None) -> tuple[int, str, 
 
 async def list_containers(runner=None) -> list[dict]:
     runner = runner or _docker
-    code, out, err = await runner(["docker", "ps", "--format", "json"], None)
+    code, out, err = await runner([docker_bin(), "ps", "--format", "json"], None)
     if code != 0:
         raise RuntimeError(err.strip() or "docker ps failed")
     containers = []
@@ -382,7 +382,7 @@ def _gate_on_version(payload: dict) -> dict:
 
 async def probe(container: str, runner=None) -> dict:
     runner = runner or _docker
-    argv = ["docker", "exec", "-i", container, "python3", "-"]
+    argv = [docker_bin(), "exec", "-i", container, "python3", "-"]
     code, out, err = await runner(argv, PROBE_SOURCE)
     payload = _last_json_line(out)
 
@@ -420,7 +420,7 @@ async def list_tests(container: str, module: str, runner=None) -> dict:
             ),
         }
     runner = runner or _docker
-    argv = ["docker", "exec", "-i", container, "python3", "-", module]
+    argv = [docker_bin(), "exec", "-i", container, "python3", "-", module]
     code, out, err = await runner(argv, LIST_TESTS_SOURCE)
     payload = None
     for line in reversed(out.splitlines()):

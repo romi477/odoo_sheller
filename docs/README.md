@@ -12,6 +12,8 @@ This folder goes deeper on the parts worth explaining once, properly.
 | [security.md](security.md) | The actual security model: what's protected, what deliberately isn't, and why journals aren't masked |
 | [faq.md](faq.md) | Plain-language questions and answers, in English |
 | [faq-ru.md](faq-ru.md) | То же самое по-русски |
+| [desktop-app/architecture.md](desktop-app/architecture.md) | The macOS app on Tauri: what wraps the daemon, why the port is fixed, where the UI comes from, packaging and signing |
+| [desktop-app/implementation.md](desktop-app/implementation.md) | Building it: stages with acceptance criteria, the changes this repository needs, the test matrix, and the decisions still open |
 
 ## Where to start
 
@@ -23,6 +25,9 @@ This folder goes deeper on the parts worth explaining once, properly.
   every control; [faq.md](faq.md) / [faq-ru.md](faq-ru.md) answer the
   questions people actually ask.
 - **Wiring up an agent?** [agent-guide.md](agent-guide.md).
+- **Building the desktop app?** [desktop-app/architecture.md](desktop-app/architecture.md)
+  for the design, [desktop-app/implementation.md](desktop-app/implementation.md)
+  for the work.
 
 [CHANGELOG.md](../CHANGELOG.md), at the repository root, tracks what shipped
 in each version.

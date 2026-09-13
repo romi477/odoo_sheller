@@ -1,8 +1,10 @@
 """HTTP for commands, WebSocket for what arrives on its own."""
 
 import asyncio
+import contextlib
 import json
 import re
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -93,8 +95,41 @@ class PolicyBody(BaseModel):
     allow_commit: bool
 
 
+def daemon_version() -> str:
+    """Our own version, or `"unknown"` when nothing declares it.
+
+    A frozen build carries no dist-info unless the packaging step asks for it,
+    and `version()` raises there rather than returning a blank. `/health` is
+    the desktop app's liveness probe, so it must answer even then: the app
+    needs `ok`, and treats the version as a courtesy.
+    """
+    try:
+
+        return version("odoo-sheller")
+    except PackageNotFoundError:
+
+        return "unknown"
+
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Close the live sessions on the way down.
+
+    Sessions cannot outlive the daemon — their container-side processes are
+    our children — but dying without saying so leaves every journal ending
+    mid-transcript, with no `session_close` and no cause. The desktop app
+    stops the daemon on quit, which makes this the normal way a session ends,
+    not an edge case. The timeout is short on purpose: this runs inside
+    uvicorn's own graceful-shutdown budget.
+    """
+    yield
+    for session_id in list(app.state.registry.sessions):
+        with contextlib.suppress(Exception):
+            await app.state.registry.close(session_id, timeout=1.5)
+
+
 def create_app(registry: Registry | None = None) -> FastAPI:
-    app = FastAPI(title="odoo-sheller", docs_url=None)
+    app = FastAPI(title="odoo-sheller", docs_url=None, lifespan=lifespan)
     app.state.registry = (
         registry if registry is not None else Registry(admin_key=load_admin_key())
     )
@@ -205,6 +240,12 @@ def create_app(registry: Registry | None = None) -> FastAPI:
             return HTTPException(status_code=504, detail=str(exc))
 
         return HTTPException(status_code=500, detail=str(exc))
+
+    @app.get("/health")
+    def health():
+        """Liveness for the desktop app. No session data, no admin key."""
+
+        return {"ok": True, "version": daemon_version()}
 
     @app.get("/api/containers")
     async def containers():
