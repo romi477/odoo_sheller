@@ -5,9 +5,35 @@ record is [docs/desktop-app/architecture.md](../docs/desktop-app/architecture.md
 the work is staged in
 [docs/desktop-app/implementation.md](../docs/desktop-app/implementation.md).
 
+## What you need
+
+| | |
+|---|---|
+| Xcode command line tools | `xcode-select --install` — the linker and the macOS SDK |
+| Rust | [rustup](https://rustup.rs); `~/.cargo/bin` on `PATH` |
+| Tauri CLI | `cargo install tauri-cli --locked` — gives `cargo tauri` |
+| uv | already needed for the daemon; the freeze runs PyInstaller through it |
+
+Nothing else. There is no npm, no bundler and no build step for the frontend:
+`src/` is the page, and `src/vendor/` holds xterm.js as downloaded.
+
 ```bash
-# from the repository root, with the Rust toolchain on PATH
-cargo tauri dev --manifest-path odoo-sheller-app/src-tauri/Cargo.toml
+cargo tauri --version      # the CLI is found
+uv sync --group dev        # pulls PyInstaller in for the freeze
+```
+
+## Running it from source
+
+```bash
+cd odoo-sheller-app && cargo tauri dev
+```
+
+That rebuilds the Rust side on every save and reloads the page. The daemon it
+talks to comes from this checkout, not from a bundle. The `shellerd` shell
+function in the main README wraps both:
+
+```bash
+shellerd app        # daemon if needed, then the window, detached
 ```
 
 Port **8765** is fixed. If a daemon is already there, the app attaches and
@@ -43,7 +69,16 @@ packaging/app.sh install    # build, then replace /Applications/odoo-sheller.app
 
 `build` is `cargo tauri build --bundles app`, which runs `packaging/freeze.sh`
 as `beforeBuildCommand` and copies both onedir trees into the bundle. There is
-no separate PyInstaller step to forget.
+no separate PyInstaller step to forget. What it leaves behind:
+
+```
+odoo-sheller-app/src-tauri/target/release/bundle/macos/odoo-sheller.app
+odoo-sheller-app/src-tauri/target/release/bundle/dmg/odoo-sheller_<version>_aarch64.dmg
+```
+
+The first build compiles the whole Tauri dependency tree and takes minutes;
+later ones are incremental. `packaging/dist/` holds the frozen daemon between
+builds and is gitignored.
 
 `install` quits a running copy first — replacing a bundle underneath itself
 leaves the old process alive holding a deleted tree — and refuses to delete

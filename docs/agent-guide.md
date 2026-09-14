@@ -280,26 +280,63 @@ back a mid-transaction cursor before it tests.
 ## Running under Claude Desktop
 
 Claude Desktop starts the server itself, from
-`~/Library/Application Support/Claude/claude_desktop_config.json`.
-**MCP Configuration…** in the application menu shows that entry with the right path filled in and copies it to the clipboard. It never writes to an agent's config: those files are yours, they hold other servers, and one of them is live state a running Claude Code rewrites. Zed wants the same entry under `context_servers`. From a checkout,
-the same shape with `uv`:
+`~/Library/Application Support/Claude/claude_desktop_config.json`. Claude Code
+reads `~/.claude.json`, Cursor `~/.cursor/mcp.json`, Zed
+`~/.config/zed/settings.json` — the same `command`/`args` entry, under
+`context_servers` rather than `mcpServers`, and `args` is required there even
+when empty.
+
+The command can be spelled three ways. **From the installed app**, which needs
+nothing else on the machine:
 
 ```json
 {
   "mcpServers": {
     "odoo-sheller": {
-      "command": "uv",
+      "command": "/Applications/odoo-sheller.app/Contents/Resources/odoo-sheller-mcp/odoo-sheller-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+**From a checkout**, the console script `uv sync` installs — one process
+rather than a wrapper around one:
+
+```json
+{
+  "mcpServers": {
+    "odoo-sheller": {
+      "command": "<project path>/.venv/bin/odoo-sheller-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+**From a checkout, through uv**, when you would rather the environment be
+synced from `uv.lock` at every start:
+
+```json
+{
+  "mcpServers": {
+    "odoo-sheller": {
+      "command": "<absolute path to uv>",
       "args": ["--directory", "<project path>", "run", "python", "-m", "odoo_sheller.mcp"]
     }
   }
 }
 ```
 
-Absolute paths for `command` and `--directory` are safer in practice: Desktop
-launches its servers with a minimal `PATH`, so a bare `uv` can fail to
-resolve. `uv run` syncs the environment from `uv.lock` before starting, so
-the MCP SDK lives in this project's own dependencies rather than a separate
-environment.
+Absolute paths for `command` and `--directory` are safer in practice: hosts
+launch their servers with a minimal `PATH`, so a bare `uv` can fail to
+resolve.
+
+The desktop app's **MCP Configuration…** menu prints the first form with the
+real path filled in, in both shapes, and copies it to the clipboard. It never
+writes to an agent's config: those files are yours, they hold servers this
+project knows nothing about, and `~/.claude.json` is live state that a running
+Claude Code rewrites under you.
 
 **The daemon is not started by the MCP server, on purpose.** Desktop restarts
 its MCP servers freely — on a config change, a crash, even a quit. If the

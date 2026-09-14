@@ -254,12 +254,23 @@ deliberate rather than incidental:
 
 `odoo-sheller-app/` builds a macOS `.app`: the same daemon, a window around
 it, and a terminal dock at the bottom for the machine the session runs on.
-The daemon and the MCP server travel frozen inside the bundle, so the app
-needs no Python, no `uv` and no checkout.
+The daemon and the MCP server travel frozen inside the bundle, so the *built
+app* needs no Python, no `uv` and no checkout — building it, of course, needs
+all three.
+
+Building it also needs the Xcode command line tools, Rust and the Tauri CLI;
+[odoo-sheller-app/README.md](odoo-sheller-app/README.md) lists them and says
+how to run it from source without building anything.
 
 ```bash
+packaging/app.sh build       # the .app
+packaging/app.sh dmg         # a .dmg to hand someone
 packaging/app.sh install     # build, then replace /Applications/odoo-sheller.app
 ```
+
+One command does everything: `cargo tauri build` runs `packaging/freeze.sh` as
+its `beforeBuildCommand`, so PyInstaller cannot be forgotten and the bundle
+cannot ship yesterday's daemon.
 
 It is ad-hoc signed and not notarized — a downloaded copy is cleared in System
 Settings → Privacy & Security → Open Anyway — and Apple Silicon only. The
@@ -276,24 +287,66 @@ the whole tool.
 Full tool list and defaults: [docs/agent-guide.md](docs/agent-guide.md). Short
 version:
 
-`odoo_sheller/mcp.py` exposes the same API to an agent over stdio. Claude Desktop
-starts it from `~/Library/Application Support/Claude/claude_desktop_config.json`.
-**MCP Configuration…** in the application menu shows that entry with the right path filled in and copies it to the clipboard. It never writes to an agent's config: those files are yours, they hold other servers, and one of them is live state a running Claude Code rewrites. From a checkout:
+`odoo_sheller/mcp.py` exposes the same API to an agent over stdio. The agent's
+host starts it: Claude Desktop from
+`~/Library/Application Support/Claude/claude_desktop_config.json`, Claude Code
+from `~/.claude.json`, Cursor from `~/.cursor/mcp.json`, Zed from
+`~/.config/zed/settings.json` — the same entry, under `context_servers`
+instead of `mcpServers`.
+
+Three ways to name the command, by how much the machine has to have on it.
+
+**From the installed app** — no Python, no `uv`, no checkout:
 
 ```json
 {
   "mcpServers": {
     "odoo-sheller": {
-      "command": "uv",
+      "command": "/Applications/odoo-sheller.app/Contents/Resources/odoo-sheller-mcp/odoo-sheller-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+**From a checkout**, the console script `uv sync` installs:
+
+```json
+{
+  "mcpServers": {
+    "odoo-sheller": {
+      "command": "<project path>/.venv/bin/odoo-sheller-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+**From a checkout, through uv**, which syncs the environment from `uv.lock`
+before starting:
+
+```json
+{
+  "mcpServers": {
+    "odoo-sheller": {
+      "command": "<absolute path to uv>",
       "args": ["--directory", "<project path>", "run", "python", "-m", "odoo_sheller.mcp"]
     }
   }
 }
 ```
 
-Absolute paths on purpose: Desktop launches with a minimal `PATH`. The daemon is
-**not** started by the MCP server — Desktop restarts its servers freely, and a
-daemon that died with them would take every live session down too.
+Absolute paths on purpose: these hosts launch their servers with a minimal
+`PATH`, so a bare `uv` can fail to resolve.
+
+The desktop app's **MCP Configuration…** menu prints the first of these with
+the real path filled in and copies it to the clipboard. It never writes to an
+agent's config: those files are yours, they hold other servers, and one of
+them is live state a running Claude Code rewrites.
+
+The daemon is **not** started by the MCP server — a host restarts its servers
+freely, and a daemon that died with them would take every live session down
+too.
 
 An agent opens its own sessions (`owner: agent`, no commit right), or you hand
 yours over from the session keyboard: **Grant access** rotates the key, shows
