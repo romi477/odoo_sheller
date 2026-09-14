@@ -11,6 +11,14 @@
      boundary. */
   --muted-low: oklch(0.55 0.04 290);
   --line: oklch(0.24 0.03 290);
+  /* The dock is a terminal, and a terminal is black — the same black the
+     system one has. Not the window's own near-black: the point is that the
+     strip at the bottom reads as a different kind of surface. */
+  --terminal: #000;
+  /* The UI's `--border`, copied by value the way the rest of these are: the
+     line around its canvas and its cards. Not the header's edge, which is that
+     colour lit with cyan and reads as a heavier line at the same 1px. */
+  --edge: oklch(0.28 0.04 290);
   --sans: system-ui, -apple-system, sans-serif;
 }
 
@@ -97,13 +105,14 @@ button.quiet {
 /* ------------------------------------------------------------- the dock */
 
 #dock {
+  position: relative;
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: 280px;
   border-top: 1px solid var(--line);
-  background: var(--background);
+  background: var(--terminal);
 }
 
 /* Closed is the bar alone: the way back in is always on screen. */
@@ -118,9 +127,17 @@ button.quiet {
   display: none;
 }
 
+/* Over the bar, not above it. In the flow it was six pixels of nothing
+   between the dock's top line and the tabs, which reads as a margin on one
+   side of the labels and leaves none on the other. A drag target is an
+   interaction, not a row. */
 #grip {
-  height: 6px;
-  flex: 0 0 auto;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  z-index: 2;
   cursor: row-resize;
 }
 
@@ -136,12 +153,25 @@ button.quiet {
      outline the tabs no longer have to hang from a lip and merge into what is
      below them: colour alone says which one is live, and colour needs no
      geometry. */
-  min-height: 26px;
+  /* The band the labels live in runs from the top of the dock to the top of
+     the terminal's frame, so the bar is that whole band: 20 for the labels
+     plus the 8 the frame used to take as its own top margin. Centring inside
+     anything shorter leaves them sitting high by half of what is left over. */
+  min-height: 28px;
   padding: 0;
+  /* `line-height: 1` so the boxes in here have whole-pixel heights. Inherited
+     from the body it is 1.45, which makes a 14px label 20.3px tall — and
+     centring something 20.3 tall in an even bar rounds, so every item sat a
+     pixel low. */
+  line-height: 1;
+  /* 13px, the size the UI sets on its own buttons. Inherited from the body it
+     was 14 and the bar read a step larger than everything above it. */
+  font-size: 13px;
   /* The same quiet line the dock is separated from the UI by. A brighter one
      here was the tab outline's job, and the outline is gone. */
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
+  /* No line under the bar: the outlined terminal below it is the edge now,
+     and two edges a few pixels apart read as a mistake. */
+  background: var(--terminal);
 }
 
 #tabs {
@@ -151,22 +181,62 @@ button.quiet {
   min-width: 0;
   gap: 4px;
   overflow-x: auto;
+  /* The bar is 28 pixels tall; a scrollbar across it would take a quarter of
+     that. Tabs past the edge are still reached by scrolling, and by ⌥⌘←/→. */
+  scrollbar-width: none;
+}
+
+#tabs::-webkit-scrollbar {
+  display: none;
 }
 
 #dock-spacer {
   flex: 1 1 auto;
 }
 
+/* Wide enough to read as a tab rather than a word in a row of words: the
+   label is short — `zsh ~` and a number — and the bar has the whole width of a
+   monitor to spend. The padding is the same on both sides so the label sits in
+   the middle of the tab with the × hanging off the right, rather than in the
+   middle of whatever the × leaves over. */
 .tab {
+  position: relative;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  min-width: 132px;
   max-width: 20ch;
-  padding: 0 10px;
+  padding: 0 22px;
   border: 0;
   border-radius: 0;
   background: transparent;
   color: var(--cyan);
   white-space: nowrap;
+  transition: color 120ms;
+}
+
+/* The divider the UI puts between Connect / Sessions / Journals, in the middle
+   of the 4px gap between two tabs. Not before the first one: it separates,
+   it does not enclose. */
+.tab + .tab::before {
+  content: "";
+  position: absolute;
+  left: -2px;
+  top: 50%;
+  width: 1px;
+  height: 16px;
+  margin-top: -8px;
+  background: var(--edge);
+}
+
+/* And the UI's hover: amber, lifted by two pixels. The label alone moves — the
+   × keeps its own corner and its own hover. */
+.tab:hover {
+  color: var(--amber);
+}
+
+.tab:hover .title {
+  transform: translateY(-2px);
 }
 
 /* Amber is the whole signal. An outline around the live tab was a second one
@@ -175,14 +245,23 @@ button.quiet {
   color: var(--amber);
 }
 
+/* Every box in this bar is centred, but a glyph is not centred in its own
+   box: the em box reserves room for descenders these labels do not have, so
+   the ink sits low by half of whatever is unused. The padding below each one
+   is that gap doubled, and centring then puts the ink itself in the middle.
+   Measured, not guessed: 0.8px for the label, 3px for × and +. */
 .tab .title {
   overflow: hidden;
+  padding-bottom: 1px;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: transform 80ms;
 }
 
 .tab .close {
-  margin-left: 8px;
+  position: absolute;
+  right: 8px;
+  padding-bottom: 3px;
   color: var(--muted-low);
 }
 
@@ -205,8 +284,8 @@ button.quiet {
 }
 
 #new-tab {
-  width: 26px;
-  padding: 0;
+  width: 30px;
+  padding: 0 0 3px;
   font-size: 16px;
 }
 
@@ -214,15 +293,49 @@ button.quiet {
    and below, so the corner's diagonal runs through the label rather than past
    it. */
 #dock-toggle {
-  padding: 0 8px;
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  /* 16 on the right, not the 8 the terminal's frame is inset by: at 8 the icon
+     lands exactly on the corner the frame turns and reads as pinned to it. */
+  padding: 0 16px 0 8px;
 }
 
+/* Amber while the dock is open, the same way the live tab is amber: with the
+   label gone the icon is the only thing left to say which state this is. */
+#dock-toggle.on {
+  color: var(--amber);
+}
+
+#dock-toggle svg {
+  display: block;
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The terminal as a framed rectangle inside the dock, inset the same amount
+   on every side. The frame is what says "this is your machine, not the UI" —
+   the black alone reads as a darker corner of the window. */
 #panes {
   flex: 1 1 auto;
   position: relative;
   min-height: 0;
-  background: var(--background);
+  /* No top margin: the bar above ends where this begins. */
+  margin: 0 8px 8px;
+  /* The same edge and the same 12px corner the UI gives its canvas, so the
+     terminal is one more box in that window rather than a rectangle cut into
+     the bottom of it. */
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  background: var(--terminal);
+  /* Without this the bottom edge is missing: xterm sizes itself in whole rows
+     and the last one overhangs by a few pixels, and overflowing content paints
+     over a border rather than under it. */
+  overflow: hidden;
 }
 
 .pane {
@@ -238,5 +351,138 @@ button.quiet {
 
 .xterm,
 .xterm-viewport {
-  background: var(--background) !important;
+  background: var(--terminal) !important;
+}
+
+/* ------------------------------------------------- the MCP configuration */
+
+/* A native alert cannot show a JSON snippet: its text is proportional, so the
+   indentation collapses, and OK is the only button it has. Drawn here the
+   snippet keeps its shape and each form gets its own Copy. */
+#mcp {
+  width: min(680px, calc(100vw - 64px));
+  max-height: calc(100vh - 96px);
+  padding: 22px 24px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  overflow-y: auto;
+}
+
+#mcp::backdrop {
+  background: oklch(0 0 0 / 0.55);
+}
+
+#mcp h2 {
+  margin: 0 0 12px;
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--cyan);
+}
+
+#mcp h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+#mcp h3 .hint {
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--muted-low);
+}
+
+#mcp .note {
+  margin: 0 0 16px;
+  max-width: 62ch;
+  color: var(--muted);
+}
+
+.snippet {
+  margin: 0 0 16px;
+}
+
+.snippet header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.snippet pre {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--background);
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  /* The command is one long absolute path and the only thing worth reading in
+     full. Wrapping it beats a second scrollbar inside a dialog. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Quiet until pointed at, like the dock's own two buttons. */
+.copy {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted-low);
+  font-size: 12px;
+  transition: color 120ms;
+}
+
+.copy:hover,
+.copy.done {
+  color: var(--amber);
+}
+
+#mcp .where {
+  margin-bottom: 8px;
+}
+
+#mcp-locations {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0 0 18px;
+  font-size: 13px;
+}
+
+#mcp-locations dt {
+  color: var(--muted);
+}
+
+#mcp-locations dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 12px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+#mcp footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+#mcp footer .note {
+  margin: 0;
+  font-size: 12px;
+}
+
+#mcp footer .note.error {
+  color: var(--amber);
 }

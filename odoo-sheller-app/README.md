@@ -52,9 +52,22 @@ commands, and the terminal has to be in the same window.
 an agent's config, with the bundled binary's path filled in, and copies it to
 the clipboard. It writes nothing.
 
-The dock holds `$SHELL -l` tabs — **Window → Show Terminal**, Ctrl+`, or the
-button on the bar at the bottom; ⌘T adds a tab, ⌘W closes one, and the top
-edge drags. That is your machine, not the Odoo REPL.
+The framed UI is asked for as `/web?app=1`, and that is the only thing it is
+told about being framed: it drops the `swagger` link. `/docs` leads out of the
+UI with no way back — this window has no address bar — and it is the one page
+served here that needs the network.
+
+The dock holds `$SHELL -l` tabs. That is your machine, not the Odoo REPL.
+
+| | |
+|---|---|
+| Ctrl+` | show or hide the dock |
+| ⌘T | new tab |
+| ⌥⌘← / ⌥⌘→ | previous, next tab |
+| ⌘K / ⌘W | close the tab |
+| ⌃⌘↑ / ⌃⌘↓ | taller, shorter |
+
+The top edge drags too, and **Window** holds all of it as menu items.
 
 ## Building
 

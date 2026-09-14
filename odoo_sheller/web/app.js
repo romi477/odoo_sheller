@@ -2981,6 +2981,14 @@ document.querySelector('.odoosh-add').addEventListener('click', () => {
   }
 });
 
+// Framed by the desktop app, which says so in the URL. `/docs` is a link out
+// of this page with no way back — the app's window has no address bar and no
+// Back — and it is the one page here that needs the network. In a browser tab
+// it stays, because there a link out is just a link out.
+if (new URLSearchParams(location.search).has('app')) {
+  document.getElementById('api-docs').hidden = true;
+}
+
 connectRegistrySocket();
 restoreScreen();
 state.builds = savedBuilds();

@@ -33,7 +33,8 @@ and its decisions: [implementation.md](docs/desktop-app/implementation.md).
   actually shipped — a build that merely launches proves neither.
 - **A terminal dock** at the bottom of the window: tabs of `$SHELL -l`,
   resizable by its top edge, opened from the bar, from **Window → Show
-  Terminal**, or with Ctrl+`; ⌘T adds a tab. Output is batched so a large
+  Terminal**, or with Ctrl+`; ⌘T adds a tab, ⌥⌘←/⌥⌘→ move between them,
+  ⌘K or ⌘W closes one. Output is batched so a large
   `cat` does not freeze the UI, closing a tab or quitting reaps the process,
   and the quit dialog counts the tabs it is about to kill. It exists only in
   the app and only in the app's own page — the capability declares no `remote`
@@ -41,10 +42,14 @@ and its decisions: [implementation.md](docs/desktop-app/implementation.md).
   [docs/security.md](docs/security.md#the-desktop-terminal).
 - **MCP Configuration…** shows the entry to paste into an agent's config —
   both shapes, `mcpServers` and Zed's `context_servers` — with the bundled
-  binary's path filled in, and copies it to the clipboard. **It writes
-  nothing.** Those files are the user's, they hold servers this app knows
+  binary's path filled in, each in a monospace block with its own **Copy**,
+  and puts the first form on the clipboard. **It writes nothing.** Those files are the user's, they hold servers this app knows
   nothing about, and `~/.claude.json` is live state a running Claude Code
   rewrites.
+- The framed UI is asked for as `/web?app=1` and drops its `swagger` link
+  there: `/docs` leads out of the UI with no way back in a window that has no
+  address bar, and it is the one page served here that needs the network. In a
+  browser tab the link is untouched.
 - Ad-hoc signed, hardened runtime, **no entitlements at all**, Apple Silicon.
   Not notarized: a downloaded copy is cleared in System Settings → Privacy &
   Security → Open Anyway. `packaging/app.sh` is build, dmg, install.

@@ -286,6 +286,12 @@ at the bottom, from **Window → Show Terminal**, or with Ctrl+`, and resizable 
 its top edge. Attached to the window rather than floating beside it: the point
 is to reach the machine the session is running on without leaving the app.
 
+The frame asks for `/web?app=1`. A remote origin cannot be told anything else
+— there is no IPC across it and no stylesheet crosses it — and there is one
+thing it has to know: inside this window the `swagger` link is a dead end. It
+navigates the frame to `/docs`, which this window offers no way back from, and
+`/docs` is the only page the daemon serves that needs the network.
+
 ## Signing and entitlements
 
 There is no Apple Developer Program membership and no notarization. The
@@ -376,12 +382,12 @@ odoo-sheller.app  (ad-hoc signed, hardened runtime, not notarized)
 │   ├── spawn: Contents/Resources/odoo-sheller/odoo-sheller
 │   ├── PTY: HashMap<session_id, PtyPair> — one $SHELL per terminal tab
 │   ├── menu: MCP Configuration — show the entry to paste, write nothing
-│   ├── menu: Show Terminal / New Terminal Tab — events to the shell page
+│   ├── menu: Show Terminal / New Terminal Tab / tab moves — events to the page
 │   └── exit: confirm with live sessions; kill our daemon, never a foreign one
 │
 ├── WKWebView
-│   ├── window on http://127.0.0.1:8765/web  (the daemon serves the UI)
-│   └── window terminal.html — xterm.js tabs of $SHELL -l
+│   ├── window on http://127.0.0.1:8765/web?app=1  (the daemon serves the UI)
+│   └── shell page: the frame above, xterm.js tabs of $SHELL -l below
 │
 └── External processes
     ├── the daemon

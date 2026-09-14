@@ -190,6 +190,10 @@ fn begin_startup(app: AppHandle) {
     }
     set_startup(&app, Startup::Starting);
     std::thread::spawn(move || {
+        // Before the daemon, and whether or not it comes up: the link is about
+        // the MCP binary, and an agent config that names it should work from
+        // the first launch rather than from the first visit to a menu.
+        let _ = mcp_launch(&app);
         // `Ready` is the whole signal: the page frames the daemon's UI itself.
         // Navigating the window there instead would leave no local page to
         // host the terminal, and no way back to the splash on a later error.
@@ -306,6 +310,47 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         true,
         Some("CmdOrCtrl+T"),
     )?;
+    // Ctrl+Cmd, not Ctrl alone: Ctrl+Up and Ctrl+Down are Mission Control and
+    // App Windows, and the system takes those before any app sees them.
+    let taller = MenuItem::with_id(
+        app,
+        "terminal-taller",
+        "Taller Terminal",
+        true,
+        Some("Control+Command+ArrowUp"),
+    )?;
+    let shorter = MenuItem::with_id(
+        app,
+        "terminal-shorter",
+        "Shorter Terminal",
+        true,
+        Some("Control+Command+ArrowDown"),
+    )?;
+    // Option+Cmd+Left/Right the way browsers move between tabs, and Cmd+K to
+    // close one. Not Cmd+W, which the page keeps for itself: a menu item would
+    // take that key from the window even with no terminal open, and Cmd+W with
+    // no tab has to stay "close the window".
+    let prev_tab = MenuItem::with_id(
+        app,
+        "terminal-prev",
+        "Previous Terminal Tab",
+        true,
+        Some("Alt+Command+ArrowLeft"),
+    )?;
+    let next_tab = MenuItem::with_id(
+        app,
+        "terminal-next",
+        "Next Terminal Tab",
+        true,
+        Some("Alt+Command+ArrowRight"),
+    )?;
+    let close_tab = MenuItem::with_id(
+        app,
+        "terminal-close",
+        "Close Terminal Tab",
+        true,
+        Some("CmdOrCtrl+K"),
+    )?;
     let window = Submenu::with_items(
         app,
         "Window",
@@ -316,6 +361,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
             &PredefinedMenuItem::separator(app)?,
             &terminal,
             &new_tab,
+            &prev_tab,
+            &next_tab,
+            &close_tab,
+            &taller,
+            &shorter,
         ],
     )?;
     let menu = Menu::with_items(app, &[&app_menu, &edit, &view, &window])?;
@@ -324,9 +374,29 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-fn show_mcp_config(app: &AppHandle) {
+/// How an agent should start the MCP server, and the link that makes it short.
+///
+/// A bundled server gets a stable name in `~/.odoo-sheller/bin/` pointed at
+/// it: the path into the bundle is 83 characters and is pasted by hand into as
+/// many as four config files. Refreshed here, which is both at startup and
+/// whenever the menu is opened — an entry written once must keep working after
+/// the app is updated or moved, and it would not if the link only appeared
+/// when somebody remembered to open a menu.
+fn mcp_launch(app: &AppHandle) -> Result<mcp::Launch, String> {
     let resource = app.path().resource_dir().ok();
-    let launch = match daemon::resolve_mcp(resource.as_deref(), daemon::repo_root().as_deref()) {
+    let launch = daemon::resolve_mcp(resource.as_deref(), daemon::repo_root().as_deref())?;
+
+    Ok(match launch.single_command() {
+        Some(exe) => match daemon::refresh_mcp_link(&exe) {
+            Some(link) => mcp::Launch::bundled(&link),
+            None => launch,
+        },
+        None => launch,
+    })
+}
+
+fn show_mcp_config(app: &AppHandle) {
+    let launch = match mcp_launch(app) {
         Ok(launch) => launch,
         Err(message) => {
             app.dialog()
@@ -337,18 +407,23 @@ fn show_mcp_config(app: &AppHandle) {
             return;
         }
     };
-    let mut text = mcp::instructions(&launch);
-    // Copying is the whole convenience here, so a failure has to be visible:
-    // a dialog that claims the clipboard holds something it does not is worse
-    // than no clipboard at all.
-    if let Err(err) = mcp::copy_to_clipboard(&launch.snippet("mcpServers")) {
-        text.push_str(&format!("\n(clipboard unavailable: {err})"));
+    let mut config = mcp::config(&launch);
+    if let Err(err) = mcp::copy_to_clipboard(&config.mcp_servers) {
+        config.clipboard_error = Some(err);
     }
-    app.dialog()
-        .message(text)
-        .title("MCP Configuration")
-        .kind(MessageDialogKind::Info)
-        .blocking_show();
+    // Drawn by the page, not by an alert: a JSON snippet needs a monospace
+    // block to stay indented and a button to copy it, and a native alert has
+    // neither.
+    focus_main(app);
+    let _ = app.emit("mcp-config", config);
+}
+
+/// The copy buttons in that dialog. `pbcopy` again rather than the webview's
+/// clipboard API, so there is one way to the pasteboard and no permission
+/// prompt in a window that already owns the menu bar.
+#[tauri::command]
+fn copy_text(text: String) -> Result<(), String> {
+    mcp::copy_to_clipboard(&text)
 }
 
 /// The terminal is a panel in the main window, so the menu only says so and
@@ -382,7 +457,8 @@ pub fn run() {
             pty_write,
             pty_resize,
             pty_close,
-            shell_name
+            shell_name,
+            copy_text
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -392,6 +468,11 @@ pub fn run() {
                 "mcp-config" => show_mcp_config(app),
                 "terminal" => tell_shell(app, "terminal-toggle"),
                 "terminal-new-tab" => tell_shell(app, "terminal-new-tab"),
+                "terminal-prev" => tell_shell(app, "terminal-prev"),
+                "terminal-next" => tell_shell(app, "terminal-next"),
+                "terminal-close" => tell_shell(app, "terminal-close"),
+                "terminal-taller" => tell_shell(app, "terminal-taller"),
+                "terminal-shorter" => tell_shell(app, "terminal-shorter"),
                 // Reload the framed UI, not the shell: reloading the shell
                 // would take every terminal tab with it. With no daemon
                 // behind the frame there is nothing to reload, so it is a

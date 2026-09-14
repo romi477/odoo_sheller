@@ -256,6 +256,12 @@ a.brand:hover .wordmark {
   color: var(--amber);
 }
 
+/* `display` here outranks the user agent's `[hidden]`, and the desktop app
+   hides this link. */
+#api-docs[hidden] {
+  display: none;
+}
+
 #offline {
   color: var(--red);
 }

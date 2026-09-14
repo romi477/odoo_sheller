@@ -293,12 +293,21 @@ nothing else on the machine:
 {
   "mcpServers": {
     "odoo-sheller": {
-      "command": "/Applications/odoo-sheller.app/Contents/Resources/odoo-sheller-mcp/odoo-sheller-mcp",
+      "command": "/Users/<you>/.odoo-sheller/bin/odoo-sheller-mcp",
       "args": []
     }
   }
 }
 ```
+
+`bin/odoo-sheller-mcp` is a link the app points at whatever copy of itself is
+installed now, refreshed on every launch — so an update or a move leaves the
+entry correct, and the link is there from the first start rather than from the
+first visit to a menu. The real path,
+`/Applications/odoo-sheller.app/Contents/Resources/odoo-sheller-mcp/odoo-sheller-mcp`,
+works too and is what the menu falls back to if the link cannot be made. Write
+the home directory out: these files are read by programs that do not expand
+`~`.
 
 **From a checkout**, the console script `uv sync` installs — one process
 rather than a wrapper around one:

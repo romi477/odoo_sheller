@@ -12,6 +12,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use serde::Serialize;
 use serde_json::{Map, Value};
 
 pub const SERVER_ID: &str = "odoo-sheller";
@@ -42,6 +43,14 @@ impl Launch {
                 "odoo_sheller.mcp".into(),
             ],
         }
+    }
+
+    /// The command when it is one executable and nothing else — a frozen
+    /// server. The checkout form is `uv` plus arguments and has no such thing.
+    pub fn single_command(&self) -> Option<std::path::PathBuf> {
+        self.args
+            .is_empty()
+            .then(|| std::path::PathBuf::from(&self.command))
     }
 
     fn entry(&self) -> Value {
@@ -75,23 +84,46 @@ pub const LOCATIONS: &[(&str, &str)] = &[
     ("Zed", "~/.config/zed/settings.json"),
 ];
 
-pub fn instructions(launch: &Launch) -> String {
-    let mut text = String::from(
-        "Paste this into the agent's config yourself. Nothing here writes to \
-         those files: they are yours, they hold other servers, and one of them \
-         is rewritten by a running Claude Code.\n\n\
-         Claude Desktop, Claude Code, Cursor:\n\n",
-    );
-    text.push_str(&launch.snippet("mcpServers"));
-    text.push_str("\n\nZed — same entry, different parent key:\n\n");
-    text.push_str(&launch.snippet("context_servers"));
-    text.push_str("\n\nWhere they live:\n");
-    for (label, path) in LOCATIONS {
-        text.push_str(&format!("  {label}: {path}\n"));
-    }
-    text.push_str("\nThe mcpServers form is on the clipboard.");
+#[derive(Debug, Clone, Serialize)]
+pub struct Location {
+    pub app: String,
+    pub path: String,
+}
 
-    text
+/// Everything the page needs to draw the configuration. The prose around it
+/// lives in the page: this is a native alert no longer, and an alert is the
+/// one place a JSON snippet cannot be shown — proportional text swallows the
+/// indentation, and there is nothing to press but OK.
+#[derive(Debug, Clone, Serialize)]
+pub struct Config {
+    /// The entry under `mcpServers`: Claude Desktop, Claude Code, Cursor.
+    pub mcp_servers: String,
+    /// The same entry under the key Zed uses for it.
+    pub context_servers: String,
+    /// The command is the stable link beside the daemon's state rather than a
+    /// path into the bundle, and the page says so.
+    pub linked: bool,
+    pub locations: Vec<Location>,
+    /// Set when the snippet could not be put on the clipboard. Copying is the
+    /// whole convenience, so a failure has to be visible — a dialog that
+    /// claims the clipboard holds something it does not is worse than none.
+    pub clipboard_error: Option<String>,
+}
+
+pub fn config(launch: &Launch) -> Config {
+    Config {
+        mcp_servers: launch.snippet("mcpServers"),
+        context_servers: launch.snippet("context_servers"),
+        linked: launch.args.is_empty() && launch.command.contains("/.odoo-sheller/bin/"),
+        locations: LOCATIONS
+            .iter()
+            .map(|(app, path)| Location {
+                app: (*app).into(),
+                path: (*path).into(),
+            })
+            .collect(),
+        clipboard_error: None,
+    }
 }
 
 /// macOS only, like the rest of this app. `pbcopy` rather than a clipboard
@@ -148,6 +180,18 @@ mod tests {
     }
 
     #[test]
+    fn only_a_bare_executable_can_be_linked_to() {
+        assert_eq!(
+            bundled().single_command().unwrap(),
+            Path::new(
+                "/Applications/odoo-sheller.app/Contents/Resources/odoo-sheller-mcp/odoo-sheller-mcp"
+            ),
+        );
+        let checkout = Launch::from_checkout(Path::new("/bin/uv"), Path::new("/repo"));
+        assert!(checkout.single_command().is_none(), "uv plus args is not a path");
+    }
+
+    #[test]
     fn a_checkout_runs_the_module_through_uv() {
         let launch = Launch::from_checkout(Path::new("/opt/homebrew/bin/uv"), Path::new("/repo"));
         let parsed: Value = serde_json::from_str(&launch.snippet("mcpServers")).unwrap();
@@ -160,14 +204,26 @@ mod tests {
     }
 
     #[test]
-    fn the_instructions_name_every_config_and_say_nothing_is_written() {
-        let text = instructions(&bundled());
+    fn the_config_carries_both_snippets_and_every_location() {
+        let config = config(&bundled());
+        assert!(config.mcp_servers.contains("mcpServers"));
+        assert!(config.context_servers.contains("context_servers"));
+        assert_eq!(config.locations.len(), LOCATIONS.len());
         for (label, path) in LOCATIONS {
-            assert!(text.contains(label), "{label} missing");
-            assert!(text.contains(path), "{path} missing");
+            let found = config
+                .locations
+                .iter()
+                .find(|item| item.app == *label)
+                .unwrap_or_else(|| panic!("{label} missing"));
+            assert_eq!(found.path, *path);
         }
-        assert!(text.contains("Nothing here writes"));
-        assert!(text.contains("mcpServers"));
-        assert!(text.contains("context_servers"));
+        assert!(config.clipboard_error.is_none());
+    }
+
+    #[test]
+    fn only_the_linked_command_is_reported_as_a_link() {
+        assert!(!config(&bundled()).linked, "a path into the bundle is not the link");
+        let linked = Launch::bundled(Path::new("/Users/someone/.odoo-sheller/bin/odoo-sheller-mcp"));
+        assert!(config(&linked).linked);
     }
 }

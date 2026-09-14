@@ -10,6 +10,12 @@ use serde::Deserialize;
 
 pub const PORT: u16 = 8765;
 pub const UI_PATH: &str = "/web";
+/// The frame asks for the same page a browser gets, and says who is asking.
+/// The UI is a remote origin with no way back into the app, so a marker in the
+/// URL is the only thing it can be told — and it needs to be told one thing:
+/// not to offer `/docs`. That link navigates the frame away from the UI with
+/// no way back but Reload, and it is the one page here that needs the network.
+const UI_QUERY: &str = "?app=1";
 
 const HEALTH_PATH: &str = "/health";
 const SESSIONS_PATH: &str = "/api/sessions";
@@ -50,7 +56,7 @@ pub fn loopback_url(path: &str) -> String {
 }
 
 pub fn ui_url() -> String {
-    loopback_url(UI_PATH)
+    loopback_url(&format!("{UI_PATH}{UI_QUERY}"))
 }
 
 fn parse_health(status: Option<u16>, body: Option<&str>) -> Option<Health> {
@@ -251,6 +257,45 @@ pub fn resolve_mcp(
     Ok(crate::mcp::Launch::from_checkout(&uv, root))
 }
 
+/// A short, stable name for the bundled MCP server, kept beside the daemon's
+/// own state rather than inside the app.
+///
+/// The path into the bundle is 88 characters and has the binary's name twice;
+/// it is also a path someone pastes into four different config files by hand.
+/// A link resolves the tension decision 5 left: the name never changes, and
+/// what it points at is always the app that is installed now — a copy would
+/// go stale on the next update, and the bundle path breaks if the app moves.
+/// PyInstaller follows it correctly: the onedir tree is found from the
+/// executable's real path, which was checked on a frozen build.
+pub fn mcp_link_path() -> Option<PathBuf> {
+    Some(home_dir()?.join(".odoo-sheller/bin/odoo-sheller-mcp"))
+}
+
+/// Point that name at `target`. Returns the link, or `None` if it could not be
+/// made — in which case the caller shows the real path and nothing is lost.
+pub fn refresh_mcp_link(target: &Path) -> Option<PathBuf> {
+    let link = mcp_link_path()?;
+    fs::create_dir_all(link.parent()?).ok()?;
+
+    replace_symlink(&link, target)
+}
+
+/// Point `link` at `target`, replacing a link that is already there. A real
+/// file at that path is somebody else's and is left alone.
+fn replace_symlink(link: &Path, target: &Path) -> Option<PathBuf> {
+    match fs::symlink_metadata(link) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            fs::remove_file(link).ok()?;
+        }
+        Ok(_) => return None,
+        Err(_) => {}
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).ok()?;
+
+    Some(link.to_path_buf())
+}
+
 pub fn repo_root() -> Option<PathBuf> {
     if let Ok(root) = std::env::var("ODOO_SHELLER_ROOT") {
         return Some(PathBuf::from(root));
@@ -439,7 +484,7 @@ mod tests {
 
     #[test]
     fn ui_stays_on_the_fixed_port() {
-        assert_eq!(ui_url(), "http://127.0.0.1:8765/web");
+        assert_eq!(ui_url(), "http://127.0.0.1:8765/web?app=1");
     }
 
     #[test]
@@ -461,6 +506,31 @@ mod tests {
         assert_eq!(kind, DaemonKind::Bundled { exe: exe.clone() });
         assert_eq!(bundled_bin(Some(&root), "odoo-sheller").as_deref(), Some(exe.as_path()));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_link_is_replaced_but_never_a_real_file() {
+        let dir = std::env::temp_dir().join(format!("odoo-sheller-link-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let first = dir.join("first");
+        let second = dir.join("second");
+        fs::write(&first, b"a").unwrap();
+        fs::write(&second, b"b").unwrap();
+        let link = dir.join("link");
+
+        // a link of ours is repointed
+        std::os::unix::fs::symlink(&first, &link).unwrap();
+        assert!(replace_symlink(&link, &second).is_some());
+        assert_eq!(fs::read_link(&link).unwrap(), second);
+
+        // a real file is left alone
+        let occupied = dir.join("occupied");
+        fs::write(&occupied, b"someone else's").unwrap();
+        assert!(replace_symlink(&occupied, &second).is_none());
+        assert_eq!(fs::read(&occupied).unwrap(), b"someone else's");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

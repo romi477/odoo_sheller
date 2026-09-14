@@ -302,12 +302,19 @@ Three ways to name the command, by how much the machine has to have on it.
 {
   "mcpServers": {
     "odoo-sheller": {
-      "command": "/Applications/odoo-sheller.app/Contents/Resources/odoo-sheller-mcp/odoo-sheller-mcp",
+      "command": "/Users/<you>/.odoo-sheller/bin/odoo-sheller-mcp",
       "args": []
     }
   }
 }
 ```
+
+That is a link the app points at its own bundled server, refreshed every time
+the app starts, so the entry survives an update or a move. **MCP
+Configuration…** prints it with your real home directory filled in — these
+files are read by programs that do not expand `~`. The binary it points at
+lives at
+`/Applications/odoo-sheller.app/Contents/Resources/odoo-sheller-mcp/odoo-sheller-mcp`, if you would rather name it directly.
 
 **From a checkout**, the console script `uv sync` installs:
 

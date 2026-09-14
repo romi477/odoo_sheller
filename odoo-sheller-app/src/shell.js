@@ -3,6 +3,7 @@ const { listen } = window.__TAURI__.event;
 
 const MIN_DOCK = 120;
 const DEFAULT_DOCK = 280;
+const DOCK_STEP = 80;
 
 const frame = document.getElementById("ui");
 const splash = document.getElementById("splash");
@@ -14,6 +15,7 @@ const tabsEl = document.getElementById("tabs");
 const panesEl = document.getElementById("panes");
 const newTabBtn = document.getElementById("new-tab");
 const toggleBtn = document.getElementById("dock-toggle");
+const mcp = document.getElementById("mcp");
 
 // Not `window.alert`: WKWebView draws no JavaScript dialog unless the host
 // implements the WKUIDelegate panels, and wry implements only the file-upload
@@ -83,14 +85,81 @@ listen("reload-ui", () => {
 });
 invoke("startup_state").then(render);
 
+/* ----------------------------------------------------------- mcp config */
+
+// Rust decides what the entry is and puts the first form on the clipboard;
+// this only draws it. The prose lives in `index.html` beside the markup it
+// belongs to.
+function showMcpConfig(config) {
+  document.getElementById("mcp-servers").textContent = config.mcp_servers;
+  document.getElementById("context-servers").textContent = config.context_servers;
+  document.getElementById("mcp-linked").hidden = !config.linked;
+
+  const list = document.getElementById("mcp-locations");
+  list.textContent = "";
+  for (const { app, path } of config.locations) {
+    const term = document.createElement("dt");
+    term.textContent = app;
+    const value = document.createElement("dd");
+    value.textContent = path;
+    list.append(term, value);
+  }
+
+  const clipboard = document.getElementById("mcp-clipboard");
+  clipboard.classList.toggle("error", Boolean(config.clipboard_error));
+  clipboard.textContent = config.clipboard_error
+    ? `Clipboard unavailable: ${config.clipboard_error}`
+    : "The mcpServers form is on the clipboard.";
+
+  // Asking for the dialog while it is already up is a no-op, not an error:
+  // `showModal` on an open dialog throws.
+  if (!mcp.open) {
+    mcp.showModal();
+  }
+  mcp.scrollTop = 0;
+}
+
+// The button says what happened, because nothing else can: a copy leaves no
+// trace on screen. The label and the timer live beside the button rather than
+// on it — `dataset` is strings, and a timer id is not one.
+const copyState = new WeakMap();
+
+async function copy(button, text) {
+  const state = copyState.get(button) || { label: button.textContent };
+  clearTimeout(state.timer);
+  try {
+    await invoke("copy_text", { text });
+    button.textContent = "Copied";
+    button.classList.add("done");
+  } catch (err) {
+    button.textContent = "Failed";
+    console.error("copy:", err);
+  }
+  state.timer = setTimeout(() => {
+    button.textContent = state.label;
+    button.classList.remove("done");
+  }, 1400);
+  copyState.set(button, state);
+}
+
+for (const button of mcp.querySelectorAll(".copy")) {
+  button.addEventListener("click", () =>
+    copy(button, document.getElementById(button.dataset.copy).textContent),
+  );
+}
+document.getElementById("mcp-done").addEventListener("click", () => mcp.close());
+listen("mcp-config", (event) => showMcpConfig(event.payload));
+
 /* --------------------------------------------------------------- terminal */
 
 const tabs = [];
 const closing = new Set();
 let activeId = null;
 
+// `--terminal` in `styles.css` is the same black; xterm paints its own
+// canvas and cannot read a CSS variable.
 const THEME = {
-  background: "#04030e",
+  background: "#000000",
   foreground: "#ddd8ea",
   cursor: "#5ec8d8",
   selectionBackground: "#3a3560",
@@ -110,13 +179,22 @@ function dockOpen() {
   return !dock.classList.contains("closed");
 }
 
+// The height to come back to. Hiding the dock is not closing the terminals —
+// they keep running — so reopening returns them to the size they were left at.
+// Closing the last tab is the other thing, and resets this: the next terminal
+// is a new one and starts at the usual height.
+let dockHeight = DEFAULT_DOCK;
+
 function setDock(open) {
+  if (!open && dockOpen()) {
+    dockHeight = tabs.length ? dock.getBoundingClientRect().height : DEFAULT_DOCK;
+  }
   dock.classList.toggle("closed", !open);
   toggleBtn.classList.toggle("on", open);
   if (open) {
-    if (!dock.style.height) {
-      dock.style.height = `${DEFAULT_DOCK}px`;
-    }
+    // Clamped on the way back in as well as on the way out: the window may
+    // have been made shorter while the dock was hidden.
+    dock.style.height = `${clampDock(dockHeight)}px`;
     const tab = tabs.find((item) => item.id === activeId);
     if (tab) {
       fitAndResize(tab);
@@ -124,6 +202,29 @@ function setDock(open) {
     }
   } else {
     dock.style.removeProperty("height");
+  }
+}
+
+/// The height the dock may take: never taller than the window less a strip of
+/// the UI above it, never shorter than a usable terminal. The drag and the two
+/// shortcuts clamp the same way, so neither can reach a size the other cannot.
+function clampDock(height) {
+  return Math.min(Math.max(MIN_DOCK, height), window.innerHeight - 120);
+}
+
+function resizeDock(delta) {
+  if (!dockOpen()) {
+    // Taller with the dock shut means "show it"; shorter means nothing.
+    if (delta > 0) {
+      toggleDock();
+    }
+
+    return;
+  }
+  dock.style.height = `${clampDock(dock.getBoundingClientRect().height + delta)}px`;
+  const tab = tabs.find((item) => item.id === activeId);
+  if (tab) {
+    fitAndResize(tab);
   }
 }
 
@@ -273,10 +374,35 @@ function toggleDock() {
   setDock(true);
 }
 
+// Wrapping, because the tabs are a ring: the step past the last one is the
+// first, which is what every terminal with tabs does. Nothing to do with the
+// dock shut — the keys move between tabs, they do not conjure one.
+function cycleTab(step) {
+  if (!dockOpen() || tabs.length < 2) {
+    return;
+  }
+  const index = tabs.findIndex((item) => item.id === activeId);
+  if (index < 0) {
+    return;
+  }
+  setActive(tabs[(index + step + tabs.length) % tabs.length].id);
+}
+
+function closeActiveTab() {
+  if (dockOpen() && activeId) {
+    closeTab(activeId);
+  }
+}
+
 newTabBtn.addEventListener("click", () => openTab());
 toggleBtn.addEventListener("click", toggleDock);
 listen("terminal-toggle", toggleDock);
 listen("terminal-new-tab", newTab);
+listen("terminal-prev", () => cycleTab(-1));
+listen("terminal-next", () => cycleTab(1));
+listen("terminal-close", closeActiveTab);
+listen("terminal-taller", () => resizeDock(DOCK_STEP));
+listen("terminal-shorter", () => resizeDock(-DOCK_STEP));
 
 /* ------------------------------------------------------------------ grip */
 
@@ -291,11 +417,7 @@ grip.addEventListener("mousedown", (event) => {
   // most of the drag.
   frame.style.pointerEvents = "none";
   const onMove = (move) => {
-    const height = Math.min(
-      Math.max(MIN_DOCK, startHeight + (startY - move.clientY)),
-      window.innerHeight - 120,
-    );
-    dock.style.height = `${height}px`;
+    dock.style.height = `${clampDock(startHeight + (startY - move.clientY))}px`;
   };
   const onUp = () => {
     window.removeEventListener("mousemove", onMove);
@@ -317,8 +439,9 @@ window.addEventListener("resize", () => {
   }
 });
 
-// Cmd+T and Ctrl+` are the menu's. Cmd+W has no menu item of its own, and
-// closing a tab is not closing the window.
+// Cmd+T, Cmd+K and the arrows are the menu's. Cmd+W is not: as a menu item it
+// would be taken from the window even with no terminal open, and Cmd+W with
+// nothing to close has to stay "close the window".
 window.addEventListener("keydown", (event) => {
   if (event.metaKey && event.key === "w" && dockOpen() && activeId) {
     event.preventDefault();
