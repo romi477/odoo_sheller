@@ -111,15 +111,18 @@ as a heredoc — nothing is copied into the container, nothing to clean up.
   is `invalidate_all(flush=False)` then `cr.rollback()`. The `flush=False` is
   required — the default `True` would write out exactly what a rollback is about
   to discard (`odoo/orm/environments.py:357`).
-- **Odoo 15 through 19.** The bootstrap is version-neutral by construction —
+- **Odoo 15 through 20.** The bootstrap is version-neutral by construction —
   it depends only on the non-tty `console()` branch and the names `env` /
   `self` — and those, the rollback around the console, `SIGINT`, and the
-  cursor that commits on a clean exit are line-for-line the same in all five.
-  All five are verified by live runs: session, exec, namespace, transactions
-  (including a committed record read back from a second session), interrupt,
-  and a real `run_test`. `SUPPORTED_MAJORS` in `discovery.py` is the whole
-  gate, and the probe refuses anything below it at connect time rather than
-  failing later.
+  cursor that commits on a clean exit are line-for-line the same in all six.
+  15 through 19 are verified by live runs: session, exec, namespace,
+  transactions (including a committed record read back from a second session),
+  interrupt, and a real `run_test`. 20 is verified on a master container —
+  which still calls itself 19.5, so it already passes the gate as a 19 —
+  everything above except the committed record, which was not written to
+  someone's migration database. `SUPPORTED_MAJORS` in `discovery.py` is the
+  whole gate, and the probe refuses anything outside it at connect time
+  rather than failing later.
 - **What moved between versions is feature-detected, never keyed to a number.**
   The bootstrap asks the interpreter it is in, because the container is the
   only authority on what it has:
@@ -129,7 +132,9 @@ as a heredoc — nothing is copied into the container, nothing to clean up.
     `towrite`, so it discards rather than flushes, which is what a rollback
     needs.
   - `odoo/tests/shell.py` arrived in 17 and is byte-for-byte identical in 17,
-    18 and 19, so those call `run_tests`. For 15 and 16 there is no such file,
+    18, 19 and 20, so those call `run_tests` — but in 20 that file reads a
+    `server.httpd` its own threaded server no longer has, so the bootstrap
+    supplies one before calling it. For 15 and 16 there is no such file,
     but every primitive it is built from is older and unchanged, so
     `_os_run_tests_fallback` is that file's body against them. It drops the
     `odoo.cli.COMMAND != 'shell'` guard, because `odoo.cli` has no `COMMAND`

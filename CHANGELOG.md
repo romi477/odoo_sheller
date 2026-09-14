@@ -7,6 +7,35 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Odoo 20
+
+- `SUPPORTED_MAJORS` accepts 20. A master container still calls itself 19.5
+  and already passes as a 19; the entry is for the day the number changes.
+- **Running tests needed a fix.** 20 dropped `httpd` from `ThreadedServer` —
+  only `GeventServer` keeps one — while `odoo/tests/shell.py`, byte-identical
+  to 19, still reads `server.httpd` to decide whether to spawn a daemon. In
+  shell mode that is a threaded server, so `run_tests` died of
+  `AttributeError` before a single test ran. The bootstrap now spawns the
+  daemon itself and answers that guard; nothing outside `GeventServer`
+  dereferences the attribute, so answering it is safe. Reading the sources
+  did not find this — a container did.
+- Everything else survived untouched, and the two things that did move were
+  already feature-detected: `OdooTestResult` keeps its counts in sets now,
+  behind the same `failures_count` / `errors_count` names, and the thread's
+  `dbname`, which `cli/shell.py` used to set, is set by `Registry.__new__`
+  instead.
+- `tests/test_e2e.py` ran `base:TestFloatPrecision`, which 20 moved out of
+  `addons/base/tests` — a fixture that quietly reports `tests_run: 0`. It now
+  runs `base:TestIrDefault.test_conditions`, which exists under those names in
+  all six majors, and the autoclose test asserts `tests_run` rather than only
+  `success`, which is true of zero tests too.
+- `docs/architecture.md` had the wrong line numbers for two of the facts it
+  pins: the `sql_db.py` column pointed at `Savepoint.__exit__`, which only
+  ever rolls back, instead of the cursor `__exit__` that commits on a clean
+  exit; and three of the five `service/server.py` numbers were off. Both are
+  the numbers someone would use to re-verify the design, so they are now a
+  table, measured across all six versions.
+
 ### Desktop app
 
 - Frozen onedir trees of the daemon and the MCP server ship inside the

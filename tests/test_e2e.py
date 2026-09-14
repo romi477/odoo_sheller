@@ -25,6 +25,13 @@ CONTAINER = os.environ.get("PT_E2E_CONTAINER", "integra19")
 DATABASE = os.environ.get("PT_E2E_DB", "integra_db_19_presta")
 ODOO_BIN = os.environ.get("PT_E2E_ODOO_BIN", "/opt/odoo/odoo-bin")
 NON_ODOO = os.environ.get("PT_E2E_NON_ODOO", "odoo-postgres")
+# A core test that exists, under the same names, in every supported major.
+# `base.TestFloatPrecision` used to be that and is not any more: 20 moved the
+# float tests out of `addons/base/tests`, which turns a run here into
+# `tests_run: 0` — the right answer to a name that matches nothing, and a
+# useless fixture.
+TEST_CLASS = os.environ.get("PT_E2E_TEST_CLASS", "TestIrDefault")
+TEST_METHOD = os.environ.get("PT_E2E_TEST_METHOD", "test_conditions")
 
 pytestmark = pytest.mark.e2e
 
@@ -155,8 +162,8 @@ async def test_close_leaves_no_committed_data(session):
 
 
 async def test_run_test_runs_a_single_known_passing_method(session):
-    """base is always installed; TestFloatPrecision is stable core Odoo code."""
-    result = await session.run_test("base", "TestFloatPrecision", "test_rounding_02")
+    """base is always installed; this class is stable core Odoo code."""
+    result = await session.run_test("base", TEST_CLASS, TEST_METHOD)
     assert result["error"] is None
     assert result["test"]["tests_run"] == 1
     assert result["test"]["failures"] == 0
@@ -166,7 +173,7 @@ async def test_run_test_runs_a_single_known_passing_method(session):
 
 
 async def test_run_test_runs_a_whole_class(session):
-    result = await session.run_test("base", "TestFloatPrecision")
+    result = await session.run_test("base", TEST_CLASS)
     assert result["error"] is None
     assert result["test"]["tests_run"] > 1
     assert result["test"]["success"] is True
@@ -188,7 +195,7 @@ async def test_run_test_discards_pending_exec_work_in_the_same_session(session):
     assert created["error"] is None
     assert session.pending_commands == 1
 
-    result = await session.run_test("base", "TestFloatPrecision", "test_rounding_02")
+    result = await session.run_test("base", TEST_CLASS, TEST_METHOD)
     assert result["discarded_pending"] is True
     assert session.pending_commands == 0
 
@@ -204,8 +211,11 @@ async def test_a_test_session_closes_itself_when_the_run_ends(tmp_path):
     live = await registry.open(CONTAINER, DATABASE, ODOO_BIN, autoclose=True)
     session_id = live.id
     try:
-        result = await live.run_test("base", "TestFloatPrecision", "test_rounding_02")
+        result = await live.run_test("base", TEST_CLASS, TEST_METHOD)
         assert result["test"]["success"] is True
+        # Not only "success": that is True for zero tests too, so this would
+        # have passed while running nothing at all.
+        assert result["test"]["tests_run"] == 1
 
         for _ in range(100):
             if session_id not in registry.sessions:

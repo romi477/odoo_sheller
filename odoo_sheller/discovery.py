@@ -12,7 +12,14 @@ from odoo_sheller.transport import SSH_OPTS, docker_bin
 # 15 — `flush_all`/`invalidate_all`, `odoo/tests/shell.py`, where the test
 # result object lives, `run_suite`'s signature — the bootstrap feature-detects
 # rather than switching on the number here. See docs/architecture.md.
-SUPPORTED_MAJORS = (15, 16, 17, 18, 19)
+#
+# 20 reports itself as 19.5 until it ships, so a master container already
+# passes this gate as a 19; the entry here is for the day the number changes.
+# It is verified on such a container, and the reading was not enough: sessions
+# and transactions worked untouched, but `run_tests` died of AttributeError
+# because 20 dropped `httpd` from ThreadedServer while `odoo/tests/shell.py`
+# still reads it. See `_os_run_test` in bootstrap.py.
+SUPPORTED_MAJORS = (15, 16, 17, 18, 19, 20)
 MODULE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 PROBE_SOURCE = r'''

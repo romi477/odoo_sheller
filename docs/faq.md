@@ -259,11 +259,17 @@ guard needs to be built *before* the fact, not discovered missing after.
 
 **Which Odoo versions are supported?**
 
-15 through 19. Anything older is refused by the probe immediately, with a
-message naming what would work, rather than letting you hit a confusing
+15 through 20. Anything outside that is refused by the probe immediately, with
+a message naming what would work, rather than letting you hit a confusing
 failure on the first real command.
 
-The bootstrap depends on nothing that has changed across those five: the
+20 is checked on a master container, which still calls itself 19.5 and so
+already passes as a 19. The sources alone were not enough: everything the
+bootstrap stands on is unchanged there, but running tests still broke, because
+20 dropped an attribute from its threaded server that Odoo's own shell test
+runner still reads. That is worked around in the bootstrap.
+
+The bootstrap depends on nothing that has changed across those six: the
 non-tty branch of Odoo's own console, the names `env` and `self`, the
 rollback around it, `SIGINT`, and a cursor that commits on a clean exit. All
 five were checked by hand on real containers — session, commands, interrupt,

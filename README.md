@@ -1,6 +1,6 @@
 # odoo-sheller
 
-Persistent Odoo REPL proxy (15 through 19): a local Python daemon keeps `odoo-bin shell`
+Persistent Odoo REPL proxy (15 through 20): a local Python daemon keeps `odoo-bin shell`
 alive — in a local Docker container, or on an odoo.sh build over SSH — and
 exposes it over HTTP/WebSocket.
 
@@ -28,7 +28,7 @@ filtering). Across a debugging session that dominates.
 
 odoo-sheller starts Odoo once, keeps the namespace, and makes commit/rollback
 explicit. Rollback is the default; nothing is written until you confirm a
-commit. Odoo 15 through 19.
+commit. Odoo 15 through 20.
 
 ```
 browser ──HTTP/WS──> daemon (macOS) ──pipe──> docker exec ──> odoo-bin shell
@@ -73,7 +73,7 @@ The reasoning behind each of these, and what they don't cover, is in
 | OS | macOS (daemon is not containerized) |
 | Python | 3.12 or newer |
 | Package manager | [uv](https://docs.astral.sh/uv/) (preferred) or pip + venv |
-| Docker | Docker CLI; a running Odoo **15 through 19** container |
+| Docker | Docker CLI; a running Odoo **15 through 20** container |
 | odoo.sh (optional) | SSH access to a build; nothing else — no key files to configure here, an alias from your own `~/.ssh/config` works |
 
 Nothing is installed on the far side, container or build. The bootstrap needs

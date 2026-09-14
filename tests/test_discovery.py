@@ -120,9 +120,10 @@ def test_probe_source_reads_version_and_db_name_from_a_fake_container(tmp_path):
     assert "database list unavailable" in payload["error"]
 
 
-@pytest.mark.parametrize("major", [15, 16, 17, 18, 19])
+@pytest.mark.parametrize("major", discovery.SUPPORTED_MAJORS)
 async def test_probe_accepts_every_supported_major(major):
-    """The shell path is identical in 17, 18 and 19 — see docs/architecture.md."""
+    """Parametrised from the tuple itself: a major added there without a probe
+    that accepts it is the failure this would otherwise miss."""
     payload = json.dumps({
         "ok": True, "odoo_bin": "/opt/odoo/odoo-bin", "odoo_version": f"{major}.0",
         "odoo_major": major, "python": "3.10.0", "config": None, "databases": [],
@@ -142,7 +143,7 @@ async def test_probe_refuses_a_major_below_the_supported_ones():
     assert result["supported"] is False
     # The refusal has to say what would work, not only what will not.
     assert "14.0" in result["error"]
-    for major in (15, 16, 17, 18, 19):
+    for major in discovery.SUPPORTED_MAJORS:
         assert str(major) in result["error"]
 
 

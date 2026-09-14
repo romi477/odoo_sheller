@@ -187,7 +187,7 @@ def _os_run_tests_fallback(env, test_tags, modules):
         return None
 
     server = importlib.import_module("odoo.service.server").server
-    if not server.httpd:
+    if not getattr(server, "httpd", None):
         # Some tests need the http daemon; the port was already moved off the
         # container's own by the caller.
         server.http_spawn()
@@ -248,7 +248,9 @@ def _os_run_test(env, module, test_class, test_method):
             # it was built from.
             shell = None
         server = importlib.import_module("odoo.service.server").server
-        if server.httpd is None:
+        # `getattr`, not `server.httpd`: 20 moved that attribute to
+        # GeventServer only, and in shell mode this is a ThreadedServer.
+        if getattr(server, "httpd", None) is None:
             # Only before the first spawn in this process: run_tests() itself
             # skips spawning a second time, and clobbering the port afterwards
             # would desync it from the daemon actually already listening.
@@ -262,6 +264,39 @@ def _os_run_test(env, module, test_class, test_method):
                                       or "0.0.0.0")
             server.port = free_port
             config["http_port"] = free_port
+            if not hasattr(server, "httpd"):
+                # `httpd` is Odoo's reference to the running HTTP daemon, not
+                # a flag. Through 19 `ThreadedServer.http_spawn()` stored the
+                # WSGI server there so `stop()` could shut it down. In 20 the
+                # socket lives inside `http_server_thread` under a `with`, so
+                # there is nothing left to hold and the attribute is gone from
+                # that class — only `GeventServer` still has one.
+                #
+                # `odoo/tests/shell.py` was not updated with it and still does
+                # `if not server.httpd`, so on a threaded server — which is
+                # what shell mode runs — the runner dies of AttributeError
+                # before a single test executes. That is an upstream bug; this
+                # is the shim.
+                #
+                # Setting it to None is not enough: `http_spawn()` here never
+                # assigns it back, so the guard would stay false and every
+                # later run would start another daemon on the same port. So
+                # spawn once and answer the guard's real question, "is one up
+                # already", truthfully.
+                #
+                # Assigning a non-server value is safe because nothing ever
+                # dereferences it on this class: in the whole 20 tree the only
+                # reads are `tests/shell.py:31` (truthiness) and
+                # `service/server.py:656-794`, all inside `GeventServer`. A
+                # sentence rather than `True` so a traceback that ever prints
+                # it says where it came from.
+                #
+                # Both ways this can age are harmless: restore the attribute
+                # on `ThreadedServer` and `hasattr` sends us past this block;
+                # fix `tests/shell.py` instead and we set something nobody
+                # reads.
+                server.http_spawn()
+                server.httpd = "spawned by odoo-sheller"
         test_tags = _os_test_tags(module, test_class, test_method)
         if shell is None:
             report = _os_run_tests_fallback(env, test_tags, [module])

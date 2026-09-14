@@ -43,17 +43,37 @@ The reference is `odoo/cli/shell.py`. Three facts make the whole design work:
 
 Because the bootstrap only depends on the non-TTY branch and the names `env`
 and `self`, it is version-neutral by construction — and those facts hold
-line-for-line in 15, 16, 17, 18 and 19: `cli/shell.py:65/64/65/66/80` for the
-non-TTY branch, `:115-116/:114-115/:116-117/:117-118/:142-143` for the
-namespace, the `cr.rollback()` after `console()`, `signal.signal(SIGINT, …)`
-at `:62/:61/:62/:63/:77`, and a cursor whose `__exit__` commits on a clean
-exit and rolls back on an exception (`sql_db.py:157` in 15, then
-`:81/84/106/115`). `server.port = config['http_port']`
-(`service/server.py:312/352/385/372/412`) is what the test-port fix writes to.
-All five are verified by live runs — session, commands, namespace,
+line-for-line in 15 through 20:
+
+| | 15 | 16 | 17 | 18 | 19 | 20 |
+|---|---|---|---|---|---|---|
+| non-TTY branch, `cli/shell.py` | 65 | 64 | 65 | 66 | 80 | 80 |
+| `env` / `self` in the namespace | 115 | 114 | 116 | 117 | 142 | 141 |
+| `signal.signal(SIGINT, …)` | 62 | 61 | 62 | 63 | 77 | 77 |
+| `__exit__` that commits, `sql_db.py` | 157 | 173 | 176 | 205 | 240 | 331 |
+| `self.port = config['http_port']`, `service/server.py` | 312 | 352 | 387 | 374 | 418 | 219 |
+
+The `cr.rollback()` after `console()` is there in all six. The `sql_db.py` row
+is `BaseCursor.__exit__` — `Cursor.__exit__` in 20 — the one that commits when
+no exception passed through it; `Savepoint.__exit__` a hundred lines above it
+looks similar and only ever rolls back. The `server.py` row is what the
+test-port fix writes to.
+
+15 through 19 are verified by live runs — session, commands, namespace,
 transactions (a committed record read back from a second session, a rolled
-back one gone), interrupt, a real test run. The probe (below) refuses anything
-below 15 at connect time with a clear message, rather than failing on the
+back one gone), interrupt, a real test run. 20 is verified on a master
+container, which still calls itself 19.5 and so already passes the gate as a
+19: everything above except the committed record, which was not written to a
+real migration database.
+
+Reading the sources was not enough there. Every fact in the table holds, and
+`run_tests` still died: 20 dropped `httpd` from `ThreadedServer` — only
+`GeventServer` keeps one now — while `odoo/tests/shell.py`, byte-identical to
+19, still reads it to decide whether to spawn. The bootstrap spawns the daemon
+itself and answers that guard; `_os_run_test` carries the reasoning.
+
+The probe (below) refuses anything outside
+the range at connect time with a clear message, rather than failing on the
 first command.
 
 **What moved is feature-detected, not keyed to a version number.** The
@@ -89,8 +109,10 @@ not import. The `workers != 0` refusal is kept, and reaches the caller as the
 same `TestRunnerRefused` error.
 
 What else differs is `odoo/tests/tag_selector.py` — 19 split a file-path
-variant out of the module part of the grammar — but the spec this project
-builds, `*/module:Class.method`, parses the same in all five. The rest of
+variant out of the module part of the grammar, and 20 added an
+`available_modules` filter around it — but `filter_spec_re` itself is
+untouched, so the spec this project builds, `*/module:Class.method`, parses
+the same in all six. The rest of
 `cli/shell.py`'s diff is the interactive branch (ipython, ptpython,
 `--shell-file`), which is dead code here: stdin is never a tty.
 
@@ -414,7 +436,7 @@ containers; a one-shot probe inside a chosen container reports the `odoo-bin`
 path, Odoo and Python versions, the config file location, and the database
 list (read via `psycopg2`, which any Odoo container already has installed —
 nothing extra to add). The probe process exits the moment it has answered.
-A major outside `SUPPORTED_MAJORS` (15 through 19) is refused right here, with a
+A major outside `SUPPORTED_MAJORS` (15 through 20) is refused right here, with a
 specific message naming what would work, rather than accepted and left to
 fail on the first real command.
 
