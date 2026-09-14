@@ -169,6 +169,80 @@ def test_the_bundled_daemon_path_is_written_down():
         assert "Contents/Resources/odoo-sheller-mcp/odoo-sheller-mcp" in text, name
 
 
+def test_security_documents_the_desktop_terminal():
+    """The terminal is the one expansion of the attack surface. If the section
+    drifts into 'it is still only Odoo', the threat model is lying."""
+    text = read("security.md")
+    assert "## The desktop terminal" in text
+    assert "$SHELL" in text
+    assert "Rollback" in text or "rollback" in text
+
+
+def test_xterm_is_vendored_in_the_app_not_the_daemon():
+    """Putting xterm.js in odoo_sheller/web would load it on a remote origin
+    with no Tauri IPC, which is why the shell page hosts it instead."""
+    app_src = DESKTOP.parent / "src"
+    assert (app_src / "vendor" / "xterm.min.js").stat().st_size > 10_000
+    assert (app_src / "vendor" / "addon-fit.min.js").stat().st_size > 500
+    assert "pty_resize" in (app_src / "shell.js").read_text(encoding="utf-8")
+    web = DESKTOP.parent.parent / "odoo_sheller" / "web"
+    assert not (web / "vendor" / "xterm.min.js").exists()
+
+
+def test_the_window_frames_the_daemon_rather_than_navigating_to_it():
+    """The terminal has to share the window with the UI, and only a local page
+    can reach the Tauri commands. So the window stays on the shell page and
+    the daemon's UI is framed — no copy of it in the app, nothing proxied, and
+    the frame is a remote origin with no IPC of its own."""
+    app_src = DESKTOP.parent / "src"
+    markup = (app_src / "index.html").read_text(encoding="utf-8")
+    assert "<iframe" in markup
+    assert "dock" in markup, "the terminal is a panel in the same window"
+    shell = (app_src / "shell.js").read_text(encoding="utf-8")
+    # The fixed port has one definition, in daemon.rs; the page asks for it.
+    assert "127.0.0.1:8765" not in shell
+    assert 'invoke("ui_url")' in shell
+    assert "fn ui_url()" in (DESKTOP / "src" / "lib.rs").read_text(encoding="utf-8")
+
+
+def test_the_capability_covers_the_one_window_there_is():
+    cap = json.loads((DESKTOP / "capabilities" / "default.json").read_text(encoding="utf-8"))
+    assert cap["windows"] == ["main"]
+
+
+def test_the_capability_grants_nothing_to_a_remote_origin():
+    """The one line between the daemon's page and a shell.
+
+    `main` loads `http://127.0.0.1:8765/web`, a remote origin. Tauri matches a
+    command's context against the caller's origin — `Origin::matches` pairs
+    Local with Local and Remote only with a declared URL pattern — so a
+    capability without `remote` is what stops that page from calling
+    `pty_create`. Adding one for any reason hands it a shell.
+    """
+    cap = json.loads((DESKTOP / "capabilities" / "default.json").read_text(encoding="utf-8"))
+    assert "remote" not in cap, "a remote origin would reach pty_create"
+    assert cap.get("local", True) is True
+
+
+def test_the_terminal_never_reaches_the_web_ui():
+    """Desktop only, by decision. The daemon's page is served to browsers and
+    to a window with no IPC; a terminal there would be either impossible or a
+    shell handed to whatever can reach port 8765."""
+    web = DESKTOP.parent.parent / "odoo_sheller" / "web"
+    for name in ("app.js", "index.html", "style.css"):
+        text = (web / name).read_text(encoding="utf-8").lower()
+        assert "xterm" not in text, name
+        assert "pty_" not in text, name
+
+
+def test_mcp_config_still_writes_nothing():
+    """Stage 5 invariant: the snippet is pasted, never merged into a live file."""
+    text = (DESKTOP / "src" / "mcp.rs").read_text(encoding="utf-8")
+    assert "fs::write" not in text
+    assert "fs::rename" not in text
+    assert "OpenOptions" not in text
+
+
 def test_the_readme_api_table_lists_health():
     """The table reads as exhaustive; a missing /health row hides the liveness probe."""
     from odoo_sheller.api import create_app

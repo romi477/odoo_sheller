@@ -844,12 +844,34 @@ def test_journal_rows_lead_with_time_owner_and_id(app_js, markup):
     assert "journal-owner" in markup_or_script_classes(markup, app_js)
 
 
+def test_the_ui_never_calls_the_browser_dialogs(app_js):
+    """`window.confirm` and `window.alert` do nothing inside the desktop app.
+
+    WKWebView draws no JavaScript dialog unless the host implements the
+    WKUIDelegate panels, and wry implements only the file-upload and
+    media-permission ones. `confirm()` came back without asking and the caller
+    went ahead — a commit, and a discard of uncommitted work, on one click —
+    and `alert()` swallowed every failure message. The page draws its own.
+    """
+    # Comment lines are dropped first: the block above `confirmDialog` names
+    # both functions to explain why they are not used, and a test that cannot
+    # tell prose from a call would forbid saying so.
+    code = "\n".join(
+        line for line in app_js.splitlines() if not line.lstrip().startswith("//")
+    )
+    for call in re.findall(r"(?<![.\w])(confirm|alert|prompt)\s*\(", code):
+        raise AssertionError(f"app.js calls window.{call}(), which is silent in the app")
+    assert "function confirmDialog(" in app_js
+    assert "function noticeDialog(" in app_js
+    assert "showModal()" in app_js
+
+
 def test_a_refused_journal_delete_says_so(app_js):
     """A 409 from a live session must not read as a click that did nothing."""
     single = re.search(r"async function deleteJournal\(.*?\n\}", app_js, re.DOTALL)
     assert single is not None
     assert "catch" in single.group(0), "the trash button discards the promise"
-    assert "alert(" in single.group(0)
+    assert "noticeDialog(" in single.group(0)
     assert "authHeaders" in single.group(0), "the endpoint takes the admin key"
     # withAdminRetry, not a bare request: the key is asked for once, on refusal.
     assert "withAdminRetry" in single.group(0)
@@ -857,7 +879,7 @@ def test_a_refused_journal_delete_says_so(app_js):
     assert group is not None
     # One report for the batch, not one dialog per id.
     assert "failures" in group.group(0)
-    assert "alert(" in group.group(0)
+    assert "noticeDialog(" in group.group(0)
 
 
 def test_the_journal_count_rides_in_the_heading(app_js, markup):
@@ -1152,7 +1174,7 @@ def test_journal_group_delete_asks_before_removing_finished_files(app_js):
     group = re.search(r"async function deleteJournalGroup\(.*?\n\}", app_js, re.DOTALL)
     assert group is not None
     body = group.group(0)
-    assert "confirm(" in body
+    assert "confirmDialog(" in body
     assert "deleteJournal" in body
     assert "state.sessions.has" in body
 
@@ -1346,7 +1368,7 @@ def test_session_keyboard_is_a_fixed_two_row_grid(markup, app_js):
     assert "querySelector('.enter')" not in app_js
     grant = re.search(r"async function grantCommit\(.*?\n\}", app_js, re.DOTALL)
     assert grant is not None
-    assert "confirm(" in grant.group(0)
+    assert "confirmDialog(" in grant.group(0)
     css = (WEB / "style.css").read_text(encoding="utf-8")
     assert ".grant-commit .switch" not in css
     assert ".grant-commit:has(input:checked)" not in css
@@ -1643,7 +1665,7 @@ def test_a_remote_target_is_labelled_by_build_and_stage(app_js):
 def test_committing_to_a_remote_instance_names_the_instance(app_js):
     """"Commit changes to ventor-dev-…-36887345?" says nothing about which
     machine is about to be written to, and that is the part worth confirming."""
-    confirms = re.findall(r"confirm\(\s*`?[^)]*?Commit[^)]*?\)", app_js, re.DOTALL)
+    confirms = re.findall(r"confirmDialog\(\s*`?[^)]*?Commit[^)]*?\)", app_js, re.DOTALL)
     assert confirms, "the commit confirmation moved; check this test"
     assert any("targetForConfirm" in text for text in confirms)
     # A short tab label is not what a confirmation needs: it spells out the
@@ -1733,7 +1755,7 @@ def test_the_grant_confirmation_says_who_is_about_to_write(app_js):
     """The latch grants two different things: an agent asks for it, and on a
     remote instance a human grants it to themselves. One wording cannot be
     right for both — "let this agent write" to your own session is a lie."""
-    grant = re.search(r"const toAgent = (.*?)confirm\(", app_js, re.DOTALL)
+    grant = re.search(r"const toAgent = (.*?)confirmDialog\(", app_js, re.DOTALL)
     assert grant is not None, "the grant confirmation moved; check this test"
     assert "owner" in grant.group(1)
     assert "Allow writing" in grant.group(1)
@@ -1881,7 +1903,7 @@ def test_closing_from_a_card_closes_every_session_on_that_target(app_js):
     body = closer.group(0)
     assert "sessionsForTarget(" in body
     # One question for the batch, not one per session.
-    assert "confirm(" in body
+    assert "confirmDialog(" in body
     assert "confirmed: true" in body
     # Both lists route the card's key through it: the container card binds it
     # once where the card is built, the build card on each render.

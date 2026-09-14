@@ -16,10 +16,19 @@ does not kill it on quit. If the port is free, it spawns the bundled
 `uv run python -m odoo_sheller` from this repository. If something else holds
 the port, it says so and starts nothing.
 
-The window loads `http://127.0.0.1:8765/web`. There is no second API and no
-bundled copy of the UI. **MCP Configuration…** in the application menu shows
-the entry to paste into an agent's config, with the bundled binary's path
-filled in, and copies it to the clipboard. It writes nothing.
+The window holds a local shell page: the daemon's UI in an `<iframe>`, and a
+terminal dock under it. There is no second API and no bundled copy of the UI —
+the frame loads `http://127.0.0.1:8765/web` like any browser tab. The frame
+rather than a navigation, because only a local page can reach the Tauri
+commands, and the terminal has to be in the same window.
+
+**MCP Configuration…** in the application menu shows the entry to paste into
+an agent's config, with the bundled binary's path filled in, and copies it to
+the clipboard. It writes nothing.
+
+The dock holds `$SHELL -l` tabs — **Window → Show Terminal**, Ctrl+`, or the
+button on the bar at the bottom; ⌘T adds a tab, ⌘W closes one, and the top
+edge drags. That is your machine, not the Odoo REPL.
 
 ## Building
 

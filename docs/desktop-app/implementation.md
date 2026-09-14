@@ -25,17 +25,18 @@ where it is enforced.
 4. **A remote target is a human's to open.** The MCP tools take neither a host
    nor a build. The app introduces no path around that
    ([../agent-guide.md](../agent-guide.md)).
+5. **The terminal is the desktop app's alone.** It lives in the shell page,
+   never in the daemon's web UI, and the capability never declares a `remote`
+   origin. Those are the
+   same rule seen from two sides: the page on 8765 is served to browsers and
+   to a window Tauri gives no IPC, so a terminal there is either impossible or
+   a shell handed to whatever can reach the port
+   ([../security.md](../security.md#the-desktop-terminal)).
 
 ## Decisions still open
 
-These change the work, so they need an answer before the stage that depends on
-them. They are the owner's to make, not the implementer's. A question that gets
-an answer moves down to **Decided** with its reason, so what is still open is
-readable at a glance.
-
-| # | Question | Why it matters | Blocks |
-|---|---|---|---|
-| 3 | Terminal in the first release, or after it? | It is the only piece that widens the attack surface, and it is independent of everything else. | Stage 6 |
+None. The last question was whether the terminal ships in this release;
+stage 6 is that answer.
 
 ## Decided
 
@@ -51,6 +52,7 @@ readable at a glance.
 | 5 | Where does the MCP binary live? | **Inside the bundle**, next to the daemon. An update replaces it, and **MCP Configuration…** always shows the current path, so a copy in Application Support would only go stale. |
 | 11 | Does the app write agent config files? | **No, and not behind a confirmation.** It shows the entry and copies it to the clipboard; the person pastes it where they want it. Those files are the user's, they hold servers we know nothing about, `~/.claude.json` is live state a running Claude Code rewrites, and creating the rest invents configs for apps that are not installed. Nothing in the app opens them for writing. |
 | 8 | How does the packaged daemon run without the window? | **Document the stable path** and point a shell function at it. No menu-bar extra surface. |
+| 3 | Terminal in the first release, or after it? | **In this release.** It is the one expansion of the attack surface, documented in [../security.md](../security.md#the-desktop-terminal). Tabs, `$SHELL -l`, a dock under the framed UI in the same window, so xterm.js never enters the Python package. |
 
 ## Work in this repository
 
@@ -296,8 +298,15 @@ Done when:
 
 ### Stage 6 — the terminal
 
-Per [architecture.md](architecture.md#the-terminal). Tabs, `$SHELL -l`,
-throttled output, processes reaped on close and on exit.
+Per [architecture.md](architecture.md#the-terminal). A dock at the bottom of
+the main window, under the framed UI — not a panel inside `/web`, which is a
+remote origin with no Tauri IPC, and not a window of its own, which is not
+what "attached to the app" means. Tabs inside the dock. `$SHELL -l`. Output
+batched at 32 KiB or 16 ms, whichever first. Closing a tab or quitting the app
+reaps the process. The bar at the bottom is always there; **Window → Show
+Terminal** (Ctrl+`) toggles the dock and **New Terminal Tab** (⌘T) adds one.
+`odoo-sheller-app/src/vendor/` holds `@xterm/xterm` 5.5.0 and
+`@xterm/addon-fit` 0.10.0.
 
 Done when:
 
@@ -305,7 +314,10 @@ Done when:
 - `cat` on a 50 MB file does not freeze the UI.
 - Closing a tab leaves no process behind (`pgrep -P <app pid>`), and neither
   does quitting.
-- [../security.md](../security.md) has a section on what the terminal widens.
+- Dragging the dock's top edge resizes it and the shell reflows; the framed UI
+  keeps its own scroll position.
+- [../security.md](../security.md#the-desktop-terminal) has a section on what
+  the terminal widens.
 
 ## Test matrix
 
@@ -326,6 +338,7 @@ developer's machine is never in.
 | Machine with no Python | Everything works |
 | Gatekeeper enabled, first run from a download | Refused as an unidentified developer; opens after System Settings → Privacy & Security → Open Anyway |
 | Locally built copy, never downloaded | Opens with no prompt — it carries no `com.apple.quarantine`, so this proves nothing about the row above |
+| Terminal tab closed, or the app quit | No leftover `$SHELL` (`pgrep -P <app pid>`) |
 
 ## Reviewing the result
 

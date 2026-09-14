@@ -7,7 +7,13 @@ every call.
 
 **Status: implemented.** MVP runs: `python -m odoo_sheller` (add `--reload` for
 development — it kills live sessions on every restart). Unit tests need no
-Docker; `tests/test_e2e.py` runs against the `integra19` container.
+Docker; `tests/test_e2e.py` runs against an Odoo container, `tests/test_frozen.py`
+against a PyInstaller build of the daemon.
+
+Since 1.6.0 there is also a macOS app in `odoo-sheller-app/` — a window and a
+supervisor around the same daemon, plus a terminal dock. It adds no second
+API. Its design is `docs/desktop-app/architecture.md`; the terminal is the one
+thing that widens the attack surface, and `docs/security.md` says how.
 
 | Document | What it holds |
 |---|---|
@@ -17,6 +23,7 @@ Docker; `tests/test_e2e.py` runs against the `integra19` container.
 | `docs/agent-guide.md` | MCP tool list, ownership from the agent's side, Claude Desktop wiring |
 | `docs/security.md` | the security model — what's protected, what isn't, and why |
 | `docs/faq.md`, `docs/faq-ru.md` | plain-language FAQ, English and Russian |
+| `docs/desktop-app/` | the macOS app: design of record, and the staged work |
 | `CHANGELOG.md` | what shipped in each version, newest first |
 
 This file is the short version for working sessions. Where it and

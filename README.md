@@ -7,9 +7,15 @@ exposes it over HTTP/WebSocket.
 A web UI (stage 1) and later an AI agent (stage 2) run ORM code without paying
 registry startup on every call. Both clients use the same API.
 
+There is also a **macOS app** — a window and a supervisor around that same
+daemon, with a terminal docked under the UI. It adds no second API, and a
+browser tab on 8765 keeps working beside it:
+[docs/desktop-app/architecture.md](docs/desktop-app/architecture.md).
+
 ## Table of Contents
 
 - [Background](#background)
+- [The desktop app](#the-desktop-app)
 - [Security](#security)
 - [Requirements](#requirements)
 - [Install](#install)
@@ -243,6 +249,27 @@ deliberate rather than incidental:
   and writes `session_close` to each journal. `kill -9` skips that, and the
   transcript then simply stops with no record of how it ended. The escalation
   after ten seconds is the last resort, not the normal path.
+
+## The desktop app
+
+`odoo-sheller-app/` builds a macOS `.app`: the same daemon, a window around
+it, and a terminal dock at the bottom for the machine the session runs on.
+The daemon and the MCP server travel frozen inside the bundle, so the app
+needs no Python, no `uv` and no checkout.
+
+```bash
+packaging/app.sh install     # build, then replace /Applications/odoo-sheller.app
+```
+
+It is ad-hoc signed and not notarized — a downloaded copy is cleared in System
+Settings → Privacy & Security → Open Anyway — and Apple Silicon only. The
+design is [docs/desktop-app/architecture.md](docs/desktop-app/architecture.md),
+the staged work and its decisions
+[implementation.md](docs/desktop-app/implementation.md), and what the terminal
+widens [docs/security.md](docs/security.md#the-desktop-terminal).
+
+Day to day you do not need it: `python -m odoo_sheller` and a browser tab are
+the whole tool.
 
 ## Agent access (MCP)
 

@@ -2,9 +2,8 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <!-- Before styles.css, for the same reason as the daemon's own page: the
-         canvas is white until something says otherwise, and a stylesheet is
-         a separate request. -->
+    <!-- Before styles.css: the canvas is white until something says otherwise,
+         and a stylesheet is a separate request. -->
     <meta name="color-scheme" content="dark" />
     <style>
       html,
@@ -14,10 +13,21 @@
     </style>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>odoo-sheller</title>
+    <!-- @xterm/xterm 5.5.0 and @xterm/addon-fit 0.10.0, vendored; see vendor/VERSION -->
+    <link rel="stylesheet" href="vendor/xterm.css" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main>
+    <!--
+      This page is the window. The daemon's UI is framed rather than navigated
+      to, because the terminal has to sit in the same window and only a local
+      page can reach the Tauri commands — the iframe is a remote origin and
+      gets none of them. Nothing here is a copy of that UI, and nothing
+      proxies it: the frame loads it from the daemon like any other client.
+    -->
+    <iframe id="ui" title="odoo-sheller" hidden></iframe>
+
+    <main id="splash">
       <p class="mark">odoo-sheller</p>
       <p class="status" id="status">Starting…</p>
       <div class="actions" id="actions" hidden>
@@ -25,38 +35,20 @@
         <button id="quit" type="button" class="quiet">Quit</button>
       </div>
     </main>
-    <script>
-      const { invoke } = window.__TAURI__.core;
-      const { listen } = window.__TAURI__.event;
-      const status = document.getElementById("status");
-      const actions = document.getElementById("actions");
 
-      // The window exists before the daemon does. Render whatever the
-      // supervisor is on right now, then follow it — asking first is what
-      // keeps this page from missing an event it was not yet listening for.
-      function render(state) {
-        if (state.phase === "error") {
-          status.textContent = state.message;
-          status.classList.add("error");
-          actions.hidden = false;
-          return;
-        }
-        status.textContent =
-          state.phase === "ready" ? "Opening the interface…" : "Starting…";
-        status.classList.remove("error");
-        actions.hidden = true;
-      }
+    <section id="dock" class="closed">
+      <div id="grip" title="Drag to resize"></div>
+      <div id="dock-bar">
+        <div id="tabs"></div>
+        <button id="new-tab" type="button" title="New terminal tab">+</button>
+        <span id="dock-spacer"></span>
+        <button id="dock-toggle" type="button" title="Show or hide the terminal">⌘T</button>
+      </div>
+      <div id="panes"></div>
+    </section>
 
-      document.getElementById("retry").addEventListener("click", () => {
-        render({ phase: "starting" });
-        invoke("retry_startup");
-      });
-      document.getElementById("quit").addEventListener("click", () => {
-        invoke("quit_app");
-      });
-
-      listen("startup", (event) => render(event.payload));
-      invoke("startup_state").then(render);
-    </script>
+    <script src="vendor/xterm.min.js"></script>
+    <script src="vendor/addon-fit.min.js"></script>
+    <script src="shell.js"></script>
   </body>
 </html>

@@ -1958,3 +1958,48 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
 .boundary.policy_changed {
   color: var(--amber);
 }
+
+/* The page's own confirmation. `window.confirm` is not available inside the
+   desktop app — WKWebView draws no JS dialog unless the host implements the
+   WKUIDelegate panels — and a guard that silently answers "yes" is worse than
+   no guard, so the dialog is drawn here. */
+dialog.confirm {
+  max-width: 46ch;
+  padding: 18px 20px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+
+dialog.confirm::backdrop {
+  background: oklch(0 0 0 / 0.55);
+}
+
+.confirm-text {
+  margin: 0 0 16px;
+  white-space: pre-line;
+  line-height: 1.45;
+}
+
+.confirm-input {
+  width: 100%;
+  margin: 0 0 16px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--text);
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.confirm-ok {
+  border-color: var(--amber);
+  color: var(--amber);
+}

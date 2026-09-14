@@ -3,6 +3,7 @@
 mod daemon;
 mod docker;
 mod mcp;
+mod pty;
 
 use std::process::Child;
 use std::sync::Mutex;
@@ -13,6 +14,10 @@ use serde::Serialize;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use pty::{OnExit, OnOutput, PtyHub};
 
 /// How long the daemon gets to shut down cleanly before it is killed. Longer
 /// than the daemon's own `timeout_graceful_shutdown`, so the sessions it
@@ -80,6 +85,47 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+/// Where the page should point its frame. Asked for rather than written into
+/// the page, so the fixed port has one definition and `daemon.rs` keeps it.
+#[tauri::command]
+fn ui_url() -> String {
+    daemon::ui_url()
+}
+
+#[tauri::command]
+fn pty_create(app: AppHandle, hub: State<'_, PtyHub>) -> Result<String, String> {
+    let out_app = app.clone();
+    let exit_app = app.clone();
+    let on_output: OnOutput = std::sync::Arc::new(move |id, bytes| {
+        let _ = out_app.emit(&format!("pty-output-{id}"), STANDARD.encode(bytes));
+    });
+    let on_exit: OnExit = std::sync::Arc::new(move |id| {
+        let _ = exit_app.emit(&format!("pty-exit-{id}"), ());
+    });
+
+    hub.create(on_output, on_exit)
+}
+
+#[tauri::command]
+fn pty_write(id: String, data: String, hub: State<'_, PtyHub>) -> Result<(), String> {
+    hub.write(&id, data.as_bytes())
+}
+
+#[tauri::command]
+fn pty_resize(id: String, cols: u16, rows: u16, hub: State<'_, PtyHub>) -> Result<(), String> {
+    hub.resize(&id, cols, rows)
+}
+
+#[tauri::command]
+fn pty_close(id: String, hub: State<'_, PtyHub>) {
+    hub.close(&id);
+}
+
+#[tauri::command]
+fn shell_name() -> String {
+    pty::shell_name()
+}
+
 fn daemon_is_up(app: &AppHandle) -> bool {
     app.try_state::<Supervisor>()
         .map(|state| {
@@ -89,14 +135,6 @@ fn daemon_is_up(app: &AppHandle) -> bool {
             )
         })
         .unwrap_or(false)
-}
-
-fn navigate_to_ui(app: &AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "main window missing".to_string())?;
-    let url: tauri::Url = daemon::ui_url().parse().map_err(|err| format!("{err}"))?;
-    window.navigate(url).map_err(|err| err.to_string())
 }
 
 fn confirm_quit(app: &AppHandle, message: &str) -> bool {
@@ -152,8 +190,10 @@ fn begin_startup(app: AppHandle) {
     }
     set_startup(&app, Startup::Starting);
     std::thread::spawn(move || {
-        let outcome = start_daemon(&app).and_then(|()| navigate_to_ui(&app));
-        match outcome {
+        // `Ready` is the whole signal: the page frames the daemon's UI itself.
+        // Navigating the window there instead would leave no local page to
+        // host the terminal, and no way back to the splash on a later error.
+        match start_daemon(&app) {
             Ok(()) => set_startup(&app, Startup::Ready),
             Err(message) => set_startup(&app, Startup::Error { message }),
         }
@@ -171,10 +211,14 @@ fn should_allow_exit(app: &AppHandle) -> bool {
     if !state.ours() {
         return true;
     }
+    let terminals = app
+        .try_state::<PtyHub>()
+        .map(|hub| hub.count())
+        .unwrap_or(0);
     if let Ok(sessions) = daemon::list_sessions() {
-        if !sessions.is_empty() {
+        if !sessions.is_empty() || terminals > 0 {
             let pending = sessions.iter().map(|session| session.pending_commands).sum();
-            let message = quit_message(sessions.len(), pending);
+            let message = quit_message(sessions.len(), pending, terminals);
             if !confirm_quit(app, &message) {
                 return false;
             }
@@ -245,6 +289,23 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
     // View, and the WebView's own shortcut is not bound.
     let reload = MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?;
     let view = Submenu::with_items(app, "View", true, &[&reload])?;
+    // Ctrl+` the way every editor binds it, and Cmd+T for a new tab the way
+    // every browser does. Not CmdOrCtrl for the toggle: Cmd+` is already
+    // "cycle windows" on macOS.
+    let terminal = MenuItem::with_id(
+        app,
+        "terminal",
+        "Show Terminal",
+        true,
+        Some("Ctrl+Backquote"),
+    )?;
+    let new_tab = MenuItem::with_id(
+        app,
+        "terminal-new-tab",
+        "New Terminal Tab",
+        true,
+        Some("CmdOrCtrl+T"),
+    )?;
     let window = Submenu::with_items(
         app,
         "Window",
@@ -252,6 +313,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         &[
             &PredefinedMenuItem::minimize(app, None)?,
             &PredefinedMenuItem::fullscreen(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &terminal,
+            &new_tab,
         ],
     )?;
     let menu = Menu::with_items(app, &[&app_menu, &edit, &view, &window])?;
@@ -287,6 +351,19 @@ fn show_mcp_config(app: &AppHandle) {
         .blocking_show();
 }
 
+/// The terminal is a panel in the main window, so the menu only says so and
+/// the page decides what that means — open the dock, or add a tab to it.
+fn tell_shell(app: &AppHandle, event: &str) {
+    focus_main(app);
+    let _ = app.emit(event, ());
+}
+
+fn reap_terminals(app: &AppHandle) {
+    if let Some(hub) = app.try_state::<PtyHub>() {
+        hub.close_all();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -295,10 +372,17 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .manage(Supervisor::default())
+        .manage(PtyHub::default())
         .invoke_handler(tauri::generate_handler![
             startup_state,
             retry_startup,
-            quit_app
+            quit_app,
+            ui_url,
+            pty_create,
+            pty_write,
+            pty_resize,
+            pty_close,
+            shell_name
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -306,10 +390,16 @@ pub fn run() {
             app.on_menu_event(|app, event| match event.id().0.as_str() {
                 "quit" => app.exit(0),
                 "mcp-config" => show_mcp_config(app),
-                // A reload while the daemon is missing is a retry, not a
-                // navigation to a port with nothing behind it.
+                "terminal" => tell_shell(app, "terminal-toggle"),
+                "terminal-new-tab" => tell_shell(app, "terminal-new-tab"),
+                // Reload the framed UI, not the shell: reloading the shell
+                // would take every terminal tab with it. With no daemon
+                // behind the frame there is nothing to reload, so it is a
+                // retry instead.
                 "reload" => {
-                    if navigate_to_ui(app).is_err() || !daemon_is_up(app) {
+                    if daemon_is_up(app) {
+                        let _ = app.emit("reload-ui", ());
+                    } else {
                         begin_startup(app.clone());
                     }
                 }
@@ -344,6 +434,7 @@ pub fn run() {
             // the child out of the handle, so the ordinary path runs it once
             // and this finds nothing.
             RunEvent::Exit => {
+                reap_terminals(app);
                 if let Some(state) = app.try_state::<Supervisor>() {
                     state.stop();
                 }

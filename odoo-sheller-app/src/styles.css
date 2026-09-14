@@ -1,9 +1,16 @@
 :root {
   color-scheme: dark;
   --background: oklch(0.11 0.03 290);
+  --panel: oklch(0.14 0.03 290);
   --text: oklch(0.88 0.025 290);
   --muted: oklch(0.67 0.04 290);
   --cyan: oklch(0.72 0.09 205);
+  --amber: oklch(0.72 0.12 62);
+  /* The daemon's UI names its own colours the same way; these are copied
+     rather than shared, because a stylesheet does not cross an iframe
+     boundary. */
+  --muted-low: oklch(0.55 0.04 290);
+  --line: oklch(0.24 0.03 290);
   --sans: system-ui, -apple-system, sans-serif;
 }
 
@@ -15,21 +22,37 @@ html,
 body {
   height: 100%;
   margin: 0;
+  overflow: hidden;
+  background: var(--background);
+  color: var(--text);
+  font: 14px/1.45 var(--sans);
 }
 
 body {
-  background: var(--background);
-  color: var(--text);
-  font-family: var(--sans);
+  display: flex;
+  flex-direction: column;
 }
 
-main {
-  min-height: 100%;
+/* The daemon's UI. Fills everything the terminal does not take. */
+#ui {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: var(--background);
+}
+
+#splash {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 12px;
+}
+
+#splash[hidden] {
+  display: none;
 }
 
 .mark {
@@ -67,6 +90,153 @@ button {
 }
 
 button.quiet {
-  border-color: oklch(0.3 0.02 290);
+  border-color: var(--line);
   color: var(--muted);
+}
+
+/* ------------------------------------------------------------- the dock */
+
+#dock {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 280px;
+  border-top: 1px solid var(--line);
+  background: var(--background);
+}
+
+/* Closed is the bar alone: the way back in is always on screen. */
+#dock.closed {
+  height: auto;
+}
+
+#dock.closed #panes,
+#dock.closed #tabs,
+#dock.closed #new-tab,
+#dock.closed #grip {
+  display: none;
+}
+
+#grip {
+  height: 6px;
+  flex: 0 0 auto;
+  cursor: row-resize;
+}
+
+#grip:hover {
+  background: var(--line);
+}
+
+#dock-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  /* Shorter than the session tabs this started from, because without an
+     outline the tabs no longer have to hang from a lip and merge into what is
+     below them: colour alone says which one is live, and colour needs no
+     geometry. */
+  min-height: 26px;
+  padding: 0;
+  /* The same quiet line the dock is separated from the UI by. A brighter one
+     here was the tab outline's job, and the outline is gone. */
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+#tabs {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 0;
+  gap: 4px;
+  overflow-x: auto;
+}
+
+#dock-spacer {
+  flex: 1 1 auto;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  max-width: 20ch;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--cyan);
+  white-space: nowrap;
+}
+
+/* Amber is the whole signal. An outline around the live tab was a second one
+   saying the same thing, and it cost the bar six pixels of height. */
+.tab.active {
+  color: var(--amber);
+}
+
+.tab .title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab .close {
+  margin-left: 8px;
+  color: var(--muted-low);
+}
+
+.tab .close:hover {
+  color: var(--amber);
+}
+
+/* Two hints, not chrome: no outline, no fill, and grey until pointed at. */
+#new-tab,
+#dock-toggle {
+  border: 0;
+  background: transparent;
+  color: var(--muted-low);
+  transition: color 120ms;
+}
+
+#new-tab:hover,
+#dock-toggle:hover {
+  color: var(--amber);
+}
+
+#new-tab {
+  width: 26px;
+  padding: 0;
+  font-size: 16px;
+}
+
+/* The gap to the right edge is the same as the gap the centring leaves above
+   and below, so the corner's diagonal runs through the label rather than past
+   it. */
+#dock-toggle {
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+#panes {
+  flex: 1 1 auto;
+  position: relative;
+  min-height: 0;
+  background: var(--background);
+}
+
+.pane {
+  position: absolute;
+  inset: 0;
+  padding: 4px;
+  visibility: hidden;
+}
+
+.pane.active {
+  visibility: visible;
+}
+
+.xterm,
+.xterm-viewport {
+  background: var(--background) !important;
 }

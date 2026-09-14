@@ -13,7 +13,7 @@ This folder goes deeper on the parts worth explaining once, properly.
 | [faq.md](faq.md) | Plain-language questions and answers, in English |
 | [faq-ru.md](faq-ru.md) | То же самое по-русски |
 | [desktop-app/architecture.md](desktop-app/architecture.md) | The macOS app on Tauri: what wraps the daemon, why the port is fixed, where the UI comes from, packaging and signing |
-| [desktop-app/implementation.md](desktop-app/implementation.md) | Building it: stages with acceptance criteria, the changes this repository needs, the test matrix, and the decisions that are still open |
+| [desktop-app/implementation.md](desktop-app/implementation.md) | Building it: stages with acceptance criteria, the changes this repository needs, and the test matrix |
 
 ## Where to start
 

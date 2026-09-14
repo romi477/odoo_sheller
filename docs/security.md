@@ -147,6 +147,41 @@ Until any of that, the practical rule is:
   permanent and needs the admin key for exactly this reason — it's the one
   irreversible file operation the API exposes.
 
+## The desktop terminal
+
+The daemon still only runs Python inside Odoo. The desktop app's terminal is
+a different process: `$SHELL -l` as the user who launched the app, with the
+same `PATH` they have in Terminal.app. Anything they can type there they can
+type here — `docker`, `ssh`, a compiler, `rm`. Rollback, commit, session
+keys and the production guard do not apply to it; those are properties of an
+Odoo shell session.
+
+Closing a tab reaps that shell. Quitting the app reaps every tab. The
+daemon on 8765 is unchanged: it still binds loopback, it still discards
+uncommitted work when it dies, and a remote target is still a human's to
+open.
+
+This is the one expansion of the attack surface the app adds. It is not a
+sandbox, and it is not the Odoo REPL with a different font.
+
+**It exists only in the desktop app**, in that app's own page, and that is a
+boundary rather than a layout choice. Tauri matches a command against the
+caller's origin: the capability declares no `remote`, so the page served from
+`127.0.0.1:8765` — a remote origin, in a browser or in the app's own main
+window — cannot call the terminal commands at all. That page is framed by the app's
+window rather than navigated to, precisely so the terminal can sit beneath it
+and still be on the other side of that line. Putting a terminal into the
+framed page itself would mean either giving it IPC, which hands a shell to
+anything that can reach the port, or shipping xterm.js inside the Python
+package for a feature that could never work there.
+
+The page that *can* call them draws its own confirmations, too. `window.confirm`
+and `window.alert` do nothing in a WKWebView whose host does not implement the
+WKUIDelegate panels, and the host here implements only two of them: for a
+while the desktop app committed, and discarded uncommitted work, on a single
+click with no question asked, because the browser dialog silently answered for
+the user. Guards that can be absent without anyone noticing are not guards.
+
 ## Threat model, summarized
 
 | Actor | Can do | Cannot do |
@@ -156,6 +191,7 @@ Until any of that, the practical rule is:
 | An agent with a session of its own | Run code, rollback, read journals it can reach | Commit, without a human granting it first; act on a session it wasn't opened in or handed |
 | An agent handed a remote session | Run code, run tests, rollback, read the instance | Open a remote target itself; commit until granted; commit at all on `production` |
 | Anyone holding the admin key | Act on any session or journal, including ones they don't own | Bypass Commit's requirement for a human confirmation on a human-owned session |
+| Anyone using the desktop terminal | Run anything `$SHELL -l` can run, as the user who launched the app | Nothing the same user couldn't run in Terminal.app |
 
 If your threat model includes "another user on this machine, or malicious
 code already running as you," none of the above is a defense — at that

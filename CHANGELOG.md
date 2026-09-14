@@ -5,7 +5,51 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.6.0] — 2026-09-14
+
+A macOS application, and Odoo 20. The daemon is the same daemon: the app is a
+window and a supervisor around it, speaking the one HTTP API everything else
+speaks, and a browser tab on 8765 keeps working beside it. Odoo 20 needed one
+line in the version gate and one shim in the bootstrap — found by a container,
+not by reading the sources.
+
+### The desktop app
+
+`odoo-sheller-app/` builds a macOS `.app`. Design of record:
+[docs/desktop-app/architecture.md](docs/desktop-app/architecture.md); the work
+and its decisions: [implementation.md](docs/desktop-app/implementation.md).
+
+- **One API, still.** The window holds a local page with the daemon's UI in an
+  `<iframe>` — no bundled copy of that UI, nothing proxied, and the frame
+  loads `http://127.0.0.1:8765/web` the way a browser tab would.
+- **It attaches or it spawns, and never moves off 8765.** A daemon already
+  there is used and left alone on quit; a free port gets one of ours; anything
+  else on the port is reported and nothing is started.
+- **The daemon travels inside the bundle.** Frozen onedir trees at
+  `Contents/Resources/odoo-sheller/odoo-sheller` and
+  `.../odoo-sheller-mcp/odoo-sheller-mcp`: no Python, no `uv`, no checkout on
+  the machine. That first path is also how the daemon runs headless, with no
+  window. `pytest -m frozen` is the check that `bootstrap.py` and `web/`
+  actually shipped — a build that merely launches proves neither.
+- **A terminal dock** at the bottom of the window: tabs of `$SHELL -l`,
+  resizable by its top edge, opened from the bar, from **Window → Show
+  Terminal**, or with Ctrl+`; ⌘T adds a tab. Output is batched so a large
+  `cat` does not freeze the UI, closing a tab or quitting reaps the process,
+  and the quit dialog counts the tabs it is about to kill. It exists only in
+  the app and only in the app's own page — the capability declares no `remote`
+  origin, so the framed UI cannot reach it. What that widens:
+  [docs/security.md](docs/security.md#the-desktop-terminal).
+- **MCP Configuration…** shows the entry to paste into an agent's config —
+  both shapes, `mcpServers` and Zed's `context_servers` — with the bundled
+  binary's path filled in, and copies it to the clipboard. **It writes
+  nothing.** Those files are the user's, they hold servers this app knows
+  nothing about, and `~/.claude.json` is live state a running Claude Code
+  rewrites.
+- Ad-hoc signed, hardened runtime, **no entitlements at all**, Apple Silicon.
+  Not notarized: a downloaded copy is cleared in System Settings → Privacy &
+  Security → Open Anyway. `packaging/app.sh` is build, dmg, install.
+- `ODOO_SHELLER_DOCKER` overrides the docker CLI path, because an app launched
+  from Finder inherits a minimal `PATH` and would otherwise list no containers.
 
 ### Odoo 20
 
@@ -24,72 +68,48 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   behind the same `failures_count` / `errors_count` names, and the thread's
   `dbname`, which `cli/shell.py` used to set, is set by `Registry.__new__`
   instead.
-- `tests/test_e2e.py` ran `base:TestFloatPrecision`, which 20 moved out of
-  `addons/base/tests` — a fixture that quietly reports `tests_run: 0`. It now
-  runs `base:TestIrDefault.test_conditions`, which exists under those names in
-  all six majors, and the autoclose test asserts `tests_run` rather than only
-  `success`, which is true of zero tests too.
-- `docs/architecture.md` had the wrong line numbers for two of the facts it
-  pins: the `sql_db.py` column pointed at `Savepoint.__exit__`, which only
-  ever rolls back, instead of the cursor `__exit__` that commits on a clean
-  exit; and three of the five `service/server.py` numbers were off. Both are
-  the numbers someone would use to re-verify the design, so they are now a
-  table, measured across all six versions.
 
-### Desktop app
+### Daemon
 
-- Frozen onedir trees of the daemon and the MCP server ship inside the
-  `.app` at `Contents/Resources/odoo-sheller/odoo-sheller` and
-  `Contents/Resources/odoo-sheller-mcp/odoo-sheller-mcp`. No Python, no
-  `uv`, no checkout. The first path is also how the daemon runs headless.
-  `GET /health` reports the real version because `--copy-metadata` is in
-  `packaging/bundle.py`. A smoke test (`pytest -m frozen`) is the check
-  that `bootstrap.py` and `web/` actually shipped.
-- **MCP Configuration…** in the application menu shows the entry to paste
-  into an agent's config — both shapes, `mcpServers` and Zed's
-  `context_servers` — with the bundled binary's path filled in, and copies
-  it to the clipboard. **It writes nothing.** Those files are the user's,
-  they hold servers this app knows nothing about, and `~/.claude.json` is
-  live state a running Claude Code rewrites. No secrets go in them either
-  way: `admin.key` stays in `~/.odoo-sheller/`.
-- Entitlements stay empty. The frozen daemon looked like a reason to open
-  `disable-library-validation` and is not one: PyInstaller ad-hoc signs its
-  own tree, and the daemon is a separate process that does not inherit the
-  app's hardened runtime. Still not sandboxed, still no JIT, still no App
-  Store.
-- Quitting stops the daemon on every path, not only ⌘Q. A Quit Apple event
-  (Dock → right-click → Quit) never raises `ExitRequested`, and the daemon
-  was left holding 8765 with launchd for a parent.
-- The bundle identifier is `com.odoo-sheller.desktop`. It was
-  `com.odoo-sheller.app`, and `.app` is the bundle extension on macOS, which
-  Tauri refuses to recommend. Anyone holding the earlier build has a second
-  app with a different identity: the two do not see each other, and both can
-  run at once.
-- The window carries its own background colour, so nothing flashes white
-  between the splash and the UI the daemon serves.
-- `GET /health` answers liveness and the package version, with no session
-  data and no admin key. The desktop app probes this instead of
-  `/api/sessions`.
-- `ODOO_SHELLER_DOCKER` overrides the docker CLI path in discovery and
-  transport. A GUI app inherits a minimal PATH; the wrapper resolves the
-  binary and passes it in.
-- The version in `/health` is guarded: a frozen build carries no package
-  metadata unless the packaging step asks for it, and liveness must not
-  depend on packaging. It answers `"unknown"` there rather than `500`.
-
-### Entry points
-
-- `odoo-sheller` and `odoo-sheller-mcp` are installed as commands, so neither
-  the daemon nor the agent server has to be spelled as `python -m` in a config
-  file or a shell function.
-
-### Sessions
-
+- `GET /health` answers liveness and the package version, with no session data
+  and no admin key. The version call is guarded: a frozen build carries no
+  package metadata unless the packaging step asks for it, and liveness must
+  not depend on packaging, so it answers `"unknown"` rather than `500`.
 - The daemon closes its live sessions when it is asked to stop, so their
   journals end with `session_close` instead of simply stopping. Sessions have
   never been able to outlive the daemon; until now they died without saying
   so, which was survivable while the daemon was stopped by hand and is not
   once quitting an app is how a working day ends.
+- `odoo-sheller` and `odoo-sheller-mcp` are installed as commands, so neither
+  the daemon nor the agent server has to be spelled as `python -m` in a config
+  file or a shell function.
+
+### Fixed
+
+- **The web UI asked nothing inside the desktop app.** `window.confirm`,
+  `window.alert` and `window.prompt` do nothing in a WKWebView whose host does
+  not implement the WKUIDelegate panels, and this one implements only the
+  file-upload and media-permission ones. So Commit went through on a single
+  click, "Uncommitted work will be discarded. Continue?" was never asked, nine
+  failure messages were swallowed, the admin key could not be pasted, and a
+  handover gave the session away without showing the write key — which is
+  shown once and never again. In a browser all of it worked, which is why it
+  went unnoticed. The page draws its own dialogs now; a test forbids the three
+  browser calls.
+- Quitting stops the daemon the app started on every path, not only ⌘Q. A Quit
+  Apple event — Dock, right-click, Quit — never raises `ExitRequested`, and
+  the daemon was left holding 8765 with launchd for a parent.
+- `tests/test_e2e.py` ran `base:TestFloatPrecision`, which 20 moved out of
+  `addons/base/tests` — a fixture that quietly reports `tests_run: 0` and
+  reads as a pass, because `wasSuccessful()` is true of zero tests. It now
+  runs `base:TestIrDefault.test_conditions`, which exists under those names in
+  all six majors.
+- `docs/architecture.md` pinned two facts to the wrong lines: the `sql_db.py`
+  column pointed at `Savepoint.__exit__`, which only ever rolls back, instead
+  of the cursor `__exit__` that commits on a clean exit, and three of the five
+  `service/server.py` numbers were off. Those are the numbers someone
+  re-verifying the design would open, so they are now a table measured across
+  all six versions.
 
 ## [1.5.0] — 2026-09-09
 
@@ -703,7 +723,8 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
-[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/romi477/odoo_sheller/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/romi477/odoo_sheller/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/romi477/odoo_sheller/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/romi477/odoo_sheller/compare/v1.2.0...v1.3.0

@@ -159,11 +159,21 @@ pub fn wait_until_ready() -> Result<Option<String>, String> {
     ))
 }
 
-pub fn quit_message(session_count: usize, pending: u32) -> String {
-    format!(
+pub fn quit_message(session_count: usize, pending: u32, terminals: usize) -> String {
+    let mut message = format!(
         "{session_count} live session(s). {pending} command(s) are uncommitted. \
          Uncommitted work will be discarded."
-    )
+    );
+    // A build or an rsync in a terminal tab dies with the app too, and the
+    // dialog used to say nothing about it — the sessions it named were the
+    // only thing a reader could weigh.
+    if terminals > 0 {
+        message.push_str(&format!(
+            " {terminals} terminal tab(s) will be closed and their processes killed."
+        ));
+    }
+
+    message
 }
 
 pub fn occupied_message() -> String {
@@ -401,10 +411,17 @@ mod tests {
 
     #[test]
     fn quit_copy_names_sessions_and_pending() {
-        let text = quit_message(2, 3);
+        let text = quit_message(2, 3, 0);
         assert!(text.contains("2 live session"));
         assert!(text.contains("3 command"));
         assert!(text.contains("Uncommitted work will be discarded"));
+        assert!(!text.contains("terminal"));
+    }
+
+    #[test]
+    fn quit_copy_names_the_terminal_tabs_it_is_about_to_kill() {
+        let text = quit_message(0, 0, 2);
+        assert!(text.contains("2 terminal tab"));
     }
 
     #[test]

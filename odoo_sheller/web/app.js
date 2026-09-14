@@ -193,10 +193,144 @@ function escapeHtml(value) {
   return element.innerHTML;
 }
 
-function confirmJournalExport(event) {
-  if (!confirm(`${JOURNAL_UNMASKED_WARNING}\n\nContinue with export?`)) {
-    event.preventDefault();
+// The page draws its own dialogs instead of calling `window.confirm`,
+// `window.alert` and `window.prompt`. WKWebView shows no JavaScript dialog
+// unless the host implements the WKUIDelegate panels, and wry implements only
+// the file-upload and media-permission ones. Inside the desktop app every one
+// of them was a no-op, and each failed differently:
+//
+//   - `confirm()` came back and the caller went ahead. Commit, and the
+//     discard of uncommitted work, happened on a single click; this project
+//     treats each of those as a confirmed act.
+//   - `alert()` swallowed nine failure messages.
+//   - `prompt()` returned nothing, so the admin key could not be pasted and a
+//     handover gave the session away without ever showing the write key —
+//     which is shown once and never again.
+//
+// Drawn here, they behave the same in a browser and in the app, and cannot be
+// absent without being missed.
+let confirmParts = null;
+// One dialog element, so overlapping calls queue rather than throw:
+// `showModal()` on an already-open dialog is an InvalidStateError.
+let dialogQueue = Promise.resolve();
+
+function confirmElements() {
+  if (confirmParts) {
+
+    return confirmParts;
   }
+  const dialog = document.createElement('dialog');
+  dialog.className = 'confirm';
+  const text = document.createElement('p');
+  text.className = 'confirm-text';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'confirm-input mono';
+  const actions = document.createElement('div');
+  actions.className = 'confirm-actions';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'confirm-cancel';
+  cancel.textContent = 'Cancel';
+  const ok = document.createElement('button');
+  ok.type = 'button';
+  ok.className = 'confirm-ok';
+  actions.append(cancel, ok);
+  dialog.append(text, input, actions);
+  document.body.appendChild(dialog);
+  confirmParts = {dialog, text, input, cancel, ok};
+
+  return confirmParts;
+}
+
+function ask(message, confirmLabel, {withCancel = true, value = null} = {}) {
+  const run = () => new Promise((resolve) => {
+    const {dialog, text, input, cancel, ok} = confirmElements();
+    const prompting = value !== null;
+    text.textContent = message;
+    ok.textContent = confirmLabel;
+    cancel.hidden = !withCancel;
+    input.hidden = !prompting;
+    input.value = prompting ? value : '';
+    let answer = false;
+    const onCancel = () => {
+      answer = false;
+      dialog.close();
+    };
+    const onOk = () => {
+      answer = true;
+      dialog.close();
+    };
+    const onKey = (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        onOk();
+      }
+    };
+    const done = () => {
+      cancel.removeEventListener('click', onCancel);
+      ok.removeEventListener('click', onOk);
+      input.removeEventListener('keydown', onKey);
+      dialog.removeEventListener('close', done);
+      resolve(answer ? (prompting ? input.value : true) : (prompting ? null : false));
+    };
+    cancel.addEventListener('click', onCancel);
+    ok.addEventListener('click', onOk);
+    input.addEventListener('keydown', onKey);
+    // Esc closes a modal dialog on its own and lands here with `answer` still
+    // false. Otherwise the focus goes where the answer is least destructive:
+    // the field when there is one to fill, Cancel when the question is yes/no.
+    dialog.addEventListener('close', done);
+    dialog.showModal();
+    if (prompting) {
+      input.focus();
+      input.select();
+    } else if (withCancel) {
+      cancel.focus();
+    } else {
+      ok.focus();
+    }
+  });
+  const result = dialogQueue.then(run, run);
+  dialogQueue = result.catch(() => {});
+
+  return result;
+}
+
+function confirmDialog(message, confirmLabel = 'Continue') {
+
+  return ask(message, confirmLabel);
+}
+
+function noticeDialog(message) {
+
+  return ask(message, 'OK', {withCancel: false});
+}
+
+/// The value on OK, `null` on cancel — `window.prompt`'s contract, kept so the
+/// callers read the same.
+function promptDialog(message, value = '', confirmLabel = 'OK') {
+
+  return ask(message, confirmLabel, {value});
+}
+
+function confirmJournalExport(event) {
+  const link = event.currentTarget;
+  if (link.dataset.confirmed === '1') {
+    // The click this handler dispatched after the answer. Let it through, so
+    // the link is followed exactly the way the platform would have done it.
+    delete link.dataset.confirmed;
+
+    return;
+  }
+  event.preventDefault();
+  confirmDialog(`${JOURNAL_UNMASKED_WARNING}\n\nContinue with export?`, 'Export')
+    .then((yes) => {
+      if (yes) {
+        link.dataset.confirmed = '1';
+        link.click();
+      }
+    });
 }
 
 function bindJournalExportLink(link, label) {
@@ -288,7 +422,7 @@ async function closeSessionsForTarget(container) {
     const what = records.length > 1
       ? `Closing ${records.length} sessions on ${container}. Uncommitted work in ${dirty.length} of them will be discarded. Continue?`
       : 'Uncommitted work will be discarded. Continue?';
-    if (!confirm(what)) {
+    if (!await confirmDialog(what, 'Close')) {
 
       return;
     }
@@ -1832,7 +1966,8 @@ async function transaction(id, kind) {
     return;
   }
   if (kind === 'commit'
-    && !confirm(`Commit changes to ${targetForConfirm(record.info)}?`)) {
+    && !await confirmDialog(`Commit changes to ${targetForConfirm(record.info)}?`,
+                            'Commit')) {
 
     return;
   }
@@ -1847,7 +1982,7 @@ async function transaction(id, kind) {
     record.cells.unshift({boundary: kind});
     renderSessions();
   } catch (error) {
-    alert(`${kind} failed: ${error.message}`);
+    noticeDialog(`${kind} failed: ${error.message}`);
   }
 }
 
@@ -1857,7 +1992,7 @@ async function interruptSession(id) {
       () => api.post(`/api/sessions/${id}/interrupt`, undefined, authHeaders(id, {admin: true})),
     );
   } catch (error) {
-    alert(`Interrupt failed: ${error.message}`);
+    noticeDialog(`Interrupt failed: ${error.message}`);
   }
 }
 
@@ -1890,7 +2025,7 @@ async function ensureAdminKey() {
 
     return true;
   }
-  const entered = prompt(
+  const entered = await promptDialog(
     'Admin key — needed to act on a session you do not own.\n\n'
     + 'The daemon printed it at startup, and keeps it here:\n'
     + '  ~/.odoo-sheller/admin.key\n\n'
@@ -1918,7 +2053,7 @@ async function handOver(id) {
       + 'become part of what the agent could commit. Roll back first if that is not '
       + 'what you want.'
     : '';
-  const label = prompt(`Hand this session to which agent?${warning}`, 'claude');
+  const label = await promptDialog(`Hand this session to which agent?${warning}`, 'claude');
   if (!label) {
 
     return;
@@ -1937,7 +2072,7 @@ async function handOver(id) {
     record.info.allow_commit = result.allow_commit;
     renderSessions();
     const payload = JSON.stringify({session_id: id, write_key: result.write_key});
-    const accepted = window.prompt(
+    const accepted = await promptDialog(
       'Give this to the agent — shown once, never again.\nOK copies session_id and write_key as JSON.',
       payload,
     );
@@ -1945,7 +2080,7 @@ async function handOver(id) {
       await copyText(payload);
     }
   } catch (error) {
-    alert(`Hand over failed: ${error.message}`);
+    noticeDialog(`Hand over failed: ${error.message}`);
   }
 }
 
@@ -1967,7 +2102,7 @@ async function takeBack(id) {
     record.info.allow_commit = result.allow_commit;
     renderSessions();
   } catch (error) {
-    alert(`Take back failed: ${error.message}`);
+    noticeDialog(`Take back failed: ${error.message}`);
   }
 }
 
@@ -1987,7 +2122,8 @@ async function grantCommit(id, allowed) {
       + 'handing it over, would be written.'
     : 'This instance is not your machine. Everything uncommitted in the session '
       + 'would be written to it.';
-  if (allowed && !confirm(`${who} to ${targetForConfirm(record.info)}?\n\n${caveat}`)) {
+  if (allowed && !await confirmDialog(`${who} to ${targetForConfirm(record.info)}?\n\n${caveat}`,
+                                      'Allow')) {
     renderSessions();
 
     return;
@@ -2001,7 +2137,7 @@ async function grantCommit(id, allowed) {
     record.info.allow_commit = result.allow_commit;
     renderSessions();
   } catch (error) {
-    alert(`Policy change failed: ${error.message}`);
+    noticeDialog(`Policy change failed: ${error.message}`);
     renderSessions();
   }
 }
@@ -2021,7 +2157,7 @@ async function closeSession(id, force, options = {}) {
     return;
   }
   if (!escalating && !options.confirmed && (record.info.pending_commands || 0) > 0 &&
-      !confirm('Uncommitted work will be discarded. Continue?')) {
+      !await confirmDialog('Uncommitted work will be discarded. Continue?', 'Close')) {
 
     return;
   }
@@ -2061,7 +2197,7 @@ async function closeSession(id, force, options = {}) {
     record.closing = false;
     record.closingForce = false;
     renderSessions();
-    alert(`${force ? 'Force kill' : 'Close'} failed: ${error.message}`);
+    noticeDialog(`${force ? 'Force kill' : 'Close'} failed: ${error.message}`);
   }
 }
 
@@ -2123,7 +2259,7 @@ async function duplicateSession(id) {
       state.activeSession = id;
     }
   } catch (error) {
-    alert(`New session failed: ${error.message}`);
+    noticeDialog(`New session failed: ${error.message}`);
   } finally {
     record.duplicating = false;
     renderSessions();
@@ -2580,7 +2716,7 @@ async function deleteJournal(id, {reload = true, report = true} = {}) {
     );
   } catch (error) {
     if (report) {
-      alert(`Delete failed: ${error.message}`);
+      noticeDialog(`Delete failed: ${error.message}`);
     }
 
     return error.message;
@@ -2598,7 +2734,10 @@ async function deleteJournalGroup(entries, container, database) {
   if (!ids.length) return;
   const n = ids.length;
   const noun = n === 1 ? 'journal' : 'journals';
-  if (!confirm(`Delete ${n} ${noun} for ${container} / ${database}? Live sessions are kept.`)) return;
+  if (!await confirmDialog(
+    `Delete ${n} ${noun} for ${container} / ${database}? Live sessions are kept.`,
+    'Delete',
+  )) return;
   // Keep going past a refusal — deleting what can be deleted is the point —
   // then report the batch once instead of one dialog per id.
   const failures = [];
@@ -2611,7 +2750,7 @@ async function deleteJournalGroup(entries, container, database) {
     await loadJournals();
   }
   if (failures.length) {
-    alert(`${failures.length} of ${n} could not be deleted:\n${failures.join('\n')}`);
+    noticeDialog(`${failures.length} of ${n} could not be deleted:\n${failures.join('\n')}`);
   }
 }
 

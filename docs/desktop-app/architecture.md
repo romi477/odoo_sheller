@@ -117,9 +117,17 @@ and **Quit** — a modal over a permanently blank window is a dead end.
 
 ## The UI comes from the daemon
 
-The window opens `http://127.0.0.1:8765/web`. The app does not bundle a copy
-of the frontend, and Rust does not proxy anything: the WebView talks to the
-daemon directly over HTTP and WebSocket on loopback.
+The window holds a local shell page — splash, the daemon's UI in an
+`<iframe>`, and the terminal dock under it. The app does not bundle a copy of
+the frontend, and Rust does not proxy anything: the frame talks to the daemon
+directly over HTTP and WebSocket on loopback, exactly as a browser tab would.
+
+The frame rather than a navigation, because the terminal has to live in the
+same window and only a local page can reach the Tauri commands. The frame is a
+remote origin, so it gets none of them — the same boundary that would have
+existed between two windows, drawn inside one. The fixed port has one
+definition, in `daemon.rs`; the page asks for it with `ui_url` rather than
+spelling it a second time.
 
 Bundling the UI instead looks natural and is more expensive than it looks:
 
@@ -270,9 +278,13 @@ Beyond the mechanics:
   [security.md](../security.md) rather than being discovered later.
 - Tabs, not split panes, in the first version. The Rust side does not care.
 
-Since the UI is served by the daemon, the terminal lives in its own Tauri
-window or tab rather than inside that page — otherwise xterm.js would have to
-be vendored into the Python package.
+Since the UI is served by the daemon, the terminal cannot live inside that
+page: it is a remote origin with no IPC, and putting xterm.js there would mean
+vendoring it into the Python package for a feature that could not work. It
+lives in the shell page instead — a dock under the frame, opened from the bar
+at the bottom, from **Window → Show Terminal**, or with Ctrl+`, and resizable by
+its top edge. Attached to the window rather than floating beside it: the point
+is to reach the machine the session is running on without leaving the app.
 
 ## Signing and entitlements
 
@@ -364,11 +376,12 @@ odoo-sheller.app  (ad-hoc signed, hardened runtime, not notarized)
 │   ├── spawn: Contents/Resources/odoo-sheller/odoo-sheller
 │   ├── PTY: HashMap<session_id, PtyPair> — one $SHELL per terminal tab
 │   ├── menu: MCP Configuration — show the entry to paste, write nothing
+│   ├── menu: Show Terminal / New Terminal Tab — events to the shell page
 │   └── exit: confirm with live sessions; kill our daemon, never a foreign one
 │
 ├── WKWebView
 │   ├── window on http://127.0.0.1:8765/web  (the daemon serves the UI)
-│   └── xterm.js × N — terminal tabs
+│   └── window terminal.html — xterm.js tabs of $SHELL -l
 │
 └── External processes
     ├── the daemon
