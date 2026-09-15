@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.6.0] — 2026-09-14
+## [1.6.0] — 2026-09-15
 
 A macOS application, and Odoo 20. The daemon is the same daemon: the app is a
 window and a supervisor around it, speaking the one HTTP API everything else
