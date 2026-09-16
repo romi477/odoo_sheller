@@ -621,7 +621,10 @@ input {
   min-height: 32px;
   padding: 6px 0 0;
   border-bottom: 1px solid var(--chrome-edge);
-  background: var(--panel);
+  /* The canvas colour, not the header's. This strip sits inside the canvas and
+     belongs to it; the darker fill made it read as a second header. The live
+     tab is still told apart by its outline and by amber. */
+  background: var(--pane);
 }
 
 .session-tab-list {

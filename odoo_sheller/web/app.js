@@ -4,6 +4,12 @@ const DATABASE_LIST_FALLBACK =
   'could not read database list — enter the name manually';
 const DEAD_CAUSE_TAIL = 20;
 const LOG_PIN_SLACK = 24;
+// The daemon's own stderr tail is capped; this one was not. A session left
+// open overnight against a container logging at DEBUG reached sixty thousand
+// lines, and since `renderSessions` rebuilds the log panel from the whole
+// array, every state message rebuilt sixty thousand DOM nodes. The page stops
+// answering clicks long before that is noticed as a log problem.
+const LOG_BUFFER = 5000;
 const state = {
   screen: 'connect',
   containers: [],
@@ -252,36 +258,54 @@ function ask(message, confirmLabel, {withCancel = true, value = null} = {}) {
     cancel.hidden = !withCancel;
     input.hidden = !prompting;
     input.value = prompting ? value : '';
-    let answer = false;
-    const onCancel = () => {
-      answer = false;
-      dialog.close();
-    };
-    const onOk = () => {
-      answer = true;
-      dialog.close();
-    };
-    const onKey = (event) => {
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        onOk();
+    // The answer is settled by whoever gets there first, once. Waiting for the
+    // `close` event alone was the whole failure: a WebView that does not
+    // deliver it leaves this promise pending, the queue below never advances,
+    // and every later dialog — the admin key prompt, the error that would have
+    // explained it — is swallowed in silence. The buttons answer directly now,
+    // and `close` is only the way Esc arrives.
+    let settled = false;
+    const settle = (answer) => {
+      if (settled) {
+
+        return;
       }
-    };
-    const done = () => {
+      settled = true;
       cancel.removeEventListener('click', onCancel);
       ok.removeEventListener('click', onOk);
       input.removeEventListener('keydown', onKey);
-      dialog.removeEventListener('close', done);
+      dialog.removeEventListener('close', onClose);
+      if (dialog.open) {
+        dialog.close();
+      }
       resolve(answer ? (prompting ? input.value : true) : (prompting ? null : false));
+    };
+    const onCancel = () => settle(false);
+    const onOk = () => settle(true);
+    const onClose = () => settle(false);
+    const onKey = (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        settle(true);
+      }
     };
     cancel.addEventListener('click', onCancel);
     ok.addEventListener('click', onOk);
     input.addEventListener('keydown', onKey);
-    // Esc closes a modal dialog on its own and lands here with `answer` still
-    // false. Otherwise the focus goes where the answer is least destructive:
-    // the field when there is one to fill, Cancel when the question is yes/no.
-    dialog.addEventListener('close', done);
-    dialog.showModal();
+    // Esc closes a modal dialog on its own and lands here as a cancel.
+    dialog.addEventListener('close', onClose);
+    try {
+      dialog.showModal();
+    } catch (error) {
+      // A dialog that cannot be shown must not hang the page, and must not be
+      // read as consent: it answers the way Cancel does.
+      console.error('dialog:', error);
+      settle(false);
+
+      return;
+    }
+    // Focus goes where the answer is least destructive: the field when there
+    // is one to fill, Cancel when the question is yes/no.
     if (prompting) {
       input.focus();
       input.select();
@@ -291,6 +315,9 @@ function ask(message, confirmLabel, {withCancel = true, value = null} = {}) {
       ok.focus();
     }
   });
+  // One dialog element, so overlapping calls queue rather than throw:
+  // `showModal()` on an already-open dialog is an InvalidStateError. The queue
+  // is only ever advanced by a settled promise, never by a pending one.
   const result = dialogQueue.then(run, run);
   dialogQueue = result.catch(() => {});
 
@@ -565,9 +592,9 @@ async function startOdooshSession(build, host) {
     attachSession(info);
     const record = state.sessions.get(info.id);
     if (record && lines.length) {
-      record.logLines = record.logLines.length
+      record.logLines = (record.logLines.length
         ? mergeLogLines(lines, record.logLines)
-        : lines;
+        : lines).slice(-LOG_BUFFER);
     }
     state.activeSession = info.id;
     showScreen('sessions');
@@ -1229,9 +1256,9 @@ async function startSession(name) {
     attachSession(info);
     const record = state.sessions.get(info.id);
     if (record && lines.length) {
-      record.logLines = record.logLines.length
+      record.logLines = (record.logLines.length
         ? mergeLogLines(lines, record.logLines)
-        : lines;
+        : lines).slice(-LOG_BUFFER);
     }
     state.activeSession = info.id;
     showScreen('sessions');
@@ -1379,7 +1406,7 @@ async function loadSessionHistory(id, {withLogs = true} = {}) {
 
         return;
       }
-      record.logLines = tail.lines || [];
+      record.logLines = (tail.lines || []).slice(-LOG_BUFFER);
     } catch (_error) {
       // Live WS stderr can still fill the panel after this.
     }
@@ -1428,7 +1455,7 @@ function connectSocket(id) {
     } else if (message.kind === 'stderr') {
       // Odoo emits a few hundred lines just starting up. Append the one line
       // instead of re-rendering tabs, panel and the whole cell feed per line.
-      current.logLines.push(message.line);
+      pushLogLine(current, message.line);
       appendLogLine(current, message.line);
 
       return;
@@ -1437,11 +1464,51 @@ function connectSocket(id) {
   });
   socket.addEventListener('close', () => {
     const current = state.sessions.get(id);
-    if (current) {
-      current.socketOffline = true;
-      renderSessions();
+    if (!current || current.socket !== socket) {
+
+      return;
     }
+    current.socketOffline = true;
+    renderSessions();
+    // A socket that never comes back leaves the card telling yesterday's
+    // story: the state transition that ended the last command, the stderr
+    // that followed it, and the death of the process are all delivered here
+    // and nowhere else. The registry socket already retries the same way.
+    window.setTimeout(() => {
+      if (state.sessions.get(id) !== current || current.socket !== socket) {
+
+        return;
+      }
+      connectSocket(id);
+      resyncSession(id);
+    }, 3000);
   });
+}
+
+// What happened while the socket was down was never delivered, so the card is
+// rebuilt from the daemon rather than from the last message it happened to see.
+async function resyncSession(id) {
+  try {
+    const sessions = await request(() => api.get('/api/sessions'));
+    const record = state.sessions.get(id);
+    if (!record) {
+
+      return;
+    }
+    const info = sessions.find((item) => item.id === id);
+    if (!info) {
+      // Gone while we were not listening. `forgetSession` is what every other
+      // path uses for that, and it takes the tab with it.
+      forgetSession(id);
+
+      return;
+    }
+    record.info = {...record.info, ...info};
+    noteTesting(record, record.info.activity);
+    renderSessions();
+  } catch (_error) {
+    // The standing offline banner is the retry signal.
+  }
 }
 
 function renderSessions() {
@@ -2003,7 +2070,10 @@ async function withAdminRetry(operation) {
 
     return await request(operation);
   } catch (error) {
-    if (error.status !== 403 || !(await ensureAdminKey())) {
+    // A 403 with a key already stored means that key is wrong, so this asks
+    // again instead of resending it. `replace` is unconditional for the same
+    // reason it is here at all: the daemon has just refused whatever we had.
+    if (error.status !== 403 || !(await askForAdminKey())) {
       throw error;
     }
     try {
@@ -2011,8 +2081,8 @@ async function withAdminRetry(operation) {
       return await request(operation);
     } catch (retried) {
       if (retried.status === 403) {
-        // The stored key is wrong or from an older daemon. Keeping it would
-        // make every future attempt fail the same way, with no way back.
+        // Refused twice. Keeping it would make every future attempt fail the
+        // same way, with no way back.
         localStorage.removeItem('osAdminKey');
       }
       throw retried;
@@ -2020,19 +2090,22 @@ async function withAdminRetry(operation) {
   }
 }
 
-async function ensureAdminKey() {
-  if (adminKey()) {
-
-    return true;
-  }
+// Only ever called after the daemon has refused, so whatever is stored is the
+// wrong key: it comes back in the field to be corrected rather than being sent
+// again. Without that a mistyped key was permanent — every later Close, Kill
+// and handover resent it and failed, and nothing in the UI asked for another.
+async function askForAdminKey() {
+  const stored = adminKey();
   const entered = await promptDialog(
     'Admin key — needed to act on a session you do not own.\n\n'
+    + (stored ? 'The daemon refused the key below. Correct it and try again.\n\n' : '')
     + 'The daemon printed it at startup, and keeps it here:\n'
     + '  ~/.odoo-sheller/admin.key\n\n'
     + 'Read it with:  cat ~/.odoo-sheller/admin.key\n'
     + 'No endpoint serves it, so it has to be pasted once.',
+    stored,
   );
-  if (!entered) {
+  if (!entered || !entered.trim()) {
 
     return false;
   }
@@ -2172,16 +2245,11 @@ async function closeSession(id, force, options = {}) {
     },
   );
   try {
-    try {
-      await request(send);
-    } catch (error) {
-      // Closing someone else's live session is an admin act; ask for the key
-      // once and try again rather than leaving a tab that cannot be dismissed.
-      if (error.status !== 403 || !(await ensureAdminKey())) {
-        throw error;
-      }
-      await request(send);
-    }
+    // Closing someone else's live session is an admin act, and it goes through
+    // the same retry as every other one: its own copy asked for the key only
+    // when none was stored, and never dropped one the daemon refused — so a
+    // mistyped key left a card that no button on it could dismiss.
+    await withAdminRetry(send);
     forgetSession(id);
   } catch (error) {
     // A session the daemon no longer has is the state Close was asking for.
@@ -2305,7 +2373,7 @@ async function loadDeadCause(id, record) {
   if (!record.logLines.length) {
     try {
       const data = await request(() => api.get(`/api/sessions/${id}/logs`));
-      record.logLines.push(...(data.lines || []));
+      (data.lines || []).forEach((line) => pushLogLine(record, line));
     } catch (_error) {
       // keep whatever stderr we already buffered
     }
@@ -2364,6 +2432,16 @@ function updateLogCount(panel, record) {
   );
 }
 
+// Every path that grows the buffer goes through here, so the ceiling holds
+// wherever the line came from.
+function pushLogLine(record, line) {
+  record.logLines.push(line);
+  if (record.logLines.length > LOG_BUFFER) {
+    record.logLines.splice(0, record.logLines.length - LOG_BUFFER);
+    record.unseenLogs = Math.min(record.unseenLogs, record.logLines.length);
+  }
+}
+
 function appendLogLine(record, line) {
   const panel = record.panel;
   const lines = panel?.querySelector('.log-lines');
@@ -2387,6 +2465,9 @@ function appendLogLine(record, line) {
   }
   const pinned = isLogPinned(lines);
   lines.append(logRow(line));
+  while (lines.childElementCount > LOG_BUFFER) {
+    lines.firstElementChild.remove();
+  }
   if (pinned) {
     lines.scrollTop = lines.scrollHeight;
   }
@@ -2412,6 +2493,14 @@ function renderLogs(panel, record) {
     record.logsFocused ? 'Collapse logs' : 'Expand logs',
   );
   updateLogCount(panel, record);
+  if (!open) {
+    // Nothing to draw into a collapsed panel, and `renderSessions` comes
+    // through here on every state message: building the rows anyway is what
+    // turned a long-running session into a page that ignores its buttons.
+    lines.replaceChildren();
+
+    return;
+  }
   const pinned = isLogPinned(lines);
   lines.replaceChildren();
   record.logLines

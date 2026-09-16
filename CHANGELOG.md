@@ -5,6 +5,62 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] — 2026-09-17
+
+A fix release for what a session left running overnight does to the window.
+Nothing in the protocol, the daemon or the session model changed.
+
+### The page stopped answering its buttons
+
+The log panel had no ceiling. `record.logLines` grew for as long as the session
+lived, and `renderSessions()` rebuilds that panel from the whole array — on
+every state, owner and policy message, and **even while the panel is
+collapsed**. A session left open against a container logging at DEBUG reached
+sixty thousand lines, so every message rebuilt sixty thousand DOM nodes for
+something nobody was looking at. Close and Kill were not broken; the main
+thread never got to them.
+
+- The buffer is capped at 5000 lines, trimmed on every path that fills it —
+  the live line from the socket, the tail from the API, the merge at startup —
+  and the rows are dropped from the front of the panel to match.
+- A collapsed panel builds no rows at all.
+- **The per-session WebSocket reconnects.** It never did: `close` set a flag and
+  that was the end of it, so after a drop the card told yesterday's story —
+  state transitions, stderr and the death of the process are delivered there
+  and nowhere else. It retries every three seconds like the registry socket,
+  and resyncs from `/api/sessions` for the gap it missed. A session the daemon
+  no longer lists takes its tab with it.
+
+### Dialogs that answered nothing
+
+Every dialog resolved only on the `<dialog>` element's `close` event. Where
+that event does not arrive, the promise stayed pending, the shared queue behind
+it never advanced, and every later dialog — the admin key prompt, the message
+explaining the failure — was swallowed in silence. The buttons settle the
+answer themselves now, `close` is only how Esc arrives, and a dialog that
+cannot be shown answers the way Cancel does rather than hanging the page.
+
+### A mistyped admin key was permanent
+
+`ensureAdminKey()` treated any stored key as good enough, so the retry resent
+the refused one and never asked again; `closeSession` had a second copy of that
+retry which never dropped a refused key either. One typo and Close, Kill and
+every handover failed for good, with nothing in the UI to clear it. A refusal
+now always asks again, with the refused key back in the field to be corrected,
+and the second refusal drops it.
+
+### The look
+
+- The session tab strip is the canvas colour instead of the header's: it sits
+  inside the canvas and read as a second header.
+- Black in the terminal dock is the framed area alone — where the shell writes.
+  The strip the tabs sit on takes the window's own ground, so the dock reads as
+  part of the application rather than a black band stuck to its bottom.
+- The terminal keeps a small margin from its frame, and the row that does not
+  fit whole is dropped rather than sliced by the frame's own clipping — xterm
+  fits whole rows into a height whose row is a fractional number of pixels, and
+  the last one ended a few pixels past the box.
+
 ## [1.6.0] — 2026-09-15
 
 A macOS application, and Odoo 20. The daemon is the same daemon: the app is a
@@ -729,6 +785,7 @@ explicit, confirmed act.
   `with_delay`, and live streaming of output while a command runs.
 
 [Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.6.0...HEAD
+[1.6.1]: https://github.com/romi477/odoo_sheller/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/romi477/odoo_sheller/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/romi477/odoo_sheller/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/romi477/odoo_sheller/compare/v1.3.0...v1.4.0

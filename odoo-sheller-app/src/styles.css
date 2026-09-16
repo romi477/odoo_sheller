@@ -112,7 +112,10 @@ button.quiet {
   min-height: 0;
   height: 280px;
   border-top: 1px solid var(--line);
-  background: var(--terminal);
+  /* The window's own ground, not the terminal's black: black belongs inside
+     the frame, where the shell writes. Around it — the strip the tabs sit on —
+     the dock is part of the application. */
+  background: var(--background);
 }
 
 /* Closed is the bar alone: the way back in is always on screen. */
@@ -171,7 +174,7 @@ button.quiet {
      here was the tab outline's job, and the outline is gone. */
   /* No line under the bar: the outlined terminal below it is the edge now,
      and two edges a few pixels apart read as a mistake. */
-  background: var(--terminal);
+  background: var(--background);
 }
 
 #tabs {
@@ -341,7 +344,10 @@ button.quiet {
 .pane {
   position: absolute;
   inset: 0;
-  padding: 4px;
+  /* More below than above: the frame turns its corner there, and a descender
+     on the last row was running into it. The columns lost to the sides are
+     one character at most. */
+  padding: 5px 9px 9px;
   visibility: hidden;
 }
 

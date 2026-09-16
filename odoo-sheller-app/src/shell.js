@@ -228,11 +228,29 @@ function resizeDock(delta) {
   }
 }
 
+// xterm fits whole rows into a height it measures in CSS pixels, and a row is
+// rarely a whole number of them: the last one can end a few pixels below the
+// box, where the frame clips it in half. Drop that row instead of showing part
+// of it — a terminal with a sliced bottom line is what a frame is there to
+// prevent.
+function trimClippedRow(tab) {
+  const screen = tab.pane.querySelector(".xterm-screen");
+  if (!screen || tab.term.rows < 2) {
+    return;
+  }
+  const pane = tab.pane.getBoundingClientRect();
+  const floor = pane.bottom - parseFloat(getComputedStyle(tab.pane).paddingBottom);
+  if (screen.getBoundingClientRect().bottom > floor + 0.5) {
+    tab.term.resize(tab.term.cols, tab.term.rows - 1);
+  }
+}
+
 function fitAndResize(tab) {
   if (!dockOpen()) {
     return;
   }
   tab.fit.fit();
+  trimClippedRow(tab);
   invoke("pty_resize", { id: tab.id, cols: tab.term.cols, rows: tab.term.rows });
 }
 

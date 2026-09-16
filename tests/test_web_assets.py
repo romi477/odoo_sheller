@@ -1203,6 +1203,43 @@ def test_download_all_is_gone(app_js):
     assert "download-all" not in app_js
 
 
+def test_a_dropped_session_socket_comes_back(app_js):
+    """State, stderr and the process dying are delivered on that socket only."""
+    body = re.search(r"function connectSocket\(.*?\n\}\n", app_js, re.DOTALL)
+    assert body is not None
+    assert "connectSocket(id);" in body.group(0), "no retry"
+    assert "resyncSession(id);" in body.group(0), "no resync after the gap"
+    resync = re.search(r"async function resyncSession\(.*?\n\}\n", app_js, re.DOTALL)
+    assert resync is not None
+    # A session the daemon no longer lists is gone, tab and all.
+    assert "forgetSession(id);" in resync.group(0)
+
+
+def test_the_log_panel_has_a_ceiling(app_js):
+    """A session left open overnight must not turn the page into a wall."""
+    assert "const LOG_BUFFER =" in app_js
+    push = re.search(r"function pushLogLine\(.*?\n\}", app_js, re.DOTALL)
+    assert push is not None
+    assert "splice(0, record.logLines.length - LOG_BUFFER)" in push.group(0)
+    # Every path that fills the buffer respects it, including the two that
+    # assign the array outright.
+    assert app_js.count("slice(-LOG_BUFFER)") >= 3
+    assert "current.logLines.push(" not in app_js
+    append = re.search(r"function appendLogLine\(.*?\n\}", app_js, re.DOTALL)
+    assert append is not None
+    assert "lines.firstElementChild.remove();" in append.group(0)
+
+
+def test_a_collapsed_log_panel_builds_no_rows(app_js):
+    """`renderSessions` comes through here on every state message."""
+    body = re.search(r"function renderLogs\(.*?\n\}", app_js, re.DOTALL)
+    assert body is not None
+    head, _, tail = body.group(0).partition("if (!open) {")
+    assert tail, "no early return for a hidden panel"
+    # The rows are only built after that guard.
+    assert "forEach((line) => lines.append(logRow(line)))" not in head
+
+
 def test_the_session_header_does_not_offer_a_manual_resync(app_js, markup):
     """The registry socket already keeps tabs in sync; a second control is noise."""
     assert "session-refresh" not in markup.classes
@@ -1213,16 +1250,49 @@ def test_closing_a_foreign_session_asks_for_the_admin_key(app_js):
     """A 403 must lead somewhere, not leave a tab that refuses to go away."""
     body = re.search(r"async function closeSession\(.*?\n\}", app_js, re.DOTALL)
     assert body is not None
-    assert "error.status !== 403" in body.group(0)
-    assert "ensureAdminKey()" in body.group(0)
+    # The same retry every other admin act uses. Its own copy of it asked for
+    # the key only when none was stored and never dropped a refused one, so a
+    # mistyped key made Close and Kill fail for good.
+    assert "withAdminRetry(send)" in body.group(0)
+    assert "ensureAdminKey" not in body.group(0)
 
 
 def test_the_admin_key_prompt_says_where_to_find_it(app_js):
     """A key you cannot locate is a dead end, and this one is never served."""
-    body = re.search(r"async function ensureAdminKey\(.*?\n\}", app_js, re.DOTALL)
+    body = re.search(r"async function askForAdminKey\(.*?\n\}", app_js, re.DOTALL)
     assert body is not None
     assert "~/.odoo-sheller/admin.key" in body.group(0)
     assert "cat ~/.odoo-sheller/admin.key" in body.group(0)
+
+
+def test_a_refused_admin_key_is_offered_back_for_correction(app_js):
+    """One typo must not be permanent: nothing else in the UI can clear it."""
+    body = re.search(r"async function askForAdminKey\(.*?\n\}", app_js, re.DOTALL)
+    assert body is not None
+    # The stored value goes into the field, so the prompt is a second attempt
+    # rather than a repeat of the first.
+    assert "const stored = adminKey();" in body.group(0)
+    assert "promptDialog(" in body.group(0)
+    assert "stored," in body.group(0)
+    retry = re.search(r"async function withAdminRetry\(.*?\n\}", app_js, re.DOTALL)
+    assert retry is not None
+    assert "askForAdminKey()" in retry.group(0)
+    assert "localStorage.removeItem('osAdminKey')" in retry.group(0)
+
+
+def test_a_dialog_answers_without_waiting_for_the_close_event(app_js):
+    """The queue is shared, so one dialog that never settles silences them all."""
+    body = re.search(r"function ask\(message.*?\n\}", app_js, re.DOTALL)
+    assert body is not None
+    # Each button resolves the answer itself; `close` is only how Esc arrives.
+    assert "const onOk = () => settle(true);" in body.group(0)
+    assert "const onCancel = () => settle(false);" in body.group(0)
+    assert "const onClose = () => settle(false);" in body.group(0)
+    # Idempotent, because more than one of those can fire for one answer.
+    assert "if (settled) {" in body.group(0)
+    # A dialog that cannot be shown answers like Cancel instead of hanging.
+    assert "dialog.showModal();" in body.group(0)
+    assert "} catch (error) {" in body.group(0)
 
 
 def test_owner_actions_only_ask_for_the_admin_key_when_refused(app_js):
