@@ -363,19 +363,39 @@ def _last_json_line(out: str) -> dict | None:
     return None
 
 
+#: A container that cannot run the probe at all, or runs it and has no Odoo in
+#: it, is not a target and never will be without being rebuilt. The UI keeps
+#: those out of the way instead of showing each one a failure it can do nothing
+#: about — a database container sitting next to the Odoo it serves is the
+#: ordinary case, not an error anyone needs to read twice.
+NOT_A_TARGET = ("no_python", "no_odoo_bin")
+
+
 def _unreadable(code: int, out: str, err: str) -> dict:
+    raw = err.strip() or out.strip() or f"probe failed with code {code}"
+    # Docker's own words when the image has no interpreter: "exec: \"python3\":
+    # executable file not found in $PATH", wrapped in OCI runtime noise. The
+    # code is what the UI keys off; the raw line stays for anyone debugging.
+    no_python = "executable file not found" in raw and "python3" in raw
 
     return {
         "ok": False, "odoo_bin": None, "odoo_version": None, "odoo_major": None,
         "python": None, "config": None, "db_name": None, "databases": [],
         "stage": None, "supported": False,
-        "error": (err.strip() or out.strip() or f"probe failed with code {code}"),
+        "error_code": "no_python" if no_python else None,
+        "error": "no python3 in this container" if no_python else raw,
+        "error_detail": raw if no_python else None,
     }
 
 
 def _gate_on_version(payload: dict) -> dict:
     """Refuse an unsupported major here, not on the first command."""
     payload["supported"] = payload.get("odoo_major") in SUPPORTED_MAJORS
+    payload.setdefault("error_detail", None)
+    if payload.get("error") == "odoo-bin not found":
+        payload["error_code"] = "no_odoo_bin"
+        payload["error"] = "no odoo-bin in this container"
+    payload.setdefault("error_code", None)
     if payload.get("ok") and not payload["supported"]:
         supported = ", ".join(str(major) for major in SUPPORTED_MAJORS)
         payload["error"] = (

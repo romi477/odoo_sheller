@@ -307,7 +307,20 @@ def test_log_bar_chrome_is_amber():
     # `.logs` there is just a space, not one of the excluded ones.
     logs = re.search(r"(?m)^\.logs\s*\{([^}]*)\}", css)
     assert logs is not None
-    assert "1px solid var(--chrome-edge)" in logs.group(1)
+    # The edge belongs to the header now, which draws it as a tab: round on
+    # top, square at the bottom where the log continues from it.
+    assert "border" not in logs.group(1)
+    head = re.search(r"\.logs-head\s*\{([^}]*)\}", css)
+    assert head is not None
+    # A tab in both states — round on top, square at the bottom. Only the edge
+    # colour changes: ordinary while it is shut, brighter once it carries a body.
+    assert "border: 1px solid var(--border);" in head.group(1)
+    assert "border-bottom: 0;" in head.group(1)
+    assert re.search(r"border-radius:\s*\d+px\s+\d+px\s+0\s+0;", head.group(1))
+    opened = re.search(r"\.session\.logs-open \.logs-head,\n[^{]*\{([^}]*)\}", css)
+    assert opened is not None
+    assert "border-color: var(--chrome-edge);" in opened.group(1)
+    assert "border-radius" not in opened.group(1)
     assert "border-strong" not in logs.group(1)
 
 
@@ -398,8 +411,14 @@ def test_toolbar_is_a_separate_rounded_bar():
     assert top is not None
     assert "border-radius:" in top.group(1)
     assert "grid-template-columns:" in top.group(1)
-    assert "box-shadow:" in top.group(1)
-    assert "var(--chrome-edge)" in top.group(1)
+    # The canvas's own outline, not the cyan-lit one: two framed surfaces in
+    # two different edge colours read as two panels arguing about which is the
+    # subject. `--chrome-edge` is still what the session tabs hang from.
+    assert "border: 1px solid var(--border);" in top.group(1)
+    assert "var(--chrome-edge)" not in top.group(1)
+    shell = re.search(r"\.shell\s*\{([^}]*)\}", css)
+    assert shell is not None
+    assert "border: 1px solid var(--border);" in shell.group(1)
     chrome = re.search(r"--chrome-edge:\s*([^;]+);", css)
     assert chrome is not None
     assert "1px" not in chrome.group(1)
@@ -409,7 +428,6 @@ def test_toolbar_is_a_separate_rounded_bar():
     assert active is not None
     assert "color: var(--cyan)" in active.group(1)
     assert "var(--cyan-dark)" not in active.group(1)
-    assert "#top button.active::after" not in css
     press = re.search(
         r"button:active:not\(:disabled\)\s*\{([^}]*)\}", css
     )
@@ -427,6 +445,149 @@ def test_toolbar_is_a_separate_rounded_bar():
     assert "box-shadow" not in lift.group(1)
 
 
+def test_containers_that_cannot_host_a_session_are_folded_away(app_js):
+    """A database container beside its Odoo is the ordinary case, not an error."""
+    assert "const NOT_A_TARGET = ['no_python', 'no_odoo_bin'];" in app_js
+    fold = re.search(r"function foldedContainers\(.*?\n\}", app_js, re.DOTALL)
+    assert fold is not None
+    # Folded, and the fold remembers whether it was opened.
+    assert "localStorage.setItem('osShowNonOdoo'" in fold.group(0)
+    assert "details.open = localStorage.getItem('osShowNonOdoo') === '1';" in fold.group(0)
+    render = re.search(r"function renderContainers\(.*?\n\}", app_js, re.DOTALL)
+    assert render is not None
+    assert "(notATarget(container) ? aside : rendered).push(card)" in render.group(0)
+    # And quiet: the red class belongs to failures somebody can act on.
+    quiet = render.group(0)[render.group(0).index("} else if (notATarget(container)) {"):]
+    assert quiet.index("not an Odoo container") < quiet.index("note.classList.add('error')")
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert ".card.not-a-target" in css
+
+
+def test_cell_actions_belong_to_whoever_holds_the_key(app_js):
+    """Watching an agent's session, re-run and edit are offers it would refuse."""
+    assert "const mine = Boolean(keyFor(id));" in app_js
+    assert "${mine ? `<span class=\"cell-actions\">" in app_js
+    for verb in ("copy-code", "copy-output", "edit", "rerun"):
+        assert f'class="{verb}"' in app_js
+    # Three dividers for four verbs, and the listeners are bound only when the
+    # row was drawn at all.
+    assert app_js.count('<span class="action-sep" aria-hidden="true"></span>') == 3
+    assert "if (mine) {\n      element.querySelector('.copy-code')" in app_js
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    sep = re.search(r"\.action-sep\s*\{([^}]*)\}", css)
+    assert sep is not None
+    assert "width: 1px;" in sep.group(1)
+    hover = re.search(r"\.cell-actions button:hover:not\(:disabled\)\s*\{([^}]*)\}", css)
+    assert hover is not None
+    assert "color: var(--amber);" in hover.group(1)
+
+
+def test_edit_hands_the_code_back_to_the_editor(app_js):
+    """Re-run repeats a command; edit is how you work from one."""
+    body = re.search(r"function editInEditor\(.*?\n\}", app_js, re.DOTALL)
+    assert body is not None
+    assert "record.editor.setValue(code);" in body.group(0)
+    assert "record.editor.focus();" in body.group(0)
+    # The log may have taken the pane the editor lives in.
+    assert "record.logsFocused = false;" in body.group(0)
+    assert "editInEditor(id, cell.code)" in app_js
+
+
+def test_command_w_closes_the_session_in_view(app_js):
+    """The same path the button takes, confirmation and all."""
+    blocks = [
+        block
+        for block in re.findall(
+            r"document\.addEventListener\('keydown', \(event\) => \{\n(.*?)\n\}\);",
+            app_js,
+            re.DOTALL,
+        )
+        if "'w'" in block
+    ]
+    assert len(blocks) == 1
+    body = blocks[0]
+    assert "!event.metaKey || event.altKey || event.shiftKey || event.ctrlKey" in body
+    # Only on the sessions screen, and only when there is one in view.
+    assert "state.screen !== 'sessions'" in body
+    assert "closeSession(id, false);" in body
+    # And the button says so, for anyone who never tries a key.
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    assert "End the session, or \u2318W" in html
+
+
+def test_the_session_count_is_an_exponent(markup):
+    """A count that belongs to the word, not a list item beside it."""
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    # Hidden in the markup too: the first render only happens on the sessions
+    # screen, and until then a nought would sit there on its own.
+    assert '>Sessions<sup id="session-count" hidden>0</sup>' in html
+    assert "Sessions \u00b7 " not in html
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    count = re.search(r"#session-count\s*\{([^}]*)\}", css)
+    assert count is not None
+    assert "vertical-align: super;" in count.group(1)
+    # `sup` on its own stretches the line it sits in.
+    assert "line-height: 0;" in count.group(1)
+    # And nothing at all when there is nothing to count.
+    app_js = (WEB / "app.js").read_text(encoding="utf-8")
+    assert "count.hidden = state.sessions.size === 0;" in app_js
+
+
+def test_the_editor_height_control_is_set_apart_and_answers_amber():
+    """It sits at the end of a hint; without a divider it reads as more hint."""
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    actions = re.search(r'<span class="editor-label-actions">(.*?)</span>\s*</div>', html, re.DOTALL)
+    assert actions is not None
+    assert actions.group(1).index('class="action-sep"') < actions.group(1).index('class="editor-height"')
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    hover = re.search(r"\.editor-height:hover:not\(:disabled\)\s*\{([^}]*)\}", css)
+    assert hover is not None
+    assert "color: var(--amber);" in hover.group(1)
+
+
+def test_the_live_screen_is_underlined():
+    """Cyan against muted grey is a weak signal at 13px; a line is not."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    mark = re.search(r"#top button\.active::after\s*\{([^}]*)\}", css)
+    assert mark is not None
+    assert "height: 2px;" in mark.group(1)
+    # Amber is "live" everywhere else in this UI, and the underline is the one
+    # mark that says which screen is.
+    assert "background: var(--amber);" in mark.group(1)
+    assert re.search(r"#top button\s*\{[^}]*position: relative;", css) is not None
+
+
+def test_option_command_arrows_move_between_screens():
+    """The browser's own tab keys, and in the app they arrive from the menu."""
+    app_js = (WEB / "app.js").read_text(encoding="utf-8")
+    # Several keydown listeners live in this file; this is the one about arrows.
+    keys = [
+        block
+        for block in re.findall(
+            r"document\.addEventListener\('keydown', \(event\) => \{\n(.*?)\n\}\);",
+            app_js,
+            re.DOTALL,
+        )
+        if "ArrowLeft" in block
+    ]
+    assert len(keys) == 1
+    body = keys[0]
+    assert "!event.altKey || !event.metaKey || event.shiftKey || event.ctrlKey" in body
+    # Framed, the page never sees the key — the menu takes it first — so the
+    # in-page handler stands down rather than racing the message below.
+    assert "window.parent !== window" in body
+    message = re.search(
+        r"window\.addEventListener\('message', \(event\) => \{\n(.*?)\n\}\);",
+        app_js,
+        re.DOTALL,
+    )
+    assert message is not None
+    # Only the parent frame is heard, and only about which screen is shown.
+    assert "event.source !== window.parent" in message.group(1)
+    assert "data.type !== 'os-screen'" in message.group(1)
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    assert html.count("\u2325\u2318\u2190/\u2192 switches tabs.") == 3
+    assert "\u21e7\u2190" not in html
 def test_toolbar_tabs_hover_amber():
     """Any of Connect / Sessions / Journals turns amber on hover, not only the current tab."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
@@ -1638,7 +1799,7 @@ def test_the_startup_well_does_not_undo_a_scroll_back(app_js):
     body = render.group(0)
     # scrollTop on a card built this render and not in the document yet is a
     # silent no-op, so the restore has to come after the list is filled.
-    assert body.index("list.replaceChildren(...rendered)") < body.index("restoreStartupScroll")
+    assert body.index("list.replaceChildren(...wanted)") < body.index("restoreStartupScroll")
     restore = re.search(r"function restoreStartupScroll\(.*?\n\}", app_js, re.DOTALL)
     assert restore is not None
     assert "startup.pinned" in restore.group(0), "an unpinned well must keep its offset"

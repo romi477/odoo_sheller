@@ -25,14 +25,14 @@
     <nav id="top">
       <a class="brand" href="https://github.com/romi477/odoo_sheller" target="_blank" rel="noopener noreferrer" title="odoo-sheller on GitHub">
         <img class="logo" src="/static/logo.svg" alt="" width="18" height="18">
-        <span class="wordmark">odoo-sheller.<sub>v1.6.1</sub></span>
+        <span class="wordmark">odoo-sheller.<sub>v1.6.2</sub></span>
       </a>
       <div class="nav-tabs">
-        <button data-screen="connect" class="active" title="Running containers. Probe and start a session. ⇧←/→ switches tabs.">Connect</button>
+        <button data-screen="connect" class="active" title="Running containers. Probe and start a session. ⌥⌘←/→ switches tabs.">Connect</button>
         <span class="nav-divider" aria-hidden="true"></span>
-        <button data-screen="sessions" title="Live sessions. Type and run ORM code. ⇧←/→ switches tabs.">Sessions · <span id="session-count">0</span></button>
+        <button data-screen="sessions" title="Live sessions. Type and run ORM code. ⌥⌘←/→ switches tabs.">Sessions<sup id="session-count" hidden>0</sup></button>
         <span class="nav-divider" aria-hidden="true"></span>
-        <button data-screen="journals" title="Past sessions, kept as files after close. ⇧←/→ switches tabs.">Journals</button>
+        <button data-screen="journals" title="Past sessions, kept as files after close. ⌥⌘←/→ switches tabs.">Journals</button>
       </div>
       <div class="nav-end">
         <a id="api-docs" href="/docs" title="Swagger UI for the HTTP API.">swagger</a>
@@ -77,7 +77,7 @@
             </div>
             <button class="start primary" title="Open the session on this build. The instance chooses the database; there is nothing to pick.">Open session</button>
             <button class="close-connected" hidden title="Close the session on this build. Uncommitted work is discarded.">Close session</button>
-            <button class="reprobe" title="Ask the build about itself again — after a rebuild, or if it was asleep.">re-probe</button>
+            <button class="reprobe" title="Ask the build about itself again — after a rebuild, or if it was asleep.">probe</button>
             <button class="forget icon" aria-label="Forget this build" title="Remove this build from the list. Nothing on the instance changes."><span aria-hidden="true">×</span></button>
           </div>
           <div class="card-facts">
@@ -98,7 +98,7 @@
             </div>
             <button class="open" title="Pick a database and start a session on this container.">Open session</button>
             <button class="close-connected" hidden title="Close the session on this container. Uncommitted work is discarded.">Close session</button>
-            <button class="reprobe" title="Looks for odoo-bin on PATH or at a few common locations (/opt/odoo/odoo-bin, /usr/bin/odoo, /odoo/odoo-bin, /mnt/odoo/odoo-bin, /usr/lib/python3/dist-packages/odoo-bin) — first one found wins, exact layout doesn't matter. A config file is optional, only used for the default database and Postgres credentials; checked at $ODOO_RC, /etc/odoo/odoo.conf, /etc/odoo.conf, /opt/odoo.conf, next to odoo-bin, or ~/.odoorc. Re-run this after a restart or a config change.">re-probe</button>
+            <button class="reprobe" title="Looks for odoo-bin on PATH or at a few common locations (/opt/odoo/odoo-bin, /usr/bin/odoo, /odoo/odoo-bin, /mnt/odoo/odoo-bin, /usr/lib/python3/dist-packages/odoo-bin) — first one found wins, exact layout doesn't matter. A config file is optional, only used for the default database and Postgres credentials; checked at $ODOO_RC, /etc/odoo/odoo.conf, /etc/odoo.conf, /opt/odoo.conf, next to odoo-bin, or ~/.odoorc. Re-run this after a restart or a config change.">probe</button>
           </div>
           <div class="card-facts">
             <span class="meta"></span>
@@ -141,7 +141,7 @@
             <div class="session-keys" role="toolbar" aria-label="Session controls">
               <button type="button" class="session-key grant-commit" role="switch" aria-pressed="false" aria-label="Grant commit" title="Grant commit — Let this agent write to the database, or take the right away again.">Grant commit</button>
               <button type="button" class="session-key grant-access" role="switch" aria-pressed="false" aria-label="Grant access" title="Grant access — Hand this session to an agent. You keep watching; you stop typing.">Grant access</button>
-              <button type="button" class="session-key close" aria-label="Close" title="Close — End the session. Uncommitted work is discarded.">Close</button>
+              <button type="button" class="session-key close" aria-label="Close" title="Close — End the session, or ⌘W. Uncommitted work is discarded.">Close</button>
               <button type="button" class="session-key kill" aria-label="Force kill" title="Force kill — SIGKILL now, no Odoo teardown. Use when Close is not enough.">Kill</button>
               <button type="button" class="session-key interrupt" aria-label="Interrupt" title="Interrupt — Send SIGINT to the running command. The session stays alive.">Interrupt</button>
               <button type="button" class="session-key rollback" aria-label="Rollback" title="Rollback — Discard the open transaction. Nothing is written.">Rollback</button>
@@ -160,6 +160,7 @@
               <span>EDITOR</span>
               <span class="editor-label-actions">
                 <span class="hint">⌘+Enter to run · ↑↓ history</span>
+                <span class="action-sep" aria-hidden="true"></span>
                 <button class="editor-height">taller</button>
               </span>
             </div>

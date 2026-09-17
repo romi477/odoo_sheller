@@ -5,6 +5,66 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.2] — 2026-09-17
+
+Interface work, and one thing the Connect screen was getting wrong. No change
+to the protocol, the daemon or the session model.
+
+### Containers that cannot host a session
+
+A database container beside the Odoo it serves has no `python3` in it, so the
+probe came back with Docker's own OCI paragraph and the card wore it in red,
+every time the screen was opened, about a container nobody was ever going to
+open a session in. The daemon now says what that is —
+
+```
+"error_code": "no_python", "error": "no python3 in this container"
+```
+
+— keeping Docker's wording under `error_detail` for whoever is debugging the
+image itself, and the same for a container with no `odoo-bin`. The screen folds
+those under *N containers are not Odoo images* at the end of the list, grey
+rather than red, and remembers whether the fold was opened. Every other probe
+failure is still red, because every other one can be acted on.
+
+### The keyboard, and where it works
+
+Shortcuts that belong to the window are menu items now, which is what makes
+them work wherever the focus is: macOS offers a key equivalent to the menu
+before any web view sees it, and the framed UI is a remote origin that sees a
+key only while it holds focus.
+
+| | |
+|---|---|
+| ⌥⌘← / ⌥⌘→ | previous / next screen — the app forwards the step into the frame |
+| ⌃⌘← / ⌃⌘→ | previous / next terminal tab |
+| ⌃⌘↑ / ⌃⌘↓ | taller / shorter terminal |
+| ⌘W | close the session, or the terminal tab — whichever has focus |
+
+⇧←/→ for the screens is gone, and so is ⌘K for closing a terminal tab: ⌘W was
+already doing that from the page itself.
+
+### The look
+
+- The header keeps its outline, in the canvas's own colour rather than a
+  cyan-lit one, and without the glow under it. Two framed surfaces in two edge
+  colours read as two panels arguing about which is the subject.
+- The live screen is underlined in amber — the colour this UI already uses for
+  what is live — because cyan against muted grey is a weak signal at 13px.
+- The session count is an exponent on the word rather than a number behind a
+  separator, and there is none at all when there are no sessions.
+- The session tab strip takes the canvas colour instead of the header's.
+- The log panel's header is a tab: round on top, square where the log comes out
+  of it. Its edge is the ordinary border while it is shut and the brighter one
+  while it is open.
+- Every cell in the feed gets **edit**, which puts that code back in the editor
+  instead of re-running it as it stands, dividers between the four verbs, and
+  amber on hover. The row belongs to whoever holds the write key: watching an
+  agent's session it is not drawn at all, and taking the session back brings it
+  to every cell.
+- `re-probe` is `probe`, and the editor's height control is set apart by a
+  divider and answers amber.
+
 ## [1.6.1] — 2026-09-17
 
 A fix release for what a session left running overnight does to the window.
@@ -785,6 +845,7 @@ explicit, confirmed act.
   `with_delay`, and live streaming of output while a command runs.
 
 [Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.6.0...HEAD
+[1.6.2]: https://github.com/romi477/odoo_sheller/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/romi477/odoo_sheller/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/romi477/odoo_sheller/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/romi477/odoo_sheller/compare/v1.4.0...v1.5.0

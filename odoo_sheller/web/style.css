@@ -141,6 +141,10 @@ pre,
   gap: 10px;
 }
 
+/* The same outline the canvas has, and nothing louder: `--chrome-edge` is that
+   colour lit with cyan, and with a glow under it the header read as a raised
+   surface competing with the canvas for the same role. One border colour for
+   both, and the header is chrome above the work rather than a second panel. */
 #top {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -149,12 +153,10 @@ pre,
   column-gap: 12px;
   min-height: 40px;
   padding: 4px 10px;
-  border: 1px solid var(--chrome-edge);
+  border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--panel);
-  box-shadow:
-    inset 0 1px 0 oklch(1 0 0 / 0.07),
-    0 8px 22px -8px color-mix(in oklch, var(--cyan) 42%, oklch(0 0 0 / 0.55));
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05);
 }
 
 #top button {
@@ -162,12 +164,38 @@ pre,
   color: var(--muted);
 }
 
+#top button {
+  position: relative;
+}
+
 #top button.active {
   background: transparent;
   color: var(--cyan);
 }
 
+/* The live screen, underlined. Colour alone had to carry it before, and cyan
+   against muted grey is a weak signal at 13px; a line under the label is read
+   without comparing anything. Amber, which is what "live" is everywhere else
+   here — the running session's tab, the session count, the terminal tab in
+   front. Inside the box, not on its edge. */
+#top button.active::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -2px;
+  height: 2px;
+  background: var(--amber);
+}
+
+/* An exponent, not a list item: the count belongs to the word rather than
+   sitting beside it behind a separator. `sup` alone would raise the line's own
+   height; the explicit size and offset keep the row where it was. */
 #session-count {
+  margin-left: 2px;
+  font-size: 0.72em;
+  line-height: 0;
+  vertical-align: super;
   color: var(--amber);
 }
 
@@ -1037,7 +1065,9 @@ a.brand:active,
 .editor-label-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  /* Tighter than it was: the divider now does the separating that the gap had
+     to do on its own. */
+  gap: 8px;
 }
 
 .hint {
@@ -1058,6 +1088,7 @@ a.brand:active,
 
 .editor-height:hover:not(:disabled) {
   border-color: transparent;
+  color: var(--amber);
 }
 
 .fold-mark {
@@ -1351,8 +1382,19 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
   font-size: 11px;
 }
 
+/* Amber on hover, like every other thing in this UI that answers a pointer. */
 .cell-actions button:hover:not(:disabled) {
   border-color: transparent;
+  color: var(--amber);
+}
+
+/* The divider the header tabs use, at this row's size: four verbs in a line
+   read as one word without it. */
+.action-sep {
+  align-self: center;
+  width: 1px;
+  height: 11px;
+  background: var(--border);
 }
 
 .cell-code,
@@ -1436,7 +1478,7 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
   flex-direction: column;
   min-height: 0;
   margin-top: auto;
-  border-top: 1px solid var(--chrome-edge);
+  /* No line of its own: the header below draws it, with two round corners. */
   box-shadow: 0 -10px 18px -14px oklch(0 0 0 / 0.65);
   background: var(--background);
 }
@@ -1446,14 +1488,62 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
   min-height: 8rem;
 }
 
+/* Containers that cannot host a session at all: no interpreter, or no Odoo.
+   Folded away under the list, and quiet inside it — the card is there to be
+   found, not to be answered. */
+.container-fold {
+  list-style: none;
+  margin-top: 6px;
+}
+
+.container-fold summary {
+  padding: 6px 2px;
+  color: var(--muted-low);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.container-fold summary:hover {
+  color: var(--amber);
+}
+
+.container-fold-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--session-stack);
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card.not-a-target {
+  opacity: 0.72;
+}
+
+.card.not-a-target .probe-note {
+  color: var(--muted-low);
+}
+
+/* A tab either way: round on top like every other surface here, square at the
+   bottom, where the log comes out when it is open. What changes with the state
+   is the edge alone — the ordinary border while it is shut, the brighter one
+   the open panels wear once it is carrying a body. */
 .logs-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   padding: 0 12px;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
   background: var(--panel);
   cursor: pointer;
+}
+
+.session.logs-open .logs-head,
+.observer.logs-open .logs-head {
+  border-color: var(--chrome-edge);
 }
 
 .logs-toggle {
@@ -1518,6 +1608,8 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
   margin: 0;
   padding: 12px;
   overflow: auto;
+  /* The header's own sides, carried down: open, the two are one box. */
+  border: 1px solid var(--chrome-edge);
   border-top: 1px solid var(--border);
   background: var(--background);
   color: var(--muted);

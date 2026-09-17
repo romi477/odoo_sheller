@@ -45,7 +45,7 @@ being re-checked, and nothing is written that has not changed. The list held
 still through a refresh in the browser: same nodes, same heights, one DOM
 insertion instead of a hundred. A card only appears or disappears when the
 container did. Probing happens automatically
-when the screen loads, and each card also has its own re-probe for after a
+when the screen loads, and each card also has its own probe button for after a
 restart or a config change.
 
 - A container that already has a session shows a `connected · <database>`
@@ -63,7 +63,12 @@ restart or a config change.
 - Probe failures are explained specifically — "no odoo-bin found in this
   container", "Odoo 14.0 found; supported: 15, 16, 17, 18, 19", "could not read database
   list — enter the name manually" — rather than as a generic error. A
-  container that fails its probe keeps its card and its re-probe button; it
+  container that cannot host a session at all — no `python3` inside, or no
+  `odoo-bin` — is folded under *N containers are not Odoo images* at the end of
+  the list, greyed rather than red: a database container beside the Odoo it
+  serves is the ordinary case, and there is nothing on that card to act on. The
+  fold remembers whether it was opened. A container that fails its probe for
+  any other reason keeps its card and its probe button; it
   just can't be opened until whatever's wrong is fixed.
 - Opening a session takes a few seconds while Odoo loads its registry.
   **Start** goes inert with a spinning arrow over its own label, which stays
@@ -227,10 +232,19 @@ with its traceback, and how long it took.
 - A command restored from the journal whose original run blew its timeout is
   marked as a **late result**, so an abandoned command never quietly reads as
   an ordinary success.
-- Every card offers **copy code**, **copy output**, **re-run** (sends the
-  same code again as a brand new command).
+- Every card offers **copy code**, **copy output**, **edit** (puts that code
+  back in the editor, to change and run again) and **re-run** (sends the same
+  code as it stands, as a brand new command) — but only while the session is
+  yours. Watching one an agent holds, none of the four is shown: two of them
+  would be refused and the other two invite editing work that is not yours.
+  Take the session back and they are there again, on every cell in the feed.
 - Commit and rollback show up inline in the feed as markers, so the
   chronology makes clear which commands landed on which side of a write.
+
+⌘W closes the session in view, the same way the Close button does — the
+confirmation included. In the desktop app the terminal dock binds the same key
+for its own tabs, and the two never argue: they are separate documents, so
+whichever has focus answers.
 
 ### Logs (Odoo's stderr)
 

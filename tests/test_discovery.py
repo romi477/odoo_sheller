@@ -147,6 +147,28 @@ async def test_probe_refuses_a_major_below_the_supported_ones():
         assert str(major) in result["error"]
 
 
+def test_a_container_without_python_is_named_not_blamed():
+    """Docker's OCI wall of text is not something a card should show."""
+    raw = (
+        'OCI runtime exec failed: exec failed: unable to start container '
+        'process: exec: "python3": executable file not found in $PATH: unknown'
+    )
+    result = discovery._unreadable(126, "", raw)
+    assert result["ok"] is False
+    assert result["error_code"] == "no_python"
+    assert result["error"] == "no python3 in this container"
+    # The original stays for whoever is debugging the image itself.
+    assert result["error_detail"] == raw
+
+
+def test_a_probe_that_failed_for_another_reason_keeps_its_words():
+    """Only the hopeless cases are reworded; the rest still have to be read."""
+    result = discovery._unreadable(1, "", "Error response from daemon: container is paused")
+    assert result["error_code"] is None
+    assert result["error"] == "Error response from daemon: container is paused"
+    assert result["error_detail"] is None
+
+
 async def test_probe_reports_a_container_without_odoo():
     payload = json.dumps({
         "ok": False, "odoo_bin": None, "odoo_version": None, "odoo_major": None,
@@ -154,7 +176,10 @@ async def test_probe_reports_a_container_without_odoo():
     })
     result = await discovery.probe("pg", runner=fake_runner([(0, payload, "")]))
     assert result["ok"] is False
-    assert result["error"] == "odoo-bin not found"
+    # Reworded for the card that shows it, and coded so the UI can fold the
+    # container away instead of printing a failure nobody can act on.
+    assert result["error"] == "no odoo-bin in this container"
+    assert result["error_code"] == "no_odoo_bin"
 
 
 async def test_probe_survives_unparsable_output():

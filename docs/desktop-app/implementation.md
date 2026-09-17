@@ -311,13 +311,25 @@ what "attached to the app" means. Tabs inside the dock. `$SHELL -l`. Output
 batched at 32 KiB or 16 ms, whichever first. Closing a tab or quitting the app
 reaps the process. The bar at the bottom is always there; **Window → Show
 Terminal** (Ctrl+`) toggles the dock, **New Terminal Tab** (⌘T) adds one,
-**Previous / Next Terminal Tab** (⌥⌘←, ⌥⌘→) move between them as a ring,
-**Close Terminal Tab** (⌘K) closes the live one, and **Taller / Shorter
+**Previous / Next Terminal Tab** (⌃⌘←, ⌃⌘→) move between them as a ring,
+and **Taller / Shorter
 Terminal** (⌃⌘↑, ⌃⌘↓) resize the dock in steps. Ctrl and Cmd together for the
 last pair because Ctrl+↑ and Ctrl+↓ are Mission Control and App Windows, which
-the system takes first. ⌘W closes a tab too but has no menu item: an item
-would take that key from the window even with no terminal open, and ⌘W with
-nothing to close has to stay "close the window".
+the system takes first — and the same pair on the arrows beside them, so the
+dock answers to one family of keys. ⌘W closes a tab and has no menu item: an
+item would take that key from the window even with no terminal open, and the
+framed UI binds ⌘W for closing a session. Two documents, one key, and whichever
+holds focus answers.
+
+**Previous / Next Screen** (⌥⌘←, ⌥⌘→) belong to the same menu even though the
+screens are the daemon's UI, not ours. A key reaches a page only while that
+page holds focus, and here focus is as often in the terminal below; macOS
+offers a key equivalent to the menu before any web view, so the menu is the
+only place a window-wide shortcut can live. The framed UI is a remote origin,
+so the step crosses to it as a `postMessage` — the page acts on it only when
+it comes from its own parent, and the message can do nothing but change which
+screen is shown. Unframed, in a browser tab, the page handles the keys itself
+— where the browser leaves them alone, which for ⌥⌘arrow it usually does not.
 `odoo-sheller-app/src/vendor/` holds `@xterm/xterm` 5.5.0 and
 `@xterm/addon-fit` 0.10.0.
 

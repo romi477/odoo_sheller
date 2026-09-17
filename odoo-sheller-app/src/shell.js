@@ -406,19 +406,24 @@ function cycleTab(step) {
   setActive(tabs[(index + step + tabs.length) % tabs.length].id);
 }
 
-function closeActiveTab() {
-  if (dockOpen() && activeId) {
-    closeTab(activeId);
-  }
-}
-
 newTabBtn.addEventListener("click", () => openTab());
 toggleBtn.addEventListener("click", toggleDock);
 listen("terminal-toggle", toggleDock);
 listen("terminal-new-tab", newTab);
+// The screens live in the framed UI, which is a remote origin: no Tauri IPC
+// crosses into it and no stylesheet does either, so the only way in is a
+// message. It carries a step and nothing else.
+function moveScreen(step) {
+  if (!uiUrl || !frame.contentWindow) {
+    return;
+  }
+  frame.contentWindow.postMessage({ type: "os-screen", step }, new URL(uiUrl).origin);
+}
+
+listen("screen-prev", () => moveScreen(-1));
+listen("screen-next", () => moveScreen(1));
 listen("terminal-prev", () => cycleTab(-1));
 listen("terminal-next", () => cycleTab(1));
-listen("terminal-close", closeActiveTab);
 listen("terminal-taller", () => resizeDock(DOCK_STEP));
 listen("terminal-shorter", () => resizeDock(-DOCK_STEP));
 
@@ -457,9 +462,10 @@ window.addEventListener("resize", () => {
   }
 });
 
-// Cmd+T, Cmd+K and the arrows are the menu's. Cmd+W is not: as a menu item it
-// would be taken from the window even with no terminal open, and Cmd+W with
-// nothing to close has to stay "close the window".
+// Cmd+T and the arrows are the menu's. Cmd+W is not, and stays here: as a menu
+// item it would be taken from the window even with no terminal open, and the
+// framed UI binds the same key for closing a session — two documents, one key,
+// and whichever has focus answers.
 window.addEventListener("keydown", (event) => {
   if (event.metaKey && event.key === "w" && dockOpen() && activeId) {
     event.preventDefault();

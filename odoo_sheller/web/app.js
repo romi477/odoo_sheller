@@ -762,10 +762,20 @@ function buildContainerCard(name) {
   return card;
 }
 
+// Nothing a rebuild of the image would not change, so nothing this screen can
+// offer a button for. The daemon decides; this only reads the verdict.
+const NOT_A_TARGET = ['no_python', 'no_odoo_bin'];
+
+function notATarget(container) {
+
+  return NOT_A_TARGET.includes(container.probe?.error_code);
+}
+
 function renderContainers() {
   const list = document.querySelector('#containers');
   const cards = state.containerCards;
   const rendered = [];
+  const aside = [];
   const scrolls = [];
   state.containers.forEach((container) => {
     let card = cards.get(container.name);
@@ -773,7 +783,7 @@ function renderContainers() {
       card = buildContainerCard(container.name);
       cards.set(container.name, card);
     }
-    rendered.push(card);
+    (notATarget(container) ? aside : rendered).push(card);
     // A reused card carries the last render's state, so everything the
     // template starts hidden or enabled has to be put back explicitly. The
     // picker is the exception: it is the user's to open and close.
@@ -783,8 +793,13 @@ function renderContainers() {
 
     const note = card.querySelector('.probe-note');
     note.classList.remove('error');
+    card.classList.toggle('not-a-target', notATarget(container));
     if (!container.probe) {
       setText(note, 'probing container…');
+    } else if (notATarget(container)) {
+      // Not a failure to read twice: a database container beside the Odoo it
+      // serves has no Python and never will. Say what it is, in grey.
+      setText(note, `${container.probe.error} — not an Odoo container`);
     } else if (!container.probe.ok || !container.probe.supported) {
       setText(note, container.probe.error || 'Probe failed');
       note.classList.add('error');
@@ -859,17 +874,59 @@ function renderContainers() {
     }
   });
 
+  // The ones that are not targets go below the list, folded away. They are
+  // still reachable — a probe can be wrong about an image nobody has seen —
+  // but they no longer take the eye every time this screen is opened.
+  const fold = foldedContainers(aside);
+  const wanted = fold ? [...rendered, fold] : rendered;
   // Touch the list only when membership or order changed: re-inserting a node
   // resets the scroll position of the log well inside it.
-  const same = rendered.length === list.children.length
-    && rendered.every((card, index) => list.children[index] === card);
+  const same = wanted.length === list.children.length
+    && wanted.every((card, index) => list.children[index] === card);
   if (!same) {
-    list.replaceChildren(...rendered);
+    list.replaceChildren(...wanted);
   }
   // Only now is a card that was built this render measurable: scrollTop on a
   // card that is not in the document yet is a silent no-op, which left every
   // first render showing the oldest lines instead of the newest.
   scrolls.forEach(([card, startup]) => restoreStartupScroll(card, startup));
+}
+
+// One `<details>`, reused, so opening it survives the next probe's render.
+let containerFold = null;
+
+function foldedContainers(cards) {
+  if (!cards.length) {
+
+    return null;
+  }
+  if (!containerFold) {
+    containerFold = document.createElement('li');
+    containerFold.className = 'container-fold';
+    const details = document.createElement('details');
+    details.open = localStorage.getItem('osShowNonOdoo') === '1';
+    details.addEventListener('toggle', () => {
+      localStorage.setItem('osShowNonOdoo', details.open ? '1' : '0');
+    });
+    const summary = document.createElement('summary');
+    const body = document.createElement('ul');
+    body.className = 'container-fold-list';
+    details.append(summary, body);
+    containerFold.append(details);
+  }
+  const summary = containerFold.querySelector('summary');
+  summary.textContent = cards.length === 1
+    ? '1 container is not an Odoo image'
+    : `${cards.length} containers are not Odoo images`;
+  summary.title = 'No python3 or no odoo-bin inside — a session cannot be opened there.';
+  const body = containerFold.querySelector('.container-fold-list');
+  const same = cards.length === body.children.length
+    && cards.every((card, index) => body.children[index] === card);
+  if (!same) {
+    body.replaceChildren(...cards);
+  }
+
+  return containerFold;
 }
 
 function restoreStartupScroll(card, startup) {
@@ -1512,7 +1569,11 @@ async function resyncSession(id) {
 }
 
 function renderSessions() {
-  document.querySelector('#session-count').textContent = state.sessions.size;
+  // No exponent on zero: "Sessions" with nothing after it is the empty state,
+  // and a nought hanging off the word only looks like one more thing to read.
+  const count = document.querySelector('#session-count');
+  count.textContent = state.sessions.size;
+  count.hidden = state.sessions.size === 0;
   const tabs = document.querySelector('#session-tabs');
   const panels = document.querySelector('#session-panels');
   const list = document.createElement('div');
@@ -1770,6 +1831,26 @@ function historyMove(record, editor, direction) {
   });
 }
 
+// Re-run sends the code as it stands; this one hands it back to the editor
+// instead, which is the difference between repeating a command and working
+// from it. The log is folded away if it had taken the pane, because the editor
+// it is about to replace is the thing being asked for.
+function editInEditor(id, code) {
+  const record = state.sessions.get(id);
+  if (!record?.editor) {
+
+    return;
+  }
+  if (record.logsFocused) {
+    record.logsFocused = false;
+    renderSessions();
+  }
+  record.editor.setValue(code);
+  record.editor.focus();
+  record.editor.setCursor(record.editor.lineCount(), 0);
+  record.editor.refresh();
+}
+
 async function runCommand(id, explicitCode) {
   const record = state.sessions.get(id);
   const code = explicitCode === undefined ? record?.editor?.getValue() : explicitCode;
@@ -1938,6 +2019,10 @@ function renderFeed(feed, id, record) {
     const late = cell.abandoned
       ? '<p class="late-note">late result — the command had exceeded its ceiling</p>'
       : '';
+    // Only the owner gets them. Watching an agent's session, every one of these
+    // is either a lie (re-run, edit) or an offer the session would refuse; take
+    // the session back and they are here again, cell by cell.
+    const mine = Boolean(keyFor(id));
     const body = cell.collapsed ? '' : `
       <pre class="cell-code">${escapeHtml(cell.code)}</pre>
       ${late}${resultHtml(cell.result, id)}`;
@@ -1949,11 +2034,15 @@ function renderFeed(feed, id, record) {
         <span class="cell-duration">${Number(duration || 0).toFixed(2)}s</span>
         <span class="sep" aria-hidden="true">/</span>
         <span class="cell-status ${cell.status}">${cell.status === 'running' ? '● running' : cell.status}</span>
-        <span class="cell-actions">
+        ${mine ? `<span class="cell-actions">
           <button class="copy-code" title="Copy this command’s code.">copy code</button>
+          <span class="action-sep" aria-hidden="true"></span>
           <button class="copy-output" title="Copy stdout, the result, and any traceback.">copy output</button>
+          <span class="action-sep" aria-hidden="true"></span>
+          <button class="edit" title="Put this code back in the editor to change and run again.">edit</button>
+          <span class="action-sep" aria-hidden="true"></span>
           <button class="rerun" title="Run this code again as a new command.">re-run</button>
-        </span>
+        </span>` : ''}
       </header>
       ${body}
     `;
@@ -1969,12 +2058,15 @@ function renderFeed(feed, id, record) {
       cell.collapsed = !cell.collapsed;
       renderFeed(feed, id, record);
     });
-    element.querySelector('.copy-code').addEventListener('click', () => copyText(cell.code));
-    element.querySelector('.copy-output').addEventListener('click', () => {
-      copyText([cell.result?.stdout, cell.result?.result, cell.result?.error?.traceback]
-        .filter(Boolean).join('\n'));
-    });
-    element.querySelector('.rerun').addEventListener('click', () => runCommand(id, cell.code));
+    if (mine) {
+      element.querySelector('.copy-code').addEventListener('click', () => copyText(cell.code));
+      element.querySelector('.copy-output').addEventListener('click', () => {
+        copyText([cell.result?.stdout, cell.result?.result, cell.result?.error?.traceback]
+          .filter(Boolean).join('\n'));
+      });
+      element.querySelector('.edit').addEventListener('click', () => editInEditor(id, cell.code));
+      element.querySelector('.rerun').addEventListener('click', () => runCommand(id, cell.code));
+    }
     cards.append(element);
   });
 }
@@ -3028,12 +3120,49 @@ document.querySelector('.journal-close').addEventListener('click', () => {
 
 const TOP_SCREENS = ['connect', 'sessions', 'journals'];
 
-// ⇧+←/→ cycles Connect / Sessions / Journals, wrapping around. Shift-arrow is
-// also how text selection extends in a field, so this only fires outside an
-// editable one — typing or selecting in the code editor or a text input keeps
-// that native behavior.
+// ⌘W, on the session in view. The desktop app's shell page binds the same key
+// for its terminal tabs, and that is not a clash: the two are different
+// documents, so whichever holds focus answers — typing in the terminal closes a
+// terminal tab, working in the UI closes the session. In a browser tab the
+// browser takes the key first and this never runs.
 document.addEventListener('keydown', (event) => {
-  if (!event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) {
+  if (!event.metaKey || event.altKey || event.shiftKey || event.ctrlKey) {
+
+    return;
+  }
+  if (event.key !== 'w' && event.key !== 'W') {
+
+    return;
+  }
+  const id = state.activeSession;
+  if (state.screen !== 'sessions' || !id || !state.sessions.has(id)) {
+
+    return;
+  }
+  event.preventDefault();
+  // The same path the button takes, confirmation and all: uncommitted work is
+  // discarded either way, and a keystroke is the easier one to hit by accident.
+  closeSession(id, false);
+});
+
+function stepScreen(step) {
+  const index = TOP_SCREENS.indexOf(state.screen);
+  showScreen(TOP_SCREENS[(index + step + TOP_SCREENS.length) % TOP_SCREENS.length]);
+}
+
+// ⌥⌘+←/→ cycles Connect / Sessions / Journals, wrapping around — the keys a
+// browser moves between tabs with. In a browser tab that is exactly the
+// problem: the browser takes them first, so this fires where they are free.
+// Inside the desktop app the page is framed and never sees them at all: macOS
+// hands a key equivalent to the menu before any web view, and the app forwards
+// the step below, which is why this one is skipped when framed rather than
+// racing it.
+document.addEventListener('keydown', (event) => {
+  if (window.parent !== window) {
+
+    return;
+  }
+  if (!event.altKey || !event.metaKey || event.shiftKey || event.ctrlKey) {
 
     return;
   }
@@ -3041,15 +3170,26 @@ document.addEventListener('keydown', (event) => {
 
     return;
   }
-  if (event.target?.closest?.('input, textarea, select, [contenteditable], .CodeMirror')) {
+  event.preventDefault();
+  stepScreen(event.key === 'ArrowRight' ? 1 : -1);
+});
+
+// The desktop app's menu, reaching the page the only way it can: a message
+// across the origin boundary. It arrives whatever holds focus — a field here,
+// or the terminal in the window below — which is the whole point of putting
+// those keys in the menu. Only the frame's own parent is listened to, and the
+// only thing the message can do is change which screen is shown.
+window.addEventListener('message', (event) => {
+  if (event.source !== window.parent || window.parent === window) {
 
     return;
   }
-  event.preventDefault();
-  const step = event.key === 'ArrowRight' ? 1 : -1;
-  const index = TOP_SCREENS.indexOf(state.screen);
-  const next = TOP_SCREENS[(index + step + TOP_SCREENS.length) % TOP_SCREENS.length];
-  showScreen(next);
+  const data = event.data;
+  if (!data || data.type !== 'os-screen') {
+
+    return;
+  }
+  stepScreen(data.step === -1 ? -1 : 1);
 });
 
 function restoreScreen() {

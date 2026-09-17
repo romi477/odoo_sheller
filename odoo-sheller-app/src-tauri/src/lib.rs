@@ -292,7 +292,26 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
     // picked up. Nothing else in the app offers it: a replaced menu has no
     // View, and the WebView's own shortcut is not bound.
     let reload = MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?;
-    let view = Submenu::with_items(app, "View", true, &[&reload])?;
+    // Connect / Sessions / Journals, on the keys a browser moves between tabs
+    // with. They belong in the menu rather than in the framed page: the page is
+    // a remote origin in an iframe, so it sees a key only while it holds focus,
+    // and the terminal below it holds focus half the time. macOS gives the menu
+    // the key first whatever is focused, and the shell page passes it on.
+    let prev_screen = MenuItem::with_id(
+        app,
+        "screen-prev",
+        "Previous Screen",
+        true,
+        Some("Alt+Command+ArrowLeft"),
+    )?;
+    let next_screen = MenuItem::with_id(
+        app,
+        "screen-next",
+        "Next Screen",
+        true,
+        Some("Alt+Command+ArrowRight"),
+    )?;
+    let view = Submenu::with_items(app, "View", true, &[&reload, &prev_screen, &next_screen])?;
     // Ctrl+` the way every editor binds it, and Cmd+T for a new tab the way
     // every browser does. Not CmdOrCtrl for the toggle: Cmd+` is already
     // "cycle windows" on macOS.
@@ -311,7 +330,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         Some("CmdOrCtrl+T"),
     )?;
     // Ctrl+Cmd, not Ctrl alone: Ctrl+Up and Ctrl+Down are Mission Control and
-    // App Windows, and the system takes those before any app sees them.
+    // App Windows, and the system takes those before any app sees them. The
+    // same modifiers as the two above, for the same dock.
     let taller = MenuItem::with_id(
         app,
         "terminal-taller",
@@ -326,30 +346,24 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         true,
         Some("Control+Command+ArrowDown"),
     )?;
-    // Option+Cmd+Left/Right the way browsers move between tabs, and Cmd+K to
-    // close one. Not Cmd+W, which the page keeps for itself: a menu item would
-    // take that key from the window even with no terminal open, and Cmd+W with
-    // no tab has to stay "close the window".
+    // Ctrl+Cmd and an arrow is the dock's whole family: left and right move
+    // between its tabs, up and down resize it. Option+Cmd+Arrow belongs to the
+    // screens above. Closing a tab has no item at all: the page's own Cmd+W
+    // does it, and as a menu item that key would be taken from the window even
+    // with no terminal open, where Cmd+W has to keep meaning something else.
     let prev_tab = MenuItem::with_id(
         app,
         "terminal-prev",
         "Previous Terminal Tab",
         true,
-        Some("Alt+Command+ArrowLeft"),
+        Some("Control+Command+ArrowLeft"),
     )?;
     let next_tab = MenuItem::with_id(
         app,
         "terminal-next",
         "Next Terminal Tab",
         true,
-        Some("Alt+Command+ArrowRight"),
-    )?;
-    let close_tab = MenuItem::with_id(
-        app,
-        "terminal-close",
-        "Close Terminal Tab",
-        true,
-        Some("CmdOrCtrl+K"),
+        Some("Control+Command+ArrowRight"),
     )?;
     let window = Submenu::with_items(
         app,
@@ -363,7 +377,6 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
             &new_tab,
             &prev_tab,
             &next_tab,
-            &close_tab,
             &taller,
             &shorter,
         ],
@@ -468,9 +481,10 @@ pub fn run() {
                 "mcp-config" => show_mcp_config(app),
                 "terminal" => tell_shell(app, "terminal-toggle"),
                 "terminal-new-tab" => tell_shell(app, "terminal-new-tab"),
+                "screen-prev" => tell_shell(app, "screen-prev"),
+                "screen-next" => tell_shell(app, "screen-next"),
                 "terminal-prev" => tell_shell(app, "terminal-prev"),
                 "terminal-next" => tell_shell(app, "terminal-next"),
-                "terminal-close" => tell_shell(app, "terminal-close"),
                 "terminal-taller" => tell_shell(app, "terminal-taller"),
                 "terminal-shorter" => tell_shell(app, "terminal-shorter"),
                 // Reload the framed UI, not the shell: reloading the shell

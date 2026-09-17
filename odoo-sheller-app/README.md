@@ -63,9 +63,21 @@ The dock holds `$SHELL -l` tabs. That is your machine, not the Odoo REPL.
 |---|---|
 | Ctrl+` | show or hide the dock |
 | ⌘T | new tab |
-| ⌥⌘← / ⌥⌘→ | previous, next tab |
-| ⌘K / ⌘W | close the tab |
+| ⌃⌘← / ⌃⌘→ | previous, next tab |
+| ⌘W | close the tab |
 | ⌃⌘↑ / ⌃⌘↓ | taller, shorter |
+
+And for the UI above it:
+
+| | |
+|---|---|
+| ⌥⌘← / ⌥⌘→ | previous, next screen |
+| ⌘R | reload the UI |
+
+Every one of those is a menu item, which is what makes it work wherever the
+focus is: macOS offers a key equivalent to the menu before any web view sees
+it. The screens live in the framed UI, a remote origin, so the app forwards the
+step to it as a message — the one thing that crosses that boundary.
 
 The top edge drags too, and **Window** holds all of it as menu items.
 
