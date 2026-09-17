@@ -8,12 +8,11 @@
 //! the snippet and puts it on the clipboard; the person pastes it where they
 //! want it.
 
-use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
 
-use serde::Serialize;
 use serde_json::{Map, Value};
+
+use crate::configure::{Block, Location, Section};
 
 pub const SERVER_ID: &str = "odoo-sheller";
 
@@ -84,37 +83,38 @@ pub const LOCATIONS: &[(&str, &str)] = &[
     ("Zed", "~/.config/zed/settings.json"),
 ];
 
-#[derive(Debug, Clone, Serialize)]
-pub struct Location {
-    pub app: String,
-    pub path: String,
-}
+/// The MCP section of Settings. An alert was the one place a JSON snippet
+/// could not be shown — proportional text swallows the indentation, and there
+/// is nothing to press but OK.
+pub fn section(launch: &Launch) -> Section {
+    let linked = launch.args.is_empty() && launch.command.contains("/.odoo-sheller/bin/");
 
-/// Everything the page needs to draw the configuration. The prose around it
-/// lives in the page: this is a native alert no longer, and an alert is the
-/// one place a JSON snippet cannot be shown — proportional text swallows the
-/// indentation, and there is nothing to press but OK.
-#[derive(Debug, Clone, Serialize)]
-pub struct Config {
-    /// The entry under `mcpServers`: Claude Desktop, Claude Code, Cursor.
-    pub mcp_servers: String,
-    /// The same entry under the key Zed uses for it.
-    pub context_servers: String,
-    /// The command is the stable link beside the daemon's state rather than a
-    /// path into the bundle, and the page says so.
-    pub linked: bool,
-    pub locations: Vec<Location>,
-    /// Set when the snippet could not be put on the clipboard. Copying is the
-    /// whole convenience, so a failure has to be visible — a dialog that
-    /// claims the clipboard holds something it does not is worse than none.
-    pub clipboard_error: Option<String>,
-}
-
-pub fn config(launch: &Launch) -> Config {
-    Config {
-        mcp_servers: launch.snippet("mcpServers"),
-        context_servers: launch.snippet("context_servers"),
-        linked: launch.args.is_empty() && launch.command.contains("/.odoo-sheller/bin/"),
+    Section {
+        id: "mcp".into(),
+        title: "MCP".into(),
+        intro: "Paste this into the agent's config yourself. Nothing here \
+                writes to those files: they are yours, they hold other servers, \
+                and one of them is rewritten by a running Claude Code."
+            .into(),
+        blocks: vec![
+            Block {
+                label: "Claude Desktop, Claude Code, Cursor".into(),
+                hint: None,
+                text: launch.snippet("mcpServers"),
+            },
+            Block {
+                label: "Zed".into(),
+                hint: Some("— the same entry, another parent key".into()),
+                text: launch.snippet("context_servers"),
+            },
+        ],
+        note: linked.then(|| {
+            "That command is a link kept beside the daemon's own state and \
+             pointed at the app that is installed now, so the entry survives an \
+             update or a move."
+                .into()
+        }),
+        locations_title: Some("Where they live".into()),
         locations: LOCATIONS
             .iter()
             .map(|(app, path)| Location {
@@ -122,29 +122,22 @@ pub fn config(launch: &Launch) -> Config {
                 path: (*path).into(),
             })
             .collect(),
-        clipboard_error: None,
     }
 }
 
-/// macOS only, like the rest of this app. `pbcopy` rather than a clipboard
-/// plugin: one process, no new permission, and nothing to keep in sync.
-pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
-    let mut child = Command::new("/usr/bin/pbcopy")
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|err| err.to_string())?;
-    child
-        .stdin
-        .as_mut()
-        .ok_or_else(|| "pbcopy has no stdin".to_string())?
-        .write_all(text.as_bytes())
-        .map_err(|err| err.to_string())?;
-    let status = child.wait().map_err(|err| err.to_string())?;
-    if !status.success() {
-        return Err(format!("pbcopy exited with {status}"));
+/// What Settings shows when the MCP server cannot be found at all: the section
+/// still exists, and says why it is empty. SSH beside it is unaffected, and a
+/// dialog that refuses to open over one broken half helps nobody.
+pub fn unavailable(reason: &str) -> Section {
+    Section {
+        id: "mcp".into(),
+        title: "MCP".into(),
+        intro: format!("The MCP server could not be located: {reason}"),
+        blocks: Vec::new(),
+        note: None,
+        locations_title: None,
+        locations: Vec::new(),
     }
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -204,26 +197,25 @@ mod tests {
     }
 
     #[test]
-    fn the_config_carries_both_snippets_and_every_location() {
-        let config = config(&bundled());
-        assert!(config.mcp_servers.contains("mcpServers"));
-        assert!(config.context_servers.contains("context_servers"));
-        assert_eq!(config.locations.len(), LOCATIONS.len());
+    fn the_section_carries_both_snippets_and_every_location() {
+        let dialog = section(&bundled());
+        assert!(dialog.blocks[0].text.contains("mcpServers"));
+        assert!(dialog.blocks[1].text.contains("context_servers"));
+        assert_eq!(dialog.locations.len(), LOCATIONS.len());
         for (label, path) in LOCATIONS {
-            let found = config
+            let found = dialog
                 .locations
                 .iter()
                 .find(|item| item.app == *label)
                 .unwrap_or_else(|| panic!("{label} missing"));
             assert_eq!(found.path, *path);
         }
-        assert!(config.clipboard_error.is_none());
     }
 
     #[test]
-    fn only_the_linked_command_is_reported_as_a_link() {
-        assert!(!config(&bundled()).linked, "a path into the bundle is not the link");
+    fn only_the_linked_command_says_so() {
+        assert!(section(&bundled()).note.is_none(), "a path into the bundle is not the link");
         let linked = Launch::bundled(Path::new("/Users/someone/.odoo-sheller/bin/odoo-sheller-mcp"));
-        assert!(config(&linked).linked);
+        assert!(section(&linked).note.unwrap().contains("link"));
     }
 }

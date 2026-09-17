@@ -60,46 +60,31 @@
     </section>
 
     <!--
-      The MCP configuration. It was a native alert until the snippet outgrew
-      one: proportional text eats the indentation of a JSON block, and OK is
-      the only thing an alert lets you press.
+      Settings — MCP, SSH. One skeleton for every section: what differs between
+      them is words, and those come with the event. It was a native alert until
+      the first snippet outgrew one: proportional text eats the indentation of
+      a block, and OK is the only thing an alert lets you press. Nothing here
+      is saved — every section is text for a file this app does not own — so
+      the way out says Close rather than Done.
     -->
-    <dialog id="mcp">
-      <h2>MCP Configuration</h2>
-      <p class="note">
-        Paste this into the agent's config yourself. Nothing here writes to
-        those files: they are yours, they hold other servers, and one of them
-        is rewritten by a running Claude Code.
-      </p>
-
-      <section class="snippet">
-        <header>
-          <h3>Claude Desktop, Claude Code, Cursor</h3>
-          <button type="button" class="copy" data-copy="mcp-servers">Copy</button>
-        </header>
-        <pre id="mcp-servers"></pre>
-      </section>
-
-      <section class="snippet">
-        <header>
-          <h3>Zed <span class="hint">— the same entry, another parent key</span></h3>
-          <button type="button" class="copy" data-copy="context-servers">Copy</button>
-        </header>
-        <pre id="context-servers"></pre>
-      </section>
-
-      <p class="note" id="mcp-linked" hidden>
-        That command is a link kept beside the daemon's own state and pointed
-        at the app that is installed now, so the entry survives an update or a
-        move.
-      </p>
-
-      <h3 class="where">Where they live</h3>
-      <dl id="mcp-locations"></dl>
-
+    <!-- About: the same sheet as Settings, because it is the same kind of
+         thing — something to read and dismiss, with nothing to save. -->
+    <dialog id="about" class="sheet">
+      <h2 id="about-name"></h2>
+      <p class="tagline" id="about-tagline"></p>
+      <div id="about-text"></div>
+      <dl class="settings-locations" id="about-facts"></dl>
       <footer>
-        <p class="note" id="mcp-clipboard"></p>
-        <button type="button" id="mcp-done">Done</button>
+        <button type="button" id="about-close">Close</button>
+      </footer>
+    </dialog>
+
+    <dialog id="settings" class="sheet">
+      <h2>Settings</h2>
+      <nav id="settings-tabs"></nav>
+      <div id="settings-panel"></div>
+      <footer>
+        <button type="button" id="settings-close">Close</button>
       </footer>
     </dialog>
 

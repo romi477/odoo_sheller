@@ -545,6 +545,57 @@ def test_the_editor_height_control_is_set_apart_and_answers_amber():
     assert "color: var(--amber);" in hover.group(1)
 
 
+def test_a_render_that_changes_nothing_builds_nothing(app_js):
+    """`renderSessions` runs on every message; the feed and the log are the cost."""
+    feed = re.search(r"function renderFeed\(.*?\n\}", app_js, re.DOTALL)
+    assert feed is not None
+    assert "if (record.feedSignature === signature" in feed.group(0)
+    sig = re.search(r"function feedSignature\(.*?\n\}", app_js, re.DOTALL)
+    assert sig is not None
+    # Everything the feed draws has to be in it, ownership included: the action
+    # row appears and disappears with the write key.
+    assert "keyFor(id) ? 'mine' : 'watching'" in sig.group(0)
+    for part in ("cell.status", "cell.collapsed", "cell.abandoned", "cell.result"):
+        assert part in sig.group(0)
+    logs = re.search(r"function renderLogs\(.*?\n\}", app_js, re.DOTALL)
+    assert logs is not None
+    assert "if (record.logSignature === signature" in logs.group(0)
+    # `appendLogLine` keeps the panel current one row at a time, so it owns the
+    # signature too — otherwise the next render rebuilds every row it added.
+    append = re.search(r"function appendLogLine\(.*?\n\}", app_js, re.DOTALL)
+    assert append is not None
+    assert "record.logSignature = logSignature(record," in append.group(0)
+
+
+def test_control_shift_arrows_move_between_session_tabs(app_js):
+    """One modifier away from the screens, and the same route into the frame."""
+    body = re.search(r"function stepSession\(.*?\n\}", app_js, re.DOTALL)
+    assert body is not None
+    # A ring, like every other tab strip here, and only when there are two.
+    assert "ids.length < 2" in body.group(0)
+    assert "(index + step + ids.length) % ids.length" in body.group(0)
+    # The tabs are on one screen, so moving between them brings that screen.
+    assert "showScreen('sessions')" in body.group(0)
+    keys = [
+        block
+        for block in re.findall(
+            r"document\.addEventListener\('keydown', \(event\) => \{\n(.*?)\n\}\);",
+            app_js,
+            re.DOTALL,
+        )
+        if "ArrowLeft" in block
+    ]
+    assert len(keys) == 1
+    assert "event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey" in keys[0]
+    message = re.search(
+        r"window\.addEventListener\('message', \(event\) => \{\n(.*?)\n\}\);",
+        app_js,
+        re.DOTALL,
+    )
+    assert message is not None
+    assert "data?.type === 'os-session'" in message.group(1)
+
+
 def test_the_live_screen_is_underlined():
     """Cyan against muted grey is a weak signal at 13px; a line is not."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
@@ -572,7 +623,7 @@ def test_option_command_arrows_move_between_screens():
     ]
     assert len(keys) == 1
     body = keys[0]
-    assert "!event.altKey || !event.metaKey || event.shiftKey || event.ctrlKey" in body
+    assert "event.altKey && event.metaKey && !event.shiftKey && !event.ctrlKey" in body
     # Framed, the page never sees the key — the menu takes it first — so the
     # in-page handler stands down rather than racing the message below.
     assert "window.parent !== window" in body
@@ -584,7 +635,7 @@ def test_option_command_arrows_move_between_screens():
     assert message is not None
     # Only the parent frame is heard, and only about which screen is shown.
     assert "event.source !== window.parent" in message.group(1)
-    assert "data.type !== 'os-screen'" in message.group(1)
+    assert "data?.type === 'os-screen'" in message.group(1)
     html = (WEB / "index.html").read_text(encoding="utf-8")
     assert html.count("\u2325\u2318\u2190/\u2192 switches tabs.") == 3
     assert "\u21e7\u2190" not in html
@@ -914,10 +965,11 @@ def test_cell_head_leads_with_ordinal_then_status(app_js):
     head = re.search(r'<header class="cell-head">(.*?)</header>', render.group(0), re.DOTALL)
     assert head is not None
     order = re.findall(r'class="(cell-[a-z]+)', head.group(1))
-    assert order[:5] == [
+    assert order[:6] == [
         "cell-fold",
         "cell-ordinal",
         "cell-actor",
+        "cell-when",
         "cell-duration",
         "cell-status",
     ]

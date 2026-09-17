@@ -85,6 +85,22 @@ whole of the remote safety story:
   work, because inspecting a production instance is the legitimate case and
   only writing is not.
 
+**The host key of a build is trusted on first sight, if you take the app's
+suggestion.** `ssh` asks about an unknown host, and the daemon runs it with no
+terminal to answer from, so the session dies on the question instead. The
+desktop app's **Settings… → SSH** offers the two lines that answer it in
+advance:
+
+```
+Host *.odoo.com
+    StrictHostKeyChecking accept-new
+```
+
+That is trust on first use — the same trust a person grants by typing `yes` at
+the prompt, granted without the prompt. A host whose key has *changed* since is
+still refused, which is the case that would matter. The app only shows the
+block: `~/.ssh/config` is yours, and nothing here writes to it.
+
 The refusal codes differ on purpose. `commit_not_allowed` means ask the human
 and then watch for the grant; `commit_forbidden` means nothing will ever
 grant it, and an agent that treated them alike would poll forever.

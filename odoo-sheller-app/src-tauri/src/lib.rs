@@ -1,5 +1,6 @@
 //! Window and process supervisor around the daemon.
 
+mod configure;
 mod daemon;
 mod docker;
 mod mcp;
@@ -253,22 +254,26 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         true,
         Some("CmdOrCtrl+Q"),
     )?;
-    let configure = MenuItem::with_id(
-        app,
-        "mcp-config",
-        "MCP Configuration…",
-        true,
-        None::<&str>,
-    )?;
+    // One item, on the key macOS has always used for it. What is behind it is
+    // two sections — an agent's config, and ssh's — and nothing it can save:
+    // every section is text for a file this app does not own.
+    let configure = MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
+    // Our own sheet, not the platform's panel: that one takes a paragraph of
+    // metadata and shows a version, and what this app is takes a little more
+    // saying than that. In the order macOS has always used — About, then
+    // settings, then the hide pair, then Quit.
+    let about = MenuItem::with_id(app, "about", "About odoo-sheller", true, None::<&str>)?;
     let app_menu = Submenu::with_items(
         app,
         "odoo-sheller",
         true,
         &[
-            &PredefinedMenuItem::hide(app, None)?,
-            &PredefinedMenuItem::hide_others(app, None)?,
+            &about,
             &PredefinedMenuItem::separator(app)?,
             &configure,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
             &PredefinedMenuItem::separator(app)?,
             &quit,
         ],
@@ -311,7 +316,34 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         true,
         Some("Alt+Command+ArrowRight"),
     )?;
-    let view = Submenu::with_items(app, "View", true, &[&reload, &prev_screen, &next_screen])?;
+    // The session tabs inside that screen, one modifier away from the screens
+    // themselves: Ctrl+Shift rather than Option+Command.
+    let prev_session = MenuItem::with_id(
+        app,
+        "session-prev",
+        "Previous Session",
+        true,
+        Some("Control+Shift+ArrowLeft"),
+    )?;
+    let next_session = MenuItem::with_id(
+        app,
+        "session-next",
+        "Next Session",
+        true,
+        Some("Control+Shift+ArrowRight"),
+    )?;
+    let view = Submenu::with_items(
+        app,
+        "View",
+        true,
+        &[
+            &reload,
+            &prev_screen,
+            &next_screen,
+            &prev_session,
+            &next_session,
+        ],
+    )?;
     // Ctrl+` the way every editor binds it, and Cmd+T for a new tab the way
     // every browser does. Not CmdOrCtrl for the toggle: Cmd+` is already
     // "cycle windows" on macOS.
@@ -408,27 +440,23 @@ fn mcp_launch(app: &AppHandle) -> Result<mcp::Launch, String> {
     })
 }
 
-fn show_mcp_config(app: &AppHandle) {
-    let launch = match mcp_launch(app) {
-        Ok(launch) => launch,
-        Err(message) => {
-            app.dialog()
-                .message(message)
-                .title("odoo-sheller")
-                .kind(MessageDialogKind::Error)
-                .blocking_show();
-            return;
-        }
+/// Drawn by the page, not by an alert: a block of config needs a monospace
+/// column to keep its indentation and a button of its own to copy it, and a
+/// native alert has neither. Nothing is copied on the way in — opening a
+/// window is not asking for anything.
+fn show_settings(app: &AppHandle) {
+    let mcp = match mcp_launch(app) {
+        Ok(launch) => mcp::section(&launch),
+        // One half missing is not a reason to withhold the other.
+        Err(reason) => mcp::unavailable(&reason),
     };
-    let mut config = mcp::config(&launch);
-    if let Err(err) = mcp::copy_to_clipboard(&config.mcp_servers) {
-        config.clipboard_error = Some(err);
-    }
-    // Drawn by the page, not by an alert: a JSON snippet needs a monospace
-    // block to stay indented and a button to copy it, and a native alert has
-    // neither.
     focus_main(app);
-    let _ = app.emit("mcp-config", config);
+    let _ = app.emit(
+        "settings",
+        configure::Settings {
+            sections: vec![mcp, configure::ssh()],
+        },
+    );
 }
 
 /// The copy buttons in that dialog. `pbcopy` again rather than the webview's
@@ -436,7 +464,7 @@ fn show_mcp_config(app: &AppHandle) {
 /// prompt in a window that already owns the menu bar.
 #[tauri::command]
 fn copy_text(text: String) -> Result<(), String> {
-    mcp::copy_to_clipboard(&text)
+    configure::copy_to_clipboard(&text)
 }
 
 /// The terminal is a panel in the main window, so the menu only says so and
@@ -478,9 +506,21 @@ pub fn run() {
             build_menu(&handle)?;
             app.on_menu_event(|app, event| match event.id().0.as_str() {
                 "quit" => app.exit(0),
-                "mcp-config" => show_mcp_config(app),
+                "about" => {
+                    focus_main(app);
+                    // The address a browser would use, without the marker the
+                    // frame carries: `?app=1` is between the window and the
+                    // page, and means nothing to anyone reading this.
+                    let _ = app.emit(
+                        "about",
+                        configure::about(&daemon::loopback_url(daemon::UI_PATH)),
+                    );
+                }
+                "settings" => show_settings(app),
                 "terminal" => tell_shell(app, "terminal-toggle"),
                 "terminal-new-tab" => tell_shell(app, "terminal-new-tab"),
+                "session-prev" => tell_shell(app, "session-prev"),
+                "session-next" => tell_shell(app, "session-next"),
                 "screen-prev" => tell_shell(app, "screen-prev"),
                 "screen-next" => tell_shell(app, "screen-next"),
                 "terminal-prev" => tell_shell(app, "terminal-prev"),

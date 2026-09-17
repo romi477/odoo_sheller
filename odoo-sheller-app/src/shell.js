@@ -15,7 +15,8 @@ const tabsEl = document.getElementById("tabs");
 const panesEl = document.getElementById("panes");
 const newTabBtn = document.getElementById("new-tab");
 const toggleBtn = document.getElementById("dock-toggle");
-const mcp = document.getElementById("mcp");
+const settings = document.getElementById("settings");
+const about = document.getElementById("about");
 
 // Not `window.alert`: WKWebView draws no JavaScript dialog unless the host
 // implements the WKUIDelegate panels, and wry implements only the file-upload
@@ -85,38 +86,112 @@ listen("reload-ui", () => {
 });
 invoke("startup_state").then(render);
 
-/* ----------------------------------------------------------- mcp config */
+/* ------------------------------------------------------------- settings */
 
-// Rust decides what the entry is and puts the first form on the clipboard;
-// this only draws it. The prose lives in `index.html` beside the markup it
-// belongs to.
-function showMcpConfig(config) {
-  document.getElementById("mcp-servers").textContent = config.mcp_servers;
-  document.getElementById("context-servers").textContent = config.context_servers;
-  document.getElementById("mcp-linked").hidden = !config.linked;
+// The two-sheet glyph every application uses for copy. Drawn rather than
+// labelled: the word sat on top of the block it belonged to and read as part
+// of it.
+const COPY_ICON = `
+  <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+    <rect x="5.5" y="5.5" width="8" height="8" rx="1.6" />
+    <path d="M10.5 3.5a1.6 1.6 0 0 0-1.6-1.6H4a1.6 1.6 0 0 0-1.6 1.6v5a1.6 1.6 0 0 0 1.6 1.6" />
+  </svg>`;
 
-  const list = document.getElementById("mcp-locations");
-  list.textContent = "";
-  for (const { app, path } of config.locations) {
-    const term = document.createElement("dt");
-    term.textContent = app;
-    const value = document.createElement("dd");
-    value.textContent = path;
-    list.append(term, value);
+// Rust decides what the text is; this only draws it. One renderer for every
+// section — MCP and SSH differ in words alone, and the words arrive with the
+// event.
+function settingsSection(section) {
+  const panel = document.createElement("div");
+  panel.className = "settings-section";
+
+  const intro = document.createElement("p");
+  intro.className = "note";
+  intro.textContent = section.intro;
+  panel.append(intro);
+
+  for (const block of section.blocks) {
+    const wrapper = document.createElement("section");
+    wrapper.className = "snippet";
+    const heading = document.createElement("h3");
+    heading.textContent = block.label;
+    if (block.hint) {
+      const hint = document.createElement("span");
+      hint.className = "hint";
+      hint.textContent = ` ${block.hint}`;
+      heading.append(hint);
+    }
+    // The button rides in the corner of the block it copies, rather than in a
+    // row of its own above it: it belongs to that text and to nothing else.
+    const body = document.createElement("div");
+    body.className = "snippet-body";
+    const pre = document.createElement("pre");
+    pre.textContent = block.text;
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "copy";
+    copy.title = "Copy this block";
+    copy.setAttribute("aria-label", "Copy this block");
+    copy.innerHTML = COPY_ICON;
+    copy.addEventListener("click", () => copyBlock(copy, block.text));
+    body.append(pre, copy);
+    wrapper.append(heading, body);
+    panel.append(wrapper);
   }
 
-  const clipboard = document.getElementById("mcp-clipboard");
-  clipboard.classList.toggle("error", Boolean(config.clipboard_error));
-  clipboard.textContent = config.clipboard_error
-    ? `Clipboard unavailable: ${config.clipboard_error}`
-    : "The mcpServers form is on the clipboard.";
+  if (section.note) {
+    const note = document.createElement("p");
+    note.className = "note";
+    note.textContent = section.note;
+    panel.append(note);
+  }
 
-  // Asking for the dialog while it is already up is a no-op, not an error:
+  if (section.locations.length) {
+    const where = document.createElement("h3");
+    where.className = "where";
+    where.textContent = section.locations_title || "";
+    const list = document.createElement("dl");
+    list.className = "settings-locations";
+    for (const { app, path } of section.locations) {
+      const term = document.createElement("dt");
+      term.textContent = app;
+      const value = document.createElement("dd");
+      value.textContent = path;
+      list.append(term, value);
+    }
+    panel.append(where, list);
+  }
+
+  return panel;
+}
+
+function showSettings(payload) {
+  const tabs = document.getElementById("settings-tabs");
+  const panel = document.getElementById("settings-panel");
+  tabs.textContent = "";
+  const show = (section, button) => {
+    for (const other of tabs.children) {
+      other.classList.toggle("active", other === button);
+    }
+    panel.replaceChildren(settingsSection(section));
+    settings.scrollTop = 0;
+  };
+  payload.sections.forEach((section, index) => {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.dataset.section = section.id;
+    tab.textContent = section.title;
+    tab.addEventListener("click", () => show(section, tab));
+    tabs.append(tab);
+    if (index === 0) {
+      show(section, tab);
+    }
+  });
+
+  // Asking for it while it is already up is a no-op, not an error:
   // `showModal` on an open dialog throws.
-  if (!mcp.open) {
-    mcp.showModal();
+  if (!settings.open) {
+    settings.showModal();
   }
-  mcp.scrollTop = 0;
 }
 
 // The button says what happened, because nothing else can: a copy leaves no
@@ -124,31 +199,60 @@ function showMcpConfig(config) {
 // on it — `dataset` is strings, and a timer id is not one.
 const copyState = new WeakMap();
 
-async function copy(button, text) {
-  const state = copyState.get(button) || { label: button.textContent };
+async function copyBlock(button, text) {
+  const state = copyState.get(button) || {};
   clearTimeout(state.timer);
   try {
     await invoke("copy_text", { text });
-    button.textContent = "Copied";
+    button.classList.remove("failed");
     button.classList.add("done");
   } catch (err) {
-    button.textContent = "Failed";
+    button.classList.remove("done");
+    button.classList.add("failed");
     console.error("copy:", err);
   }
   state.timer = setTimeout(() => {
-    button.textContent = state.label;
-    button.classList.remove("done");
+    button.classList.remove("done", "failed");
   }, 1400);
   copyState.set(button, state);
 }
 
-for (const button of mcp.querySelectorAll(".copy")) {
-  button.addEventListener("click", () =>
-    copy(button, document.getElementById(button.dataset.copy).textContent),
-  );
+// The same sheet as Settings: a version, what this is, and the two facts worth
+// having to hand. Nothing to save here either, so the way out says Close.
+function showAbout(payload) {
+  document.getElementById("about-name").textContent = `${payload.name} ${payload.version}`;
+  document.getElementById("about-tagline").textContent = payload.tagline;
+
+  const text = document.getElementById("about-text");
+  text.textContent = "";
+  for (const paragraph of payload.paragraphs) {
+    const line = document.createElement("p");
+    line.className = "note";
+    line.textContent = paragraph;
+    text.append(line);
+  }
+
+  const facts = document.getElementById("about-facts");
+  facts.textContent = "";
+  for (const { app, path } of payload.facts) {
+    const term = document.createElement("dt");
+    term.textContent = app;
+    const value = document.createElement("dd");
+    value.textContent = path;
+    facts.append(term, value);
+  }
+
+  if (!about.open) {
+    about.showModal();
+  }
+  about.scrollTop = 0;
 }
-document.getElementById("mcp-done").addEventListener("click", () => mcp.close());
-listen("mcp-config", (event) => showMcpConfig(event.payload));
+
+document.getElementById("about-close").addEventListener("click", () => about.close());
+listen("about", (event) => showAbout(event.payload));
+
+document.getElementById("settings-close").addEventListener("click", () => settings.close());
+listen("settings", (event) => showSettings(event.payload));
 
 /* --------------------------------------------------------------- terminal */
 
@@ -414,12 +518,20 @@ listen("terminal-new-tab", newTab);
 // crosses into it and no stylesheet does either, so the only way in is a
 // message. It carries a step and nothing else.
 function moveScreen(step) {
+  tellUi("os-screen", step);
+}
+
+// The screens and the session tabs inside them are both the framed UI's, and
+// both arrive the same way: a step, and nothing else.
+function tellUi(type, step) {
   if (!uiUrl || !frame.contentWindow) {
     return;
   }
-  frame.contentWindow.postMessage({ type: "os-screen", step }, new URL(uiUrl).origin);
+  frame.contentWindow.postMessage({ type, step }, new URL(uiUrl).origin);
 }
 
+listen("session-prev", () => tellUi("os-session", -1));
+listen("session-next", () => tellUi("os-session", 1));
 listen("screen-prev", () => moveScreen(-1));
 listen("screen-next", () => moveScreen(1));
 listen("terminal-prev", () => cycleTab(-1));

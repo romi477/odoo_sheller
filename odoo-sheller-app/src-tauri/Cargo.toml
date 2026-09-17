@@ -1,6 +1,6 @@
 [package]
 name = "odoo-sheller-app"
-version = "1.6.2"
+version = "1.6.3"
 description = "macOS window around the odoo-sheller daemon"
 authors = []
 edition = "2021"

@@ -346,7 +346,7 @@ before starting:
 Absolute paths on purpose: these hosts launch their servers with a minimal
 `PATH`, so a bare `uv` can fail to resolve.
 
-The desktop app's **MCP Configuration…** menu prints the first of these with
+The desktop app's **Settings… → MCP** shows the first of these with
 the real path filled in and copies it to the clipboard. It never writes to an
 agent's config: those files are yours, they hold other servers, and one of
 them is live state a running Claude Code rewrites.

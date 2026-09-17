@@ -365,11 +365,15 @@ button.quiet {
 /* A native alert cannot show a JSON snippet: its text is proportional, so the
    indentation collapses, and OK is the only button it has. Drawn here the
    snippet keeps its shape and each form gets its own Copy. */
-#mcp {
+.sheet {
   width: min(680px, calc(100vw - 64px));
   max-height: calc(100vh - 96px);
   padding: 22px 24px 18px;
-  border: 1px solid var(--line);
+  /* Cyan, and the only cyan outline in the window: this is the one surface
+     that arrives over everything else and has to be dismissed before the rest
+     of the app answers again. Amber here would have claimed the colour this
+     project keeps for what is live. */
+  border: 1px solid var(--cyan);
   border-radius: 12px;
   background: var(--panel);
   color: var(--text);
@@ -377,11 +381,11 @@ button.quiet {
   overflow-y: auto;
 }
 
-#mcp::backdrop {
+.sheet::backdrop {
   background: oklch(0 0 0 / 0.55);
 }
 
-#mcp h2 {
+.sheet h2 {
   margin: 0 0 12px;
   font-size: 17px;
   font-weight: 500;
@@ -389,7 +393,7 @@ button.quiet {
   color: var(--cyan);
 }
 
-#mcp h3 {
+.sheet h3 {
   margin: 0;
   font-size: 12px;
   font-weight: 500;
@@ -398,13 +402,13 @@ button.quiet {
   color: var(--muted);
 }
 
-#mcp h3 .hint {
+.sheet h3 .hint {
   letter-spacing: normal;
   text-transform: none;
   color: var(--muted-low);
 }
 
-#mcp .note {
+.sheet .note {
   margin: 0 0 16px;
   max-width: 62ch;
   color: var(--muted);
@@ -414,12 +418,11 @@ button.quiet {
   margin: 0 0 16px;
 }
 
-.snippet header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 6px;
+/* The button sits in the corner of the block it copies. Above it, in a row of
+   its own, it read as chrome for the whole dialog. */
+.snippet-body {
+  position: relative;
+  margin-top: 6px;
 }
 
 .snippet pre {
@@ -435,27 +438,52 @@ button.quiet {
   overflow-wrap: anywhere;
 }
 
-/* Quiet until pointed at, like the dock's own two buttons. */
+/* An icon standing on the text it copies: no outline, no fill, no label. The
+   word "Copy" in a box read as a control for the whole dialog. */
 .copy {
-  flex: 0 0 auto;
-  padding: 3px 10px;
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  padding: 4px;
   border: 0;
+  border-radius: 6px;
   background: transparent;
   color: var(--muted-low);
-  font-size: 12px;
   transition: color 120ms;
 }
 
+.copy svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .copy:hover,
-.copy.done {
+.copy:focus-visible {
   color: var(--amber);
 }
 
-#mcp .where {
+/* Copying leaves no trace on screen, so the icon itself is the receipt: it
+   holds the colour for a moment, and turns red if the clipboard refused. */
+.copy.done {
+  color: var(--cyan);
+}
+
+.copy.failed {
+  color: oklch(0.65 0.18 25);
+}
+
+.sheet .where {
   margin-bottom: 8px;
 }
 
-#mcp-locations {
+.settings-locations {
   display: grid;
   grid-template-columns: max-content 1fr;
   gap: 4px 16px;
@@ -463,11 +491,11 @@ button.quiet {
   font-size: 13px;
 }
 
-#mcp-locations dt {
+.settings-locations dt {
   color: var(--muted);
 }
 
-#mcp-locations dd {
+.settings-locations dd {
   margin: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
   font-size: 12px;
@@ -475,20 +503,83 @@ button.quiet {
   overflow-wrap: anywhere;
 }
 
-#mcp footer {
+.sheet footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 16px;
   padding-top: 14px;
   border-top: 1px solid var(--line);
 }
 
-#mcp footer .note {
+/* The sections, as tabs under the title. */
+#settings-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+#settings-tabs button {
+  position: relative;
+  padding: 4px 10px 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: color 120ms;
+}
+
+#settings-tabs button:hover {
+  color: var(--amber);
+}
+
+#settings-tabs button.active {
+  color: var(--text);
+}
+
+/* The live section marked on the line the tabs hang from, the way the UI marks
+   its own screens. */
+#settings-tabs button.active::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--amber);
+}
+
+/* About: a line under the name, then the prose. */
+.tagline {
+  margin: -6px 0 16px;
+  color: var(--cyan);
+}
+
+#about-text .note:last-child {
+  margin-bottom: 18px;
+}
+
+.settings-section .snippet:first-of-type {
+  margin-top: 4px;
+}
+
+/* A way out of a dialog, not a call to action: the default button here is the
+   splash screen's size, which in a dialog this dense reads as the main event. */
+.sheet footer button {
+  padding: 4px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.sheet footer .note {
   margin: 0;
   font-size: 12px;
 }
 
-#mcp footer .note.error {
+.sheet footer .note.error {
   color: var(--amber);
 }

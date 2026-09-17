@@ -1381,6 +1381,7 @@ function cellsFromHistory(data, previous) {
           : Boolean(entry.actor && entry.actor.kind === 'agent'),
         code: entry.code,
         status: entry.status,
+        at: Date.parse(entry.ts) || null,
         started: 0,
         elapsed: entry.result?.duration || 0,
         result: entry.result,
@@ -1868,6 +1869,9 @@ async function runCommand(id, explicitCode) {
     collapsed: false,
     code,
     status: 'running',
+    // Wall clock for the header; `started` is the monotonic one the ticking
+    // duration counts from, and the two are not interchangeable.
+    at: Date.now(),
     started: performance.now(),
     elapsed: 0,
     result: null,
@@ -1970,7 +1974,44 @@ function markerText(cell) {
   return `Transaction ${cell.boundary}`;
 }
 
+// Everything the feed draws, in one string. `renderSessions` runs on every
+// state, owner and policy message and from two dozen other places, and each
+// run rebuilt every cell — code, output and traceback — from scratch. A long
+// session is megabytes of DOM per message, which is how the window stops
+// answering its own menu.
+function feedSignature(id, record) {
+  const cells = record.cells.map((cell) => [
+    cell.boundary || '',
+    cell.status || '',
+    cell.collapsed ? 1 : 0,
+    cell.abandoned ? 1 : 0,
+    cell.actor?.label || '',
+    (cell.code || '').length,
+    cell.result ? [
+      (cell.result.stdout || '').length,
+      (cell.result.result || '').length,
+      cell.result.error ? 1 : 0,
+      cell.result.stdout_truncated ? 1 : 0,
+    ].join(',') : 'x',
+  ].join(':'));
+
+  return [
+    // The action row is drawn for the owner only, so ownership is part of it.
+    keyFor(id) ? 'mine' : 'watching',
+    record.reattached ? 1 : 0,
+    record.hydrated ? 1 : 0,
+    sessionIsTesting(record) ? 1 : 0,
+    cells.join('|'),
+  ].join('#');
+}
+
 function renderFeed(feed, id, record) {
+  const signature = feedSignature(id, record);
+  if (record.feedSignature === signature && feed.querySelector('.feed-cards').children.length) {
+
+    return;
+  }
+  record.feedSignature = signature;
   const cards = feed.querySelector('.feed-cards');
   const head = feed.querySelector('.feed-head');
   const fold = feed.querySelector('.feed-fold');
@@ -2031,6 +2072,8 @@ function renderFeed(feed, id, record) {
         <button class="cell-fold fold-mark" title="${cell.collapsed ? 'Expand' : 'Collapse'}" aria-label="${cell.collapsed ? 'Expand' : 'Collapse'}"></button>
         <span class="cell-ordinal">${ordinal}</span>
         ${cell.actor ? `<span class="cell-actor">${escapeHtml(cell.actor.label)}</span>` : ''}
+        ${cell.at ? `<span class="cell-when" title="${escapeHtml(new Date(cell.at).toISOString())}">${escapeHtml(cellWhen(cell.at))}</span>
+        <span class="sep" aria-hidden="true">/</span>` : ''}
         <span class="cell-duration">${Number(duration || 0).toFixed(2)}s</span>
         <span class="sep" aria-hidden="true">/</span>
         <span class="cell-status ${cell.status}">${cell.status === 'running' ? '● running' : cell.status}</span>
@@ -2069,6 +2112,20 @@ function renderFeed(feed, id, record) {
     }
     cards.append(element);
   });
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+               'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// `17 Sep 16:12` — the same shape whatever the machine's locale is, since the
+// rest of this header is fixed-width too and a locale that flips day and month
+// would make a column of these unreadable. The full instant is in the tooltip.
+function cellWhen(at) {
+  const when = new Date(at);
+  const pad = (value) => String(value).padStart(2, '0');
+
+  return `${pad(when.getDate())} ${MONTHS[when.getMonth()]} `
+    + `${pad(when.getHours())}:${pad(when.getMinutes())}`;
 }
 
 function resultHtml(result, id) {
@@ -2526,6 +2583,11 @@ function updateLogCount(panel, record) {
 
 // Every path that grows the buffer goes through here, so the ceiling holds
 // wherever the line came from.
+function logSignature(record, filter) {
+
+  return `${filter}|${record.logLines.length}`;
+}
+
 function pushLogLine(record, line) {
   record.logLines.push(line);
   if (record.logLines.length > LOG_BUFFER) {
@@ -2560,6 +2622,9 @@ function appendLogLine(record, line) {
   while (lines.childElementCount > LOG_BUFFER) {
     lines.firstElementChild.remove();
   }
+  // The panel now shows this line, and `renderLogs` must not take that as a
+  // reason to rebuild the other five thousand.
+  record.logSignature = logSignature(record, panel.querySelector('.log-filter').value);
   if (pinned) {
     lines.scrollTop = lines.scrollHeight;
   }
@@ -2590,9 +2655,20 @@ function renderLogs(panel, record) {
     // through here on every state message: building the rows anyway is what
     // turned a long-running session into a page that ignores its buttons.
     lines.replaceChildren();
+    record.logSignature = null;
 
     return;
   }
+  // Open, the rows are already right unless the filter moved or lines arrived
+  // while it was shut: `appendLogLine` keeps the panel current one row at a
+  // time, and rebuilding five thousand of them per render is the same wedge in
+  // a different place.
+  const signature = logSignature(record, filter.value);
+  if (record.logSignature === signature && lines.childElementCount) {
+
+    return;
+  }
+  record.logSignature = signature;
   const pinned = isLogPinned(lines);
   lines.replaceChildren();
   record.logLines
@@ -3150,19 +3226,31 @@ function stepScreen(step) {
   showScreen(TOP_SCREENS[(index + step + TOP_SCREENS.length) % TOP_SCREENS.length]);
 }
 
-// ⌥⌘+←/→ cycles Connect / Sessions / Journals, wrapping around — the keys a
-// browser moves between tabs with. In a browser tab that is exactly the
-// problem: the browser takes them first, so this fires where they are free.
-// Inside the desktop app the page is framed and never sees them at all: macOS
-// hands a key equivalent to the menu before any web view, and the app forwards
-// the step below, which is why this one is skipped when framed rather than
-// racing it.
-document.addEventListener('keydown', (event) => {
-  if (window.parent !== window) {
+// The session tabs, as a ring. Moving to one is also asking to look at it, so
+// this brings the sessions screen with it — the tabs are on no other screen.
+function stepSession(step) {
+  const ids = [...state.sessions.keys()];
+  if (ids.length < 2) {
 
     return;
   }
-  if (!event.altKey || !event.metaKey || event.shiftKey || event.ctrlKey) {
+  const index = ids.indexOf(state.activeSession);
+  state.activeSession = ids[(index + step + ids.length) % ids.length];
+  if (state.screen !== 'sessions') {
+    showScreen('sessions');
+  }
+  renderSessions();
+}
+
+// ⌥⌘+←/→ cycles Connect / Sessions / Journals, wrapping around — the keys a
+// browser moves between tabs with, and ⌃⇧+←/→ moves between the session tabs
+// on the sessions screen. In a browser tab ⌥⌘ is exactly the problem: the
+// browser takes it first, so this fires where those keys are free. Inside the
+// desktop app the page is framed and never sees either pair: macOS hands a key
+// equivalent to the menu before any web view, and the app forwards the step
+// below, which is why this one is skipped when framed rather than racing it.
+document.addEventListener('keydown', (event) => {
+  if (window.parent !== window) {
 
     return;
   }
@@ -3170,8 +3258,15 @@ document.addEventListener('keydown', (event) => {
 
     return;
   }
-  event.preventDefault();
-  stepScreen(event.key === 'ArrowRight' ? 1 : -1);
+  const step = event.key === 'ArrowRight' ? 1 : -1;
+  // ⌥⌘ moves between the screens, ⌃⇧ between the session tabs on one of them.
+  if (event.altKey && event.metaKey && !event.shiftKey && !event.ctrlKey) {
+    event.preventDefault();
+    stepScreen(step);
+  } else if (event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey) {
+    event.preventDefault();
+    stepSession(step);
+  }
 });
 
 // The desktop app's menu, reaching the page the only way it can: a message
@@ -3185,11 +3280,12 @@ window.addEventListener('message', (event) => {
     return;
   }
   const data = event.data;
-  if (!data || data.type !== 'os-screen') {
-
-    return;
+  const step = data?.step === -1 ? -1 : 1;
+  if (data?.type === 'os-screen') {
+    stepScreen(step);
+  } else if (data?.type === 'os-session') {
+    stepSession(step);
   }
-  stepScreen(data.step === -1 ? -1 : 1);
 });
 
 function restoreScreen() {

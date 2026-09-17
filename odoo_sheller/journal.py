@@ -326,6 +326,9 @@ def feed_from_records(
                 "kind": "exec",
                 "id": request_id,
                 "ordinal": commands,
+                # When it was sent. The feed shows it, and a session restored
+                # from its journal would otherwise have no date at all.
+                "ts": record.get("ts"),
                 "code": record.get("code", ""),
                 "status": "running",
                 "result": None,
@@ -344,6 +347,7 @@ def feed_from_records(
                 "kind": "run_test",
                 "id": request_id,
                 "ordinal": commands,
+                "ts": record.get("ts"),
                 "module": record.get("module"),
                 "test_class": record.get("test_class"),
                 "test_method": record.get("test_method"),

@@ -5,6 +5,63 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.3] — 2026-09-17
+
+The window stops answering its own menu after a while, and a Settings dialog
+where two files that are not ours are described rather than written.
+
+### A session left open made the page ignore everything
+
+Not only its buttons: the menu items stopped working too, which is what gave it
+away. Every one of those is delivered to the page, and the page's main thread
+was never free. `renderSessions()` — twenty-eight call sites, and every state,
+owner and policy message among them — rebuilt the whole feed of cells, with
+their code and output, **and** every row of an open log panel, from scratch.
+
+Measured on a live session, twelve cells and a log 323 rows long:
+
+| | 20 renders |
+|---|---|
+| unchanged since the last one | 3 ms |
+| rebuilt anyway | 1134 ms |
+
+Fifty-seven milliseconds each, at a fifteenth of the log panel's ceiling. Both
+now compare a signature of what is already drawn — the cells and their state,
+ownership included, and the log's filter and line count — and return without
+touching the DOM when nothing moved. `appendLogLine` keeps the signature
+current as it adds a row, so the next render does not undo its work.
+
+### Settings
+
+**Settings…** (⌘,) replaces the single MCP item, with two sections:
+
+- **MCP** — the entry to paste into an agent's config, as before.
+- **SSH** — `Host *.odoo.com` / `StrictHostKeyChecking accept-new`, which is
+  what lets an odoo.sh build be opened at all: the daemon runs `ssh -T` with no
+  terminal, and the first connection to a build dies on the host-key question
+  because nobody is there to answer it. That is trust on first use, and
+  [docs/security.md](docs/security.md) says so plainly — a host whose key has
+  *changed* is still refused.
+
+Nothing there is saved or applied, so the way out says Close. Each block has
+its own copy button — the two-sheet glyph, no outline — and nothing is copied
+just for opening the window. The dialog is outlined in cyan; amber in this UI
+means something is live.
+
+### Elsewhere
+
+- ⌃⇧← / ⌃⇧→ move between session tabs, wrapping, and bring the sessions screen
+  with them. The layout is now ⌥⌘ for screens, ⌃⇧ for sessions, ⌃⌘ for the
+  terminal dock.
+- A cell's header carries the date: `#1 browser 17 Sep 16:36 / 0.00s / done`,
+  with the full instant in its tooltip. The journal's feed records the
+  timestamp it always wrote, so a restored session keeps its dates.
+- **About odoo-sheller** heads the application menu — a sheet in Settings'
+  frame rather than the platform's panel, with the version straight from the
+  crate, what this app is in two paragraphs, and the daemon's address. The menu
+  is in the order macOS has always used it: About, Settings, the hide pair,
+  Quit.
+
 ## [1.6.2] — 2026-09-17
 
 Interface work, and one thing the Connect screen was getting wrong. No change
@@ -845,6 +902,7 @@ explicit, confirmed act.
   `with_delay`, and live streaming of output while a command runs.
 
 [Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.6.0...HEAD
+[1.6.3]: https://github.com/romi477/odoo_sheller/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/romi477/odoo_sheller/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/romi477/odoo_sheller/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/romi477/odoo_sheller/compare/v1.5.0...v1.6.0

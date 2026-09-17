@@ -193,6 +193,9 @@ def test_feed_from_records_pairs_exec_with_result():
         "kind": "exec",
         "id": 1,
         "ordinal": 1,
+        # When it was sent. A session restored from its journal shows the date
+        # in the feed, and this is the only place it can come from.
+        "ts": "t1",
         "code": "print(1)",
         "status": "done",
         "actor": None,

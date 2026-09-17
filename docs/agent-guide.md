@@ -341,7 +341,7 @@ Absolute paths for `command` and `--directory` are safer in practice: hosts
 launch their servers with a minimal `PATH`, so a bare `uv` can fail to
 resolve.
 
-The desktop app's **MCP Configuration…** menu prints the first form with the
+The desktop app's **Settings… → MCP** shows the first form with the
 real path filled in, in both shapes, and copies it to the clipboard. It never
 writes to an agent's config: those files are yours, they hold servers this
 project knows nothing about, and `~/.claude.json` is live state that a running

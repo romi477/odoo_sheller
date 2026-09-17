@@ -1364,6 +1364,13 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
   font-family: var(--mono);
 }
 
+/* When it ran, in the same quiet grey as the rest of the identity half of
+   this header. */
+.cell-when {
+  color: var(--muted-low);
+  font-size: 11px;
+}
+
 .cell-head .sep {
   color: var(--muted-low);
 }

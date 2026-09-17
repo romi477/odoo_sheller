@@ -49,7 +49,7 @@ stage 6 is that answer.
 | 9 | Paid Developer ID, or ad-hoc? | **Ad-hoc** (`signingIdentity: "-"`). There is no Apple Developer Program membership. Gatekeeper refuses a downloaded copy until the person clears it in System Settings → Privacy & Security → Open Anyway. |
 | 10 | Apple Silicon only, or universal? | **arm64 only** for now. CI builds `aarch64-apple-darwin`; an Intel Mac gets nothing. Revisit when someone actually has one — a universal build also needs universal2 wheels for `pydantic-core`, `uvloop` and `httptools`. |
 | 1 | onefile or onedir for the daemon? | **onedir.** onefile unpacks on every launch and fights the hardened runtime. onedir is not a Tauri sidecar (`externalBin` wants one file), so it ships under `Contents/Resources/` and is spawned by absolute path. |
-| 5 | Where does the MCP binary live? | **Inside the bundle**, next to the daemon, with a link at `~/.odoo-sheller/bin/odoo-sheller-mcp` pointed at it. The link is the answer to what the question was really about: a copy in Application Support goes stale on an update and the bundle path is 88 characters of hand-typed config that breaks if the app moves. The name never changes; the target is refreshed on every launch and whenever **MCP Configuration…** is opened. |
+| 5 | Where does the MCP binary live? | **Inside the bundle**, next to the daemon, with a link at `~/.odoo-sheller/bin/odoo-sheller-mcp` pointed at it. The link is the answer to what the question was really about: a copy in Application Support goes stale on an update and the bundle path is 88 characters of hand-typed config that breaks if the app moves. The name never changes; the target is refreshed on every launch and whenever **Settings…** is opened. |
 | 11 | Does the app write agent config files? | **No, and not behind a confirmation.** It shows the entry and copies it to the clipboard; the person pastes it where they want it. Those files are the user's, they hold servers we know nothing about, `~/.claude.json` is live state a running Claude Code rewrites, and creating the rest invents configs for apps that are not installed. Nothing in the app opens them for writing. |
 | 8 | How does the packaged daemon run without the window? | **Document the stable path** and point a shell function at it. No menu-bar extra surface. |
 | 3 | Terminal in the first release, or after it? | **In this release.** It is the one expansion of the attack surface, documented in [../security.md](../security.md#the-desktop-terminal). Tabs, `$SHELL -l`, a dock under the framed UI in the same window, so xterm.js never enters the Python package. |
@@ -271,7 +271,7 @@ Done when:
 ### Stage 5 — MCP integration
 
 The MCP binary lives at `Contents/Resources/odoo-sheller-mcp/odoo-sheller-mcp`
-(decision 5). **MCP Configuration…** in the application menu — not a button in
+(decision 5). **Settings… → MCP** in the application menu — not a button in
 the web UI, which is a remote origin with no Tauri IPC — renders the entry
 with that path filled in, in both shapes (`mcpServers` for Claude Desktop,
 Claude Code and Cursor; `context_servers` for Zed), lists where those files

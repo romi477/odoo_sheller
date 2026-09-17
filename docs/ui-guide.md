@@ -232,6 +232,11 @@ with its traceback, and how long it took.
 - A command restored from the journal whose original run blew its timeout is
   marked as a **late result**, so an abandoned command never quietly reads as
   an ordinary success.
+- The card's header reads `#1 browser 17 Sep 16:36 / 0.00s / done`: which
+  command it was, who ran it, when it was sent, how long it took, and how it
+  ended. The last three are the ones separated by slashes; the date carries the
+  full instant in its tooltip, and it survives a restore because the journal
+  records it.
 - Every card offers **copy code**, **copy output**, **edit** (puts that code
   back in the editor, to change and run again) and **re-run** (sends the same
   code as it stands, as a brand new command) — but only while the session is
@@ -241,7 +246,8 @@ with its traceback, and how long it took.
 - Commit and rollback show up inline in the feed as markers, so the
   chronology makes clear which commands landed on which side of a write.
 
-⌘W closes the session in view, the same way the Close button does — the
+⌃⇧←/→ moves between the session tabs, wrapping around, and brings the sessions
+screen with it. ⌘W closes the session in view, the same way the Close button does — the
 confirmation included. In the desktop app the terminal dock binds the same key
 for its own tabs, and the two never argue: they are separate documents, so
 whichever has focus answers.

@@ -48,9 +48,18 @@ the frame loads `http://127.0.0.1:8765/web` like any browser tab. The frame
 rather than a navigation, because only a local page can reach the Tauri
 commands, and the terminal has to be in the same window.
 
-**MCP Configuration…** in the application menu shows the entry to paste into
-an agent's config, with the bundled binary's path filled in, and copies it to
-the clipboard. It writes nothing.
+**About odoo-sheller** is a sheet of its own, in Settings' frame: the version
+straight from the crate, what this app is in two paragraphs, and the daemon's
+address. The platform's panel takes a line of metadata and shows a version;
+this takes a little more saying.
+
+**Settings…** (⌘,) shows text that belongs in a file this app does not own,
+each block with a button that copies it. **MCP** is the entry to paste into an
+agent's config, with the bundled binary's path filled in. **SSH** is the two
+lines that let an odoo.sh build be opened without a terminal to answer its
+host-key question. Nothing there is saved or applied: those files are yours,
+they hold settings this app knows nothing about, and one of them is rewritten
+by a running Claude Code. The button says Close for that reason.
 
 The framed UI is asked for as `/web?app=1`, and that is the only thing it is
 told about being framed: it drops the `swagger` link. `/docs` leads out of the
@@ -72,6 +81,9 @@ And for the UI above it:
 | | |
 |---|---|
 | ⌥⌘← / ⌥⌘→ | previous, next screen |
+| ⌃⇧← / ⌃⇧→ | previous, next session |
+| ⌘W | close the session |
+| ⌘, | Settings |
 | ⌘R | reload the UI |
 
 Every one of those is a menu item, which is what makes it work wherever the

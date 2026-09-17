@@ -381,7 +381,8 @@ odoo-sheller.app  (ad-hoc signed, hardened runtime, not notarized)
 │   ├── startup: probe 8765 → attach to a foreign daemon OR spawn our own
 │   ├── spawn: Contents/Resources/odoo-sheller/odoo-sheller
 │   ├── PTY: HashMap<session_id, PtyPair> — one $SHELL per terminal tab
-│   ├── menu: MCP Configuration — show the entry to paste, write nothing
+│   ├── menu: About — our own sheet, version from the crate
+│   ├── menu: Settings — MCP and ssh: show what to paste, write nothing
 │   ├── menu: Show Terminal / New Terminal Tab / tab moves — events to the page
 │   └── exit: confirm with live sessions; kill our daemon, never a foreign one
 │
