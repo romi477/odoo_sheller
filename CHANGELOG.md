@@ -50,8 +50,29 @@ runs inside a Linux container and cannot tell what kind of host it is on; on
 Linux, starting there would write journals as root that a natively installed
 daemon could never append to. One rule for both beats guessing.
 
+### /health answers the question a caller cannot
+
+Over HTTP it makes no difference whether a daemon is native or in a container,
+and a caller that found one on the port should stop caring. The exception is the
+MCP server: it is spawned rather than called, and a containerized daemon's has
+to be spawned inside that container — which only that daemon knows the id of.
+
+So `/health` now carries `container` and `mcp`, the second being a command to
+run as given. A container answers with `docker exec -i <its own id> python -m
+odoo_sheller.mcp`, which works whatever name it was started under; a native
+daemon answers with its own interpreter. A frozen build with no MCP tree beside
+it answers `null` rather than inventing a command that would fail later.
+
+`docs/container.md` gains the procedure this enables: ask `/health`, then the
+label, then start one — and a note that skipping it leaves a container behind
+in `created` state when the port is taken, which sends the reader after the
+wrong problem.
+
 ### Elsewhere
 
+- The image's healthcheck probes `/health` rather than `/api/sessions`. The
+  dedicated endpoint existed all along; the probe was reaching into the session
+  registry to answer a liveness question.
 - The MCP server follows `ODOO_SHELLER_PORT` when no `ODOO_SHELLER_URL` says
   otherwise. It usually runs inside the same container as the daemon, started
   by `docker exec`, and that variable is what moves the listener there — so a

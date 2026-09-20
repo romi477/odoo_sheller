@@ -48,6 +48,28 @@ The path inside the container is always `/var/run/docker.sock`. A rootless
 Engine sees only its own containers, which is a property of that Engine rather
 than of this image.
 
+## Before you start one
+
+A daemon may already be running — natively, or in a container somebody else
+started. Starting a second one on the same port fails, so ask first:
+
+1. `GET http://127.0.0.1:8765/health`. An answer means a daemon is serving.
+   Use it, and **do not stop it**: it may not be yours.
+2. No answer, but `docker ps -q --filter label=io.github.romi477.odoo-sheller`
+   finds something — our container exists but is not serving. It is stopped or
+   unhealthy; `docker start` it or recreate it.
+3. Neither — start one.
+
+Over HTTP it makes no difference which kind answered. Everything below the API
+is identical, and a caller that found a daemon can stop caring how it got
+there.
+
+Skipping the check is not catastrophic but is untidy: `docker run` exits 125
+with `bind: address already in use`, **and leaves the container behind in
+`created` state**. With `--name` the next attempt then fails on the name
+instead, which sends the reader after the wrong problem. Remove it before
+retrying.
+
 ## Wait
 
 The image carries a `HEALTHCHECK`. Wait on it instead of polling the port:
@@ -56,8 +78,36 @@ The image carries a `HEALTHCHECK`. Wait on it instead of polling the port:
 docker inspect --format '{{.State.Health.Status}}' <container>
 ```
 
-It reports `starting`, then `healthy` once the API answers. The daemon opens no
-session on its own, so `healthy` means ready.
+It reports `starting`, then `healthy` once `/health` answers. The daemon opens
+no session on its own, so `healthy` means ready.
+
+## What /health says
+
+```json
+{
+  "ok": true,
+  "version": "1.7.0",
+  "container": true,
+  "mcp": {
+    "command": "docker",
+    "args": ["exec", "-i", "9f31c2ab77e1", "python", "-m", "odoo_sheller.mcp"]
+  }
+}
+```
+
+`mcp` is the one thing a caller cannot work out for itself. The HTTP API is the
+same either way, but an MCP server is spawned rather than called, and a
+containerized daemon's has to be spawned inside its own container — which only
+that daemon knows the id of. Run the command as given. A native daemon answers
+with its own interpreter and `-m odoo_sheller.mcp` instead, and `container` is
+`false`.
+
+`"mcp": null` means the daemon cannot say — a frozen build whose MCP tree is
+missing. Nothing to retry; a command invented on its behalf would only fail
+later.
+
+The endpoint needs no key and reports no session data. On a native daemon the
+command holds a local path, which is a filename on a loopback-only endpoint.
 
 ## Find
 

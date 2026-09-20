@@ -192,7 +192,8 @@ def test_health_answers_before_any_session():
         response = client.get("/health")
     assert response.status_code == 200
     body = response.json()
-    assert body == {"ok": True, "version": version("odoo-sheller")}
+    assert body["ok"] is True
+    assert body["version"] == version("odoo-sheller")
     assert "sessions" not in body
 
 
@@ -207,7 +208,7 @@ def test_health_survives_a_build_without_metadata(monkeypatch):
     with TestClient(app) as client:
         response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "version": "unknown"}
+    assert response.json()["version"] == "unknown"
 
 
 def test_shutdown_closes_live_sessions(client):
@@ -1097,3 +1098,44 @@ def test_revoking_commit_from_a_local_human_is_still_refused(client):
     )
     assert response.status_code == 409
     assert response.json()["detail"]["error"] == "policy_not_applicable"
+
+
+def test_health_says_how_to_reach_an_mcp_server_for_this_daemon():
+    """Over HTTP a caller does not care whether the daemon is native or in a
+    container. The MCP server is the exception: it is spawned, not called, and
+    a containerized daemon's has to be spawned inside that container."""
+    import sys
+
+    app = create_app(registry=Registry(admin_key=ADMIN_KEY))
+    with TestClient(app) as client:
+        body = client.get("/health").json()
+    assert body["container"] is False
+    assert body["mcp"] == {"command": sys.executable, "args": ["-m", "odoo_sheller.mcp"]}
+
+
+def test_health_hands_out_a_docker_exec_when_containerized(monkeypatch):
+    """The container's own id is its hostname, and that works as docker exec's
+    target whatever name the container was started under."""
+    from odoo_sheller.api import IN_CONTAINER_ENV
+
+    monkeypatch.setenv(IN_CONTAINER_ENV, "1")
+    monkeypatch.setattr("odoo_sheller.api.socket.gethostname", lambda: "deadbeef1234")
+    app = create_app(registry=Registry(admin_key=ADMIN_KEY))
+    with TestClient(app) as client:
+        body = client.get("/health").json()
+    assert body["container"] is True
+    assert body["mcp"]["command"] == "docker"
+    assert body["mcp"]["args"] == [
+        "exec", "-i", "deadbeef1234", "python", "-m", "odoo_sheller.mcp",
+    ]
+
+
+def test_health_admits_it_cannot_say_rather_than_guessing(monkeypatch):
+    """A frozen daemon whose sibling tree is missing has no honest answer, and
+    a command that fails in the caller's hands is worse than none."""
+    monkeypatch.setattr("odoo_sheller.api.sys.frozen", True, raising=False)
+    monkeypatch.setattr("odoo_sheller.api.sys.executable", "/nowhere/odoo-sheller/odoo-sheller")
+    app = create_app(registry=Registry(admin_key=ADMIN_KEY))
+    with TestClient(app) as client:
+        body = client.get("/health").json()
+    assert body["mcp"] is None

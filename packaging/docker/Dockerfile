@@ -69,11 +69,11 @@ RUN chmod +x /usr/local/bin/odoo-sheller-entrypoint && mkdir -p /data
 # then the -p mapping has to name the new one; EXPOSE does not affect either.
 EXPOSE 8765
 
-# There is no dedicated health endpoint. This one is cheap and answers only
-# once the application is actually serving. It reads the port rather than
+# /health touches no session state and needs no key, so it answers only once
+# the application is serving and nothing else. It reads the port rather than
 # assuming it: a hardcoded 8765 would report a working container unhealthy
 # forever the moment somebody set ODOO_SHELLER_PORT.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
-    CMD python -c 'import os, urllib.request; urllib.request.urlopen("http://127.0.0.1:%s/api/sessions" % os.environ.get("ODOO_SHELLER_PORT", "8765"), timeout=2)'
+    CMD python -c 'import os, urllib.request; urllib.request.urlopen("http://127.0.0.1:%s/health" % os.environ.get("ODOO_SHELLER_PORT", "8765"), timeout=2)'
 
 ENTRYPOINT ["/usr/local/bin/odoo-sheller-entrypoint"]

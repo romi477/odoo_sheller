@@ -291,3 +291,20 @@ def test_no_state_and_no_uid_is_refused(tmp_path):
     )
     assert attempt.returncode == 2, attempt.stdout + attempt.stderr
     assert "ODOO_SHELLER_UID" in attempt.stderr
+
+
+def test_health_hands_out_a_working_mcp_command(daemon):
+    """The whole point of the field: run what it says, unchanged, and reach an
+    MCP server for this daemon."""
+    body = httpx.get(f"{daemon['base']}/health", timeout=30).json()
+    assert body["container"] is True
+    launch = body["mcp"]
+    assert launch["command"] == "docker"
+
+    probe = list(launch["args"])
+    probe[-3:] = ["python", "-c", "import odoo_sheller.mcp; print(odoo_sheller.mcp.DAEMON_URL)"]
+    reached = subprocess.run(
+        ["docker", *probe], capture_output=True, text=True, check=False
+    )
+    assert reached.returncode == 0, reached.stderr
+    assert reached.stdout.strip() == "http://127.0.0.1:8765"

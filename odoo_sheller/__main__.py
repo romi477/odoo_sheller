@@ -6,9 +6,8 @@ from pathlib import Path
 
 import uvicorn
 
+from odoo_sheller.api import IN_CONTAINER_ENV
 from odoo_sheller.registry import load_admin_key
-
-IN_CONTAINER_ENV = "ODOO_SHELLER_IN_CONTAINER"
 
 
 def bind_warning(host: str, in_container: bool) -> str | None:

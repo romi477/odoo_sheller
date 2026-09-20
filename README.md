@@ -140,6 +140,10 @@ docker rm -f $(docker ps -aq --filter label=io.github.romi477.odoo-sheller)
 `0.0.0.0`, because the container's own loopback is not reachable from the host —
 so the published port is the only thing keeping the API on this machine.
 
+Ask `/health` before starting one: it says whether a daemon is already serving,
+and hands back the command to reach it with an MCP client — which is the only
+thing that differs between a native daemon and a containerized one.
+
 All five flags above are required, and the container refuses to start rather
 than guess at a missing one. Every flag, the label, the health states, the exit
 codes and the environment are in [docs/container.md](docs/container.md), which

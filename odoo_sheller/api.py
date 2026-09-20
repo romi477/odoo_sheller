@@ -3,7 +3,10 @@
 import asyncio
 import contextlib
 import json
+import os
 import re
+import socket
+import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -94,6 +97,46 @@ class OwnerBody(BaseModel):
 
 class PolicyBody(BaseModel):
     allow_commit: bool
+
+
+IN_CONTAINER_ENV = "ODOO_SHELLER_IN_CONTAINER"
+
+
+def mcp_launch() -> dict | None:
+    """How to start an MCP server that talks to *this* daemon.
+
+    Over HTTP it makes no difference whether a daemon is native or in a
+    container — a caller finds one on the port and stops caring. The MCP
+    server is the one thing that does differ, because it is not reached over
+    the network at all: a client spawns the process and speaks to its stdin.
+    A containerized daemon's process has to be spawned *inside that
+    container*, and only this daemon knows which one it is in.
+
+    Containerized, the container's own id is its hostname, which works as
+    `docker exec`'s target whatever name the container was started under.
+    Frozen, the MCP server is a sibling tree beside the daemon's. Otherwise it
+    is this interpreter with `-m`.
+
+    `None` means we cannot say — a frozen daemon whose sibling is missing.
+    Better than a command that would fail in the caller's hands.
+    """
+    if os.environ.get(IN_CONTAINER_ENV):
+
+        return {
+            "command": "docker",
+            "args": ["exec", "-i", socket.gethostname(), "python", "-m", "odoo_sheller.mcp"],
+        }
+
+    if getattr(sys, "frozen", False):
+        sibling = Path(sys.executable).resolve().parent.parent / "odoo-sheller-mcp"
+        binary = sibling / "odoo-sheller-mcp"
+        if binary.is_file():
+
+            return {"command": str(binary), "args": []}
+
+        return None
+
+    return {"command": sys.executable, "args": ["-m", "odoo_sheller.mcp"]}
 
 
 def daemon_version() -> str:
@@ -244,9 +287,21 @@ def create_app(registry: Registry | None = None) -> FastAPI:
 
     @app.get("/health")
     def health():
-        """Liveness for the desktop app. No session data, no admin key."""
+        """Liveness, and the one thing a caller cannot work out for itself.
 
-        return {"ok": True, "version": daemon_version()}
+        No session data and no admin key. `mcp` names a command to spawn an
+        agent-side server for this daemon, which differs between a native and
+        a containerized one; `container` says which this is. On a native
+        daemon the command holds a local path, which is a filename on a
+        loopback-only endpoint — the same posture as everything else here.
+        """
+
+        return {
+            "ok": True,
+            "version": daemon_version(),
+            "container": bool(os.environ.get(IN_CONTAINER_ENV)),
+            "mcp": mcp_launch(),
+        }
 
     @app.get("/api/containers")
     async def containers():

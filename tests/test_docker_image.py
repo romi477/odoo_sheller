@@ -52,11 +52,13 @@ def test_the_entrypoint_is_the_script_we_test():
     assert 'ENTRYPOINT ["/usr/local/bin/odoo-sheller-entrypoint"]' in DOCKERFILE
 
 
-def test_the_healthcheck_reads_the_port_it_probes():
-    """The entrypoint honours ODOO_SHELLER_PORT. A healthcheck that assumed
-    8765 would call a working container unhealthy forever."""
+def test_the_healthcheck_probes_health_and_reads_the_port():
+    """/health is the endpoint built for this: no session state, no key. And
+    the entrypoint honours ODOO_SHELLER_PORT, so a probe that assumed 8765
+    would call a working container unhealthy forever."""
+    assert "/health" in DOCKERFILE
+    assert "/api/sessions" not in DOCKERFILE
     assert "ODOO_SHELLER_PORT" in DOCKERFILE
-    assert "127.0.0.1:8765/api/sessions" not in DOCKERFILE
 
 
 def test_the_image_is_findable_by_label():
