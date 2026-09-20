@@ -15,8 +15,8 @@ browser ──HTTP/WS──> daemon (macOS, Python) ──pipe──> docker exe
 ```
 
 - **The daemon** is the only piece that knows about pipes, framing, and where
-  a session runs. It runs as a plain process on the host — not containerized
-  — and speaks HTTP and WebSocket to whoever is driving it.
+  a session runs. It runs as a plain process on the host and speaks HTTP and
+  WebSocket to whoever is driving it.
 - **The web UI** is one client of that API, served by the daemon itself at
   `/web`. An MCP server (`odoo_sheller/mcp.py`) is a second client, for an
   agent. Both see the same surface — there is deliberately only one API.
@@ -24,6 +24,14 @@ browser ──HTTP/WS──> daemon (macOS, Python) ──pipe──> docker exe
   container, under Odoo's own interpreter. It has no dependency on this
   project beyond the standard library, because it runs in whatever Python the
   container happens to ship.
+
+The daemon can also run inside a container, mounting the host's Docker socket
+rather than reaching it directly. Nothing below `transport.py` notices:
+`docker exec` is `docker exec` whichever side of a container the CLI runs on,
+the bootstrap still travels through the heredoc, and the frame protocol, the
+session state machine and the API are untouched. What changes is packaging and
+a runtime contract — the socket, a bind mount for `~/.odoo-sheller`, and a
+published port.
 
 ## Reusing `odoo-bin shell`, not reimplementing it
 

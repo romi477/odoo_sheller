@@ -282,3 +282,30 @@ def test_the_readme_api_table_lists_health():
     paths = {getattr(route, "path", "") for route in create_app().routes}
     assert "/health" in paths
     assert "| `GET` | `/health` |" in text
+
+
+def test_the_readme_no_longer_says_the_daemon_cannot_be_containerized():
+    """That line was a tested perimeter, not an architectural fact, and there
+    is now an image that disproves it."""
+    text = README.read_text(encoding="utf-8")
+    assert "daemon is not containerized" not in text
+
+
+def test_the_readme_publishes_the_port_to_loopback_only():
+    """In this mode the published port is the entire security boundary. An
+    example without the 127.0.0.1 prefix is an example that offers
+    unauthenticated code execution to the network."""
+    text = README.read_text(encoding="utf-8")
+    assert "-p 127.0.0.1:8765:8765" in text
+    assert "-p 8765:8765" not in text
+
+
+def test_the_readme_requires_the_state_bind_mount():
+    text = README.read_text(encoding="utf-8")
+    assert "/data/.odoo-sheller" in text
+
+
+def test_security_says_what_the_socket_mount_grants():
+    """A container looks like isolation and provides none here."""
+    text = read("security.md")
+    assert "docker.sock" in text

@@ -19,6 +19,7 @@ browser tab on 8765 keeps working beside it:
 - [Security](#security)
 - [Requirements](#requirements)
 - [Install](#install)
+- [Running the daemon in a container](#running-the-daemon-in-a-container)
 - [Usage](#usage)
 - [Tests](#tests)
 - [API](#api)
@@ -76,7 +77,7 @@ The reasoning behind each of these, and what they don't cover, is in
 
 | | |
 |---|---|
-| OS | macOS (daemon is not containerized) |
+| OS | macOS for the native daemon; Linux or macOS for the containerized one |
 | Python | 3.12 or newer |
 | Package manager | [uv](https://docs.astral.sh/uv/) (preferred) or pip + venv |
 | Docker | Docker CLI; a running Odoo **15 through 20** container |
@@ -109,6 +110,61 @@ python3 -m venv .venv
 The `dev` extra (pytest, pytest-asyncio, httpx2, ruff) matches uv's default
 `dev` group. It is `httpx2`, not `httpx`: `starlette.testclient` imports
 `httpx2` and warns that `httpx` is deprecated there.
+
+## Running the daemon in a container
+
+The daemon also ships as an image, for hosts where installing it is not wanted.
+It runs no Docker Engine of its own: it mounts the host's socket and drives the
+same containers a native daemon would.
+
+```bash
+docker run -d --name odoo-sheller \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$HOME/.odoo-sheller:/data/.odoo-sheller" \
+  -e ODOO_SHELLER_UID="$(id -u)" -e ODOO_SHELLER_GID="$(id -g)" \
+  -p 127.0.0.1:8765:8765 \
+  ghcr.io/romi477/odoo-sheller:<version>
+```
+
+**Publish to `127.0.0.1` and nowhere else.** This API executes arbitrary code as
+`SUPERUSER_ID` and has no authentication. Inside the container the daemon binds
+`0.0.0.0`, because the container's own loopback is not reachable from the host —
+so the published port is the only thing keeping the API on this machine.
+
+**The state mount is required, and it is a bind mount to your own
+`~/.odoo-sheller`, never a named volume.** Journals from this daemon must land
+where a natively installed one would write and read them; a named volume would
+fork your history according to how the daemon happened to be started.
+
+Pass `ODOO_SHELLER_UID` and `ODOO_SHELLER_GID`. Without them the container can
+only guess from the mounted directory, and on a first run — when the directory
+does not exist yet — it cannot guess at all, so the journals end up root-owned
+and a native daemon cannot append to them.
+
+Rootless Docker keeps its socket under `$XDG_RUNTIME_DIR`; mount whichever
+socket you have onto `/var/run/docker.sock` inside:
+
+```bash
+  -v "$XDG_RUNTIME_DIR/docker.sock:/var/run/docker.sock" \
+```
+
+The image is private on GHCR, so pull it with a token that carries
+`read:packages`:
+
+```bash
+docker login ghcr.io
+```
+
+### Reaching it with an agent
+
+The MCP server is in the image but nothing starts it. Point an MCP client at:
+
+```bash
+docker exec -i odoo-sheller python -m odoo_sheller.mcp
+```
+
+This is how a human reaches a stuck module when the daemon was started this way
+and nothing else odoo-sheller-related is installed on the host.
 
 ## Usage
 
@@ -468,18 +524,21 @@ dies.
 
 ```bash
 # Unit tests (no Docker required)
-uv run pytest -m "not e2e and not frozen"
+uv run pytest -m "not e2e and not frozen and not container"
 
 # Live Odoo 19 container
 uv run pytest tests/test_e2e.py -v -m e2e
 
 # Frozen daemon (after packaging/freeze.sh)
 uv run pytest tests/test_frozen.py -v -m frozen
+
+# Containerized daemon (after docker build -f packaging/docker/Dockerfile -t odoo-sheller:dev .)
+uv run pytest tests/test_container.py -v -m container
 ```
 
 Without uv, use `.venv/bin/pytest` the same way.
 
-A bare `pytest` also collects the e2e and frozen tests. They need a running
+A bare `pytest` also collects the e2e, frozen and container tests. They need a running
 target (defaults below). Creating and deleting records there is expected;
 tests use the prefix `pt-e2e-` and clean up after themselves. Frozen tests
 also need `packaging/dist/odoo-sheller/odoo-sheller` (or `ODOO_SHELLER_FROZEN`).

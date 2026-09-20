@@ -224,11 +224,12 @@ second kind of target.
 
 - Stage 1 is the web UI; stage 2 attaches an agent to the same API.
 - Docs and specs in English. Discussion in this project happens in Russian.
-- The daemon is not containerized: plain venv on macOS. The only non-Python
-  dependency is the `docker` CLI. Nothing is installed inside the target
-  container either — the bootstrap needs only `sh` and Odoo's own Python. If a
-  system utility ever becomes necessary, containerize the daemon rather than
-  grow host setup steps.
+- The native daemon is a plain venv on macOS; the only non-Python
+  dependency is the `docker` CLI. It also ships as an image that mounts the
+  host's Docker socket. Nothing is installed inside the target container —
+  the bootstrap needs only `sh` and Odoo's own Python. If a system utility
+  ever becomes necessary, reach for the image rather than grow host setup
+  steps.
 
 ## Ownership (stage 2)
 

@@ -118,6 +118,24 @@ over SSH is not the same as being reachable: the connection is outbound, the
 API surface is unchanged, and the rule above — never expose the port, never
 tunnel *to* it — is exactly as absolute as it was.
 
+### The containerized daemon
+
+The same posture, with the boundary in a different place. Inside the container
+the daemon binds `0.0.0.0` — the container's loopback is not what `-p` reaches —
+so what keeps this API on the machine is the published port, and only that. Run
+it as `-p 127.0.0.1:8765:8765`. Anything wider offers unauthenticated code
+execution as `SUPERUSER_ID` to whatever can reach the port.
+
+Mounting `docker.sock` gives the daemon the host's Docker Engine: every
+container on the machine, not only Odoo ones, and the Engine socket is
+root-equivalent on the host. This is equally true of the native daemon, which
+runs as a user who can already do it. It is worth saying here because a
+container looks like isolation and provides none of it in this direction.
+
+Journals are unmasked, as everywhere else, and now arrive in the host's
+`~/.odoo-sheller` through a bind mount. That is the intent — one place, whatever
+started the daemon — and the same rule applies: review one before sharing it.
+
 **Journals are unmasked.** This is the one that's easy to get burned by, so
 it gets its own section.
 

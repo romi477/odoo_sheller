@@ -5,6 +5,26 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- The daemon ships as a Docker image, for hosts where installing it is not
+  wanted. It runs no Engine of its own: it mounts the host's `docker.sock` and
+  drives the same containers a native daemon would. State is a bind mount to
+  the host's `~/.odoo-sheller`, so journals land in one place however the
+  daemon was started, and the entrypoint resolves the mount's owner and the
+  socket's group separately — the first becomes the process, the second is
+  added on top of it. The MCP server travels in the image and nothing starts
+  it: `docker exec -i odoo-sheller python -m odoo_sheller.mcp` is how a human
+  reaches a stuck module when nothing else is installed.
+
+### Changed
+
+- The daemon's warning about its bind address now says something true in both
+  modes. Containerized, binding `0.0.0.0` is mandatory and the boundary is the
+  published port, so that is what the text names.
+
 ## [1.6.4] — 2026-09-18
 
 The window already has the file the dialog kept asking you to paste.
