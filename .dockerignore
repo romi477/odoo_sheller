@@ -1,0 +1,10 @@
+# Context is the repository root (`docker build -f packaging/docker/Dockerfile .`).
+# Docker reads this file from the context, not from next to the Dockerfile.
+*
+!pyproject.toml
+!uv.lock
+!odoo_sheller
+!odoo_sheller/**
+!packaging
+!packaging/docker
+!packaging/docker/entrypoint.sh
