@@ -286,7 +286,7 @@ reads `~/.claude.json`, Cursor `~/.cursor/mcp.json`, Zed
 `context_servers` rather than `mcpServers`, and `args` is required there even
 when empty.
 
-The command can be spelled three ways. **From the installed app**, which needs
+The command can be spelled four ways. **From the installed app**, which needs
 nothing else on the machine:
 
 ```json
@@ -337,9 +337,36 @@ synced from `uv.lock` at every start:
 }
 ```
 
+**From a containerized daemon**, when the machine has no odoo-sheller
+installed at all and the daemon is the image from
+[container.md](container.md):
+
+```json
+{
+  "mcpServers": {
+    "odoo-sheller": {
+      "command": "docker",
+      "args": ["exec", "-i", "odoo-sheller", "python", "-m", "odoo_sheller.mcp"]
+    }
+  }
+}
+```
+
+Nothing starts that server: the image carries it, and the client spawns it on
+demand. `-i` is what keeps stdin open, and `-t` must not be added — a
+pseudo-terminal would merge the frame stream into the log stream. The server
+finds the daemon inside its own container, so no address is configured.
+
+Rather than filling in the container name by hand, ask the daemon:
+`GET /health` returns the command under `mcp`, with the container's own id in
+it, and that answer is correct whatever the container was named. A native
+daemon answers the same field with its own interpreter, so one question covers
+both cases.
+
 Absolute paths for `command` and `--directory` are safer in practice: hosts
 launch their servers with a minimal `PATH`, so a bare `uv` can fail to
-resolve.
+resolve. `docker` is the exception worth naming: if the host cannot resolve it,
+spell that one out too — `/usr/local/bin/docker` on most machines.
 
 The desktop app's **Settings… → MCP** shows the first form with the
 real path filled in, in both shapes, and copies it to the clipboard. It never

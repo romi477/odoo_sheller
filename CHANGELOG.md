@@ -70,6 +70,10 @@ wrong problem.
 
 ### Elsewhere
 
+- `docs/agent-guide.md` spells the MCP command a fourth way, for a daemon that
+  is the image — and says to ask `/health` for it rather than filling in a
+  container name by hand. The diagrams in the README, `CLAUDE.md` and
+  `docs/architecture.md` stop calling the daemon a macOS process.
 - The image's healthcheck probes `/health` rather than `/api/sessions`. The
   dedicated endpoint existed all along; the probe was reaching into the session
   registry to answer a liveness question.

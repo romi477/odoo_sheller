@@ -38,10 +38,10 @@ explicit. Rollback is the default; nothing is written until you confirm a
 commit. Odoo 15 through 20.
 
 ```
-browser ──HTTP/WS──> daemon (macOS) ──pipe──> docker exec ──> odoo-bin shell
-                     127.0.0.1:8765          stdin/fd 3 + stdout
-                                             └──> ssh ──> odoo-bin shell
-                                                          (an odoo.sh build)
+browser ──HTTP/WS──> daemon (host or container) ──pipe──> docker exec ──> odoo-bin shell
+                     127.0.0.1:8765                      stdin/fd 3 + stdout
+                                                         └──> ssh ──> odoo-bin shell
+                                                                      (an odoo.sh build)
 ```
 
 The saving is larger on a remote build, not smaller: `ssh host 'odoo-bin

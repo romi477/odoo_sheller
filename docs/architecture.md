@@ -8,10 +8,10 @@ understanding or extending it.
 ## The three pieces
 
 ```
-browser ──HTTP/WS──> daemon (macOS, Python) ──pipe──> docker exec ──> odoo-bin shell
-                     127.0.0.1:8765          stdin/fd 3 + stdout      bootstrap loop
-                                             └────────> ssh ────────> odoo-bin shell
-                                                                      (an odoo.sh build)
+browser ──HTTP/WS──> daemon (host or container) ──pipe──> docker exec ──> odoo-bin shell
+                     127.0.0.1:8765              stdin/fd 3 + stdout      bootstrap loop
+                                                 └────────> ssh ────────> odoo-bin shell
+                                                                          (an odoo.sh build)
 ```
 
 - **The daemon** is the only piece that knows about pipes, framing, and where

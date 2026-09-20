@@ -40,8 +40,8 @@ session removes both: one startup, one namespace, explicit transaction control.
 ## Architecture
 
 ```
-browser ──HTTP/WS──> daemon (macOS, Python) ──pipe──> docker exec ──> odoo-bin shell
-                     localhost:8765          stdin/fd3 + stdout      bootstrap loop
+browser ──HTTP/WS──> daemon (host or container) ──pipe──> docker exec ──> odoo-bin shell
+                     localhost:8765              stdin/fd3 + stdout      bootstrap loop
 ```
 
 Only the daemon knows about pipes and framing. Browser and (later) agent speak
