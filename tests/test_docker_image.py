@@ -57,3 +57,10 @@ def test_the_healthcheck_reads_the_port_it_probes():
     8765 would call a working container unhealthy forever."""
     assert "ODOO_SHELLER_PORT" in DOCKERFILE
     assert "127.0.0.1:8765/api/sessions" not in DOCKERFILE
+
+
+def test_the_image_is_findable_by_label():
+    """A caller stops the container it started without having to remember the
+    name: docker ps --filter label=tech.ventor.odoo-sheller."""
+    assert 'LABEL tech.ventor.odoo-sheller="daemon"' in DOCKERFILE
+    assert "org.opencontainers.image.source" in DOCKERFILE

@@ -255,3 +255,39 @@ def test_a_uid_the_image_already_uses_is_adopted():
         assert who.stdout.strip() == "www-data", who.stderr
     finally:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False)
+
+
+def test_the_running_container_is_findable_by_label(daemon):
+    """How a caller finds what it started without remembering the name."""
+    found = subprocess.run(
+        ["docker", "ps", "-q", "--filter", "label=tech.ventor.odoo-sheller"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    ids = found.stdout.split()
+    running = subprocess.run(
+        ["docker", "inspect", "--format", "{{.Id}}", daemon["name"]],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    assert any(running.startswith(one) for one in ids), found.stdout
+
+
+def test_no_state_and_no_uid_is_refused(tmp_path):
+    """The container must not start into a state it cannot own. Exit code 2,
+    and a message naming both ways out."""
+    name = f"odoo-sheller-refuse-{free_port()}"
+    attempt = subprocess.run(
+        [
+            "docker", "run", "--rm", "--name", name,
+            "-v", f"{HOST_SOCKET}:/var/run/docker.sock",
+            IMAGE,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert attempt.returncode == 2, attempt.stdout + attempt.stderr
+    assert "ODOO_SHELLER_UID" in attempt.stderr

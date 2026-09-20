@@ -5,25 +5,57 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.7.0] — 2026-09-20
 
-### Added
+A daemon you do not have to install.
 
-- The daemon ships as a Docker image, for hosts where installing it is not
-  wanted. It runs no Engine of its own: it mounts the host's `docker.sock` and
-  drives the same containers a native daemon would. State is a bind mount to
-  the host's `~/.odoo-sheller`, so journals land in one place however the
-  daemon was started, and the entrypoint resolves the mount's owner and the
-  socket's group separately — the first becomes the process, the second is
-  added on top of it. The MCP server travels in the image and nothing starts
-  it: `docker exec -i odoo-sheller python -m odoo_sheller.mcp` is how a human
-  reaches a stuck module when nothing else is installed.
+### The daemon as a container
 
-### Changed
+Until now a daemon meant a checkout with a virtualenv, or the macOS app. Both
+assume somebody is willing to install something. This adds a third way that
+assumes nothing: an image that mounts the host's `docker.sock` and drives the
+same containers a native daemon would. No Engine inside it —
+Docker-outside-of-Docker — and nothing below `transport.py` notices, because
+`docker exec` is `docker exec` whichever side of a container the CLI runs on.
 
-- The daemon's warning about its bind address now says something true in both
-  modes. Containerized, binding `0.0.0.0` is mandatory and the boundary is the
-  published port, so that is what the text names.
+State is a bind mount of the host's `~/.odoo-sheller`, never a named volume.
+That is the point rather than a detail: journals have to land where a natively
+installed daemon writes and reads them, or the history forks by how the daemon
+happened to be started that day. `HOME=/data` is the whole mechanism — every
+state path in the daemon is built from `Path.home()`, so one variable moves the
+journals, the admin key and the SSH control sockets at once.
+
+The entrypoint resolves two identities that are not interchangeable: the mount's
+owner, who must own the journals, and the socket's group, which decides who
+reaches the Engine. The first becomes the process, the second is added on top of
+it as a supplementary group.
+
+The MCP server travels in the image and nothing starts it. When a daemon was
+brought up this way and nothing else odoo-sheller-related is on the host,
+`docker exec -i odoo-sheller python -m odoo_sheller.mcp` is how a human still
+reaches a stuck module with an agent.
+
+### A contract, not an example
+
+`docs/container.md` is written for a program that starts and stops this
+container rather than for a person copying a command. The image carries
+`tech.ventor.odoo-sheller`, so a caller finds what it started — or finds that
+one is already running — without remembering a name, and stops it the same way.
+The `HEALTHCHECK` is what to wait on instead of polling the port. Failures are
+exit codes: 1 for a socket that was never mounted, 2 for a state directory that
+does not exist with no `ODOO_SHELLER_UID` to own it.
+
+That second one is a refusal on every host, and deliberately so. The entrypoint
+runs inside a Linux container and cannot tell what kind of host it is on; on
+Linux, starting there would write journals as root that a natively installed
+daemon could never append to. One rule for both beats guessing.
+
+### Elsewhere
+
+- The daemon's warning about its bind address says something true in both modes
+  now. Containerized, binding `0.0.0.0` is mandatory — the container's own
+  loopback is not what `-p` reaches — and the boundary is how the port was
+  published, so that is what the text names.
 
 ## [1.6.4] — 2026-09-18
 
@@ -944,7 +976,8 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
-[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.6.4...HEAD
+[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/romi477/odoo_sheller/compare/v1.6.4...v1.7.0
 [1.6.4]: https://github.com/romi477/odoo_sheller/compare/v1.6.3...v1.6.4
 [1.6.3]: https://github.com/romi477/odoo_sheller/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/romi477/odoo_sheller/compare/v1.6.1...v1.6.2

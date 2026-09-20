@@ -30,6 +30,21 @@ fi
 
 socket_gid="$(owner_gid "$SOCKET")"
 
+# Nothing to derive an identity from, and none was given. Refusing is the
+# only honest answer: this script cannot tell a Linux host — where starting
+# anyway means root-owned journals that a natively installed daemon can never
+# append to — from a macOS one, where it would have been harmless. One rule
+# for both beats guessing at the host.
+if [ ! -d "$STATE" ] && [ -z "${ODOO_SHELLER_UID:-}" ]; then
+    echo "odoo-sheller: $STATE does not exist and ODOO_SHELLER_UID is unset." >&2
+    echo "  Starting anyway would write journals as root, and a daemon" >&2
+    echo "  installed natively on this host could never append to them." >&2
+    echo "  Either:" >&2
+    echo "    -e ODOO_SHELLER_UID=\$(id -u) -e ODOO_SHELLER_GID=\$(id -g)" >&2
+    echo "    or create ~/.odoo-sheller on the host before starting this." >&2
+    exit 2
+fi
+
 created=no
 if [ ! -d "$STATE" ]; then
     mkdir -p "$STATE"
@@ -42,16 +57,8 @@ gid="${ODOO_SHELLER_GID:-$(owner_gid "$STATE")}"
 # A directory this script made belongs to whoever is about to write in it.
 # Never touch one that was already there: that is the host's bind mount, and
 # its ownership is the host's answer, not ours to overrule.
-if [ "$created" = yes ] && [ -n "${ODOO_SHELLER_UID:-}" ] && [ "$(id -u)" = 0 ]; then
+if [ "$created" = yes ] && [ "$(id -u)" = 0 ]; then
     chown "$uid:$gid" "$STATE"
-fi
-
-if [ "$created" = yes ] && [ -z "${ODOO_SHELLER_UID:-}" ]; then
-    echo "odoo-sheller: warning: $STATE did not exist and ODOO_SHELLER_UID is unset." >&2
-    echo "  On Linux the journals will be root-owned, and a daemon installed" >&2
-    echo "  natively on this host will not be able to append to them." >&2
-    echo "  Pass -e ODOO_SHELLER_UID=\$(id -u) -e ODOO_SHELLER_GID=\$(id -g)," >&2
-    echo "  or create ~/.odoo-sheller on the host before starting this." >&2
 fi
 
 # uid 0 is not a mistake to correct. It is what a mount reports when the host

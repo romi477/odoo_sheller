@@ -21,6 +21,7 @@ thing that widens the attack surface, and `docs/security.md` says how.
 | `docs/architecture.md` | the design of record — protocol, session state machine, journal format |
 | `docs/ui-guide.md` | UI behavior: screens, states, guarantees |
 | `docs/agent-guide.md` | MCP tool list, ownership from the agent's side, Claude Desktop wiring |
+| `docs/container.md` | the containerized daemon: the runtime contract for whoever starts it |
 | `docs/security.md` | the security model — what's protected, what isn't, and why |
 | `docs/faq.md`, `docs/faq-ru.md` | plain-language FAQ, English and Russian |
 | `docs/desktop-app/` | the macOS app: design of record, and the staged work |

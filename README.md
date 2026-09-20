@@ -126,38 +126,27 @@ docker run -d --name odoo-sheller \
   ghcr.io/romi477/odoo-sheller:<version>
 ```
 
+Wait for it, find it again, and stop it — no container name needed, the image
+carries a label:
+
+```bash
+docker inspect --format '{{.State.Health.Status}}' odoo-sheller
+docker ps -q --filter label=tech.ventor.odoo-sheller
+docker rm -f $(docker ps -aq --filter label=tech.ventor.odoo-sheller)
+```
+
 **Publish to `127.0.0.1` and nowhere else.** This API executes arbitrary code as
 `SUPERUSER_ID` and has no authentication. Inside the container the daemon binds
 `0.0.0.0`, because the container's own loopback is not reachable from the host —
 so the published port is the only thing keeping the API on this machine.
 
-**The state mount is required, and it is a bind mount to your own
-`~/.odoo-sheller`, never a named volume.** Journals from this daemon must land
-where a natively installed one would write and read them; a named volume would
-fork your history according to how the daemon happened to be started.
+All five flags above are required, and the container refuses to start rather
+than guess at a missing one. Every flag, the label, the health states, the exit
+codes and the environment are in [docs/container.md](docs/container.md), which
+is the contract to write a caller against.
 
-Pass `ODOO_SHELLER_UID` and `ODOO_SHELLER_GID`. Without them the container can
-only guess from the mounted directory, and on a first run — when the directory
-does not exist yet — it cannot guess at all, so the journals end up root-owned
-and a native daemon cannot append to them.
-
-Rootless Docker keeps its socket under `$XDG_RUNTIME_DIR`; mount whichever
-socket you have onto `/var/run/docker.sock` inside:
-
-```bash
-  -v "$XDG_RUNTIME_DIR/docker.sock:/var/run/docker.sock" \
-```
-
-The image is private on GHCR, so pull it with a token that carries
-`read:packages`:
-
-```bash
-docker login ghcr.io
-```
-
-### Reaching it with an agent
-
-The MCP server is in the image but nothing starts it. Point an MCP client at:
+The MCP server travels in the image and nothing starts it. Point an MCP client
+at:
 
 ```bash
 docker exec -i odoo-sheller python -m odoo_sheller.mcp
@@ -165,6 +154,9 @@ docker exec -i odoo-sheller python -m odoo_sheller.mcp
 
 This is how a human reaches a stuck module when the daemon was started this way
 and nothing else odoo-sheller-related is installed on the host.
+
+The GHCR package is private; pull it with a token carrying `read:packages`
+(`docker login ghcr.io`).
 
 ## Usage
 

@@ -120,19 +120,22 @@ def test_a_real_uid_drops_privileges(fake_socket, tmp_path):
     assert plan(result)["drop"] == "yes"
 
 
-def test_a_missing_directory_is_created_and_announced(fake_socket, tmp_path):
-    """Not a refusal: on macOS this is a correct setup, and the script cannot
-    tell one host from the other. But on Linux it is how journals become
-    root-owned, so it does not happen quietly."""
+def test_a_missing_directory_with_no_uid_is_refused(fake_socket, tmp_path):
+    """The script cannot tell a Linux host from a macOS one, and on Linux
+    starting here means journals a native daemon can never append to. One
+    rule for both hosts, and a message naming both ways out."""
     state = tmp_path / "state"
     result = run(fake_socket, state)
-    assert result.returncode == 0
-    assert state.is_dir()
+    assert result.returncode == 2
+    assert not state.exists()
     assert "ODOO_SHELLER_UID" in result.stderr
 
 
-def test_a_given_uid_makes_the_first_run_quiet(fake_socket, tmp_path):
+def test_a_given_uid_makes_the_first_run_work(fake_socket, tmp_path):
+    """The identity is what was missing, not the directory. With one in hand
+    the script creates it and carries on."""
     state = tmp_path / "state"
     result = run(fake_socket, state, ODOO_SHELLER_UID=1000, ODOO_SHELLER_GID=1000)
     assert result.returncode == 0
-    assert "warning" not in result.stderr.lower()
+    assert state.is_dir()
+    assert plan(result)["uid"] == "1000"

@@ -309,3 +309,25 @@ def test_security_says_what_the_socket_mount_grants():
     """A container looks like isolation and provides none here."""
     text = read("security.md")
     assert "docker.sock" in text
+
+
+def test_the_container_contract_documents_what_a_caller_codes_against():
+    """A caller that has to read the Dockerfile to learn the label or the exit
+    codes does not have a contract, it has an example."""
+    text = read("container.md")
+    assert "tech.ventor.odoo-sheller" in text
+    assert "State.Health.Status" in text
+    assert "-p 127.0.0.1:8765:8765" in text
+
+
+def test_the_container_contract_matches_the_entrypoint():
+    """Pin the document to the script, not to itself."""
+    entrypoint = (
+        Path(__file__).resolve().parent.parent
+        / "packaging" / "docker" / "entrypoint.sh"
+    ).read_text(encoding="utf-8")
+    text = read("container.md")
+    for code in ("exit 1", "exit 2"):
+        assert code in entrypoint
+    assert "| 1 | No socket" in text
+    assert "| 2 | The state directory does not exist" in text
