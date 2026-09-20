@@ -1,11 +1,42 @@
 """Run the daemon: odoo-sheller [--reload], or python -m odoo_sheller."""
 
 import argparse
+import os
 from pathlib import Path
 
 import uvicorn
 
 from odoo_sheller.registry import load_admin_key
+
+IN_CONTAINER_ENV = "ODOO_SHELLER_IN_CONTAINER"
+
+
+def bind_warning(host: str, in_container: bool) -> str | None:
+    """What to say about this daemon's exposure, or nothing.
+
+    Two modes, two different boundaries. On a host, the bind address is the
+    boundary and anything but loopback widens it. In a container, binding
+    loopback would make the published port unreachable, so 0.0.0.0 is
+    mandatory and the boundary is how the port was published instead —
+    which this process cannot see, and therefore states rather than checks.
+    """
+    if in_container:
+
+        return (
+            "note: containerized, binding 0.0.0.0 inside the container. What "
+            "keeps this API on the machine is how the port was published: "
+            "-p 127.0.0.1:8765:8765. Anything wider offers unauthenticated "
+            "code execution as SUPERUSER_ID to whatever can reach it."
+        )
+
+    if host != "127.0.0.1":
+
+        return (
+            f"warning: binding {host} exposes an unauthenticated code-execution "
+            "API beyond this machine"
+        )
+
+    return None
 
 
 def main() -> None:
@@ -25,11 +56,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if args.host != "127.0.0.1":
-        print(
-            f"warning: binding {args.host} exposes an unauthenticated code-execution "
-            "API beyond this machine",
-        )
+    notice = bind_warning(args.host, bool(os.environ.get(IN_CONTAINER_ENV)))
+    if notice:
+        print(notice)
 
     # Printed, never served: the UI sits behind the same unauthenticated API, so
     # an endpoint handing this out would give it to anything that can fetch a
