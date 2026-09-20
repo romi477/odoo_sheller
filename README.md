@@ -131,8 +131,8 @@ carries a label:
 
 ```bash
 docker inspect --format '{{.State.Health.Status}}' odoo-sheller
-docker ps -q --filter label=tech.ventor.odoo-sheller
-docker rm -f $(docker ps -aq --filter label=tech.ventor.odoo-sheller)
+docker ps -q --filter label=io.github.romi477.odoo-sheller
+docker rm -f $(docker ps -aq --filter label=io.github.romi477.odoo-sheller)
 ```
 
 **Publish to `127.0.0.1` and nowhere else.** This API executes arbitrary code as

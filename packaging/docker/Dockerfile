@@ -35,9 +35,9 @@ RUN set -eux; \
 
 # One label is the contract: it is how a caller finds this container without
 # knowing the name it was started under.
-#     docker ps -q --filter label=tech.ventor.odoo-sheller
+#     docker ps -q --filter label=io.github.romi477.odoo-sheller
 # The OCI ones are for whoever ends up holding the image without the repo.
-LABEL tech.ventor.odoo-sheller="daemon" \
+LABEL io.github.romi477.odoo-sheller="daemon" \
       org.opencontainers.image.title="odoo-sheller" \
       org.opencontainers.image.description="Persistent Odoo shell proxy, talking to the host's Docker Engine" \
       org.opencontainers.image.source="https://github.com/romi477/odoo_sheller" \

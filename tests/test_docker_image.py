@@ -61,6 +61,6 @@ def test_the_healthcheck_reads_the_port_it_probes():
 
 def test_the_image_is_findable_by_label():
     """A caller stops the container it started without having to remember the
-    name: docker ps --filter label=tech.ventor.odoo-sheller."""
-    assert 'LABEL tech.ventor.odoo-sheller="daemon"' in DOCKERFILE
+    name: docker ps --filter label=io.github.romi477.odoo-sheller."""
+    assert 'LABEL io.github.romi477.odoo-sheller="daemon"' in DOCKERFILE
     assert "org.opencontainers.image.source" in DOCKERFILE

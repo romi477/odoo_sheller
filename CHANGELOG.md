@@ -39,7 +39,7 @@ reaches a stuck module with an agent.
 
 `docs/container.md` is written for a program that starts and stops this
 container rather than for a person copying a command. The image carries
-`tech.ventor.odoo-sheller`, so a caller finds what it started — or finds that
+`io.github.romi477.odoo-sheller`, so a caller finds what it started — or finds that
 one is already running — without remembering a name, and stops it the same way.
 The `HEALTHCHECK` is what to wait on instead of polling the port. Failures are
 exit codes: 1 for a socket that was never mounted, 2 for a state directory that

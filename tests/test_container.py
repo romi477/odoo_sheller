@@ -260,7 +260,7 @@ def test_a_uid_the_image_already_uses_is_adopted():
 def test_the_running_container_is_findable_by_label(daemon):
     """How a caller finds what it started without remembering the name."""
     found = subprocess.run(
-        ["docker", "ps", "-q", "--filter", "label=tech.ventor.odoo-sheller"],
+        ["docker", "ps", "-q", "--filter", "label=io.github.romi477.odoo-sheller"],
         capture_output=True,
         text=True,
         check=False,

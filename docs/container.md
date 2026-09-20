@@ -61,18 +61,18 @@ session on its own, so `healthy` means ready.
 
 ## Find
 
-The image carries `tech.ventor.odoo-sheller=daemon`, and a container inherits
+The image carries `io.github.romi477.odoo-sheller=daemon`, and a container inherits
 its image's labels. That is how a caller finds what it started — or finds that
 somebody else already started one — without remembering a name:
 
 ```bash
-docker ps -q --filter label=tech.ventor.odoo-sheller
+docker ps -q --filter label=io.github.romi477.odoo-sheller
 ```
 
 ## Stop
 
 ```bash
-docker rm -f $(docker ps -aq --filter label=tech.ventor.odoo-sheller)
+docker rm -f $(docker ps -aq --filter label=io.github.romi477.odoo-sheller)
 ```
 
 Sessions cannot outlive the daemon: the daemon owns the pipes, so stopping the

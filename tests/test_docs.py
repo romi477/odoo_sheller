@@ -315,7 +315,7 @@ def test_the_container_contract_documents_what_a_caller_codes_against():
     """A caller that has to read the Dockerfile to learn the label or the exit
     codes does not have a contract, it has an example."""
     text = read("container.md")
-    assert "tech.ventor.odoo-sheller" in text
+    assert "io.github.romi477.odoo-sheller" in text
     assert "State.Health.Status" in text
     assert "-p 127.0.0.1:8765:8765" in text
 
