@@ -23,7 +23,25 @@ from mcp_types import ToolAnnotations
 
 logger = logging.getLogger(__name__)
 
-DAEMON_URL = os.environ.get("ODOO_SHELLER_URL", "http://127.0.0.1:8765")
+def daemon_url() -> str:
+    """Where the daemon is.
+
+    ODOO_SHELLER_URL wins when set: it is the only one of the two that can name
+    a host. Otherwise follow ODOO_SHELLER_PORT, because in the container image
+    that variable is what moves the listener — and this server usually runs
+    inside that same container, started by `docker exec`. The two used to
+    disagree in silence, and the first sign of it was every tool answering
+    daemon_unreachable about a daemon that was running two lines away.
+    """
+    explicit = os.environ.get("ODOO_SHELLER_URL")
+    if explicit:
+
+        return explicit
+
+    return f"http://127.0.0.1:{os.environ.get('ODOO_SHELLER_PORT', '8765')}"
+
+
+DAEMON_URL = daemon_url()
 AGENT_LABEL = "mcp-agent"
 EXEC_TIMEOUT = 30.0  # MCP clients give up long before the API's five minutes
 # `Session.start` waits this long for the bootstrap's hello. Giving up on the

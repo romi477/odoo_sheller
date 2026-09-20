@@ -112,7 +112,7 @@ macOS and rootless Docker both do.
 | Variable | Default | Effect |
 |---|---|---|
 | `ODOO_SHELLER_UID` / `ODOO_SHELLER_GID` | derived from the state mount | Who the daemon runs as, and who owns the journals. |
-| `ODOO_SHELLER_PORT` | `8765` | The port inside the container. The `-p` mapping and the healthcheck both follow it. |
+| `ODOO_SHELLER_PORT` | `8765` | The port inside the container. The `-p` mapping, the healthcheck and the MCP server all follow it. |
 | `ODOO_SHELLER_SOCKET` | `/var/run/docker.sock` | Where the entrypoint looks for the Engine. |
 | `ODOO_SHELLER_STATE` | `/data/.odoo-sheller` | Where the state mount is expected. |
 | `ODOO_SHELLER_IN_CONTAINER` | `1`, set by the image | Changes what the daemon says about its own exposure. |
@@ -148,6 +148,10 @@ docker exec -i odoo-sheller python -m odoo_sheller.mcp
 This is the way a human reaches a stuck module when the daemon was started this
 way and nothing else odoo-sheller-related is installed on the host. The server
 talks to the daemon over HTTP inside the container and writes nothing itself.
+
+`docker exec` inherits the container's environment, so the server finds the
+daemon on whatever `ODOO_SHELLER_PORT` the container serves, including one moved
+with `-e`. Set `ODOO_SHELLER_URL` only to point it somewhere else entirely.
 
 ## Pulling the image
 

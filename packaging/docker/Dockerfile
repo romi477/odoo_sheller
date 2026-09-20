@@ -48,10 +48,14 @@ WORKDIR /app
 # HOME is the whole mechanism: journal.py, registry.py and transport.py build
 # their paths from Path.home(), so this puts the journals, the admin key and
 # the SSH control sockets under the bind mount without touching the code.
+# ODOO_SHELLER_PORT is declared, not just honoured: a `docker exec` inherits
+# the container's environment, so the MCP server started that way follows the
+# same port the entrypoint served on, including when -e moved it.
 ENV HOME=/data \
     PATH=/app/.venv/bin:$PATH \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     ODOO_SHELLER_IN_CONTAINER=1 \
+    ODOO_SHELLER_PORT=8765 \
     PYTHONUNBUFFERED=1
 
 COPY pyproject.toml uv.lock ./

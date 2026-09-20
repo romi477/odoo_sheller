@@ -52,6 +52,12 @@ daemon could never append to. One rule for both beats guessing.
 
 ### Elsewhere
 
+- The MCP server follows `ODOO_SHELLER_PORT` when no `ODOO_SHELLER_URL` says
+  otherwise. It usually runs inside the same container as the daemon, started
+  by `docker exec`, and that variable is what moves the listener there — so a
+  moved port used to leave every tool reporting `daemon_unreachable` about a
+  daemon running two lines away. The image declares the variable, and an exec
+  inherits it.
 - The daemon's warning about its bind address says something true in both modes
   now. Containerized, binding `0.0.0.0` is mandatory — the container's own
   loopback is not what `-p` reaches — and the boundary is how the port was

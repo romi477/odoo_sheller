@@ -1719,3 +1719,25 @@ def test_a_listing_returns_paths_you_can_ask_for():
     code = server._source_snippet("integration_shopify/models/external", None, None,
                                   None, None)
     assert "__manifest__.py" in code, "the module root is where a path is rooted"
+
+
+def test_the_daemon_url_defaults_to_loopback(monkeypatch):
+    monkeypatch.delenv("ODOO_SHELLER_URL", raising=False)
+    monkeypatch.delenv("ODOO_SHELLER_PORT", raising=False)
+    assert server.daemon_url() == "http://127.0.0.1:8765"
+
+
+def test_the_daemon_url_follows_the_port_the_image_serves(monkeypatch):
+    """ODOO_SHELLER_PORT moves the listener in the container, and this server
+    usually runs inside that same container. Ignoring it meant every tool
+    reporting daemon_unreachable about a daemon two lines away."""
+    monkeypatch.delenv("ODOO_SHELLER_URL", raising=False)
+    monkeypatch.setenv("ODOO_SHELLER_PORT", "9123")
+    assert server.daemon_url() == "http://127.0.0.1:9123"
+
+
+def test_an_explicit_url_wins_over_the_port(monkeypatch):
+    """Only the URL can name a host; the port never can."""
+    monkeypatch.setenv("ODOO_SHELLER_URL", "http://10.0.0.2:8765")
+    monkeypatch.setenv("ODOO_SHELLER_PORT", "9123")
+    assert server.daemon_url() == "http://10.0.0.2:8765"
