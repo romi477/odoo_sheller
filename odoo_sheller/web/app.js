@@ -141,9 +141,15 @@ function closeKeyFor(id) {
   return keyFor(id) || loadCloseKeys()[id] || '';
 }
 
+// The desktop app reads `~/.odoo-sheller/admin.key` and posts it in. Memory,
+// not localStorage: the frame is a third-party origin in WKWebView and does
+// not keep one. A paste in a browser tab still lands in localStorage, and a
+// correction there wins — that is how a refused native copy is overridden.
+let nativeAdminKey = '';
+
 function adminKey() {
 
-  return localStorage.getItem('osAdminKey') || '';
+  return localStorage.getItem('osAdminKey') || nativeAdminKey || '';
 }
 
 function authHeaders(id, {admin = false} = {}) {
@@ -3272,8 +3278,9 @@ document.addEventListener('keydown', (event) => {
 // The desktop app's menu, reaching the page the only way it can: a message
 // across the origin boundary. It arrives whatever holds focus — a field here,
 // or the terminal in the window below — which is the whole point of putting
-// those keys in the menu. Only the frame's own parent is listened to, and the
-// only thing the message can do is change which screen is shown.
+// those keys in the menu. Only the frame's own parent is listened to. The
+// payload is a screen or session step, or the admin key the window read from
+// disk — never an HTTP response, which would hand that key to any client.
 window.addEventListener('message', (event) => {
   if (event.source !== window.parent || window.parent === window) {
 
@@ -3285,6 +3292,11 @@ window.addEventListener('message', (event) => {
     stepScreen(step);
   } else if (data?.type === 'os-session') {
     stepSession(step);
+  } else if (data?.type === 'os-admin-key' && typeof data.key === 'string') {
+    const key = data.key.trim();
+    if (key) {
+      nativeAdminKey = key;
+    }
   }
 });
 
@@ -3312,6 +3324,12 @@ document.querySelector('.odoosh-add').addEventListener('click', () => {
 // it stays, because there a link out is just a link out.
 if (new URLSearchParams(location.search).has('app')) {
   document.getElementById('api-docs').hidden = true;
+  // The parent injects the admin key; this is how it knows the listener is
+  // up. No secret in the ping. `*` because the shell origin is Tauri's, not
+  // ours, and we do not guess it.
+  if (window.parent !== window) {
+    window.parent.postMessage({type: 'os-ready'}, '*');
+  }
 }
 
 connectRegistrySocket();

@@ -45,9 +45,17 @@ def test_the_production_guard_the_docs_promise_is_real():
     assert issubclass(CommitForbidden, CommitNotAllowed)
 
 
-def test_security_says_who_may_open_a_remote_target():
+def test_security_says_the_desktop_app_reads_the_admin_key():
+    """An endpoint that returned it would hand it to any localhost client.
+    The window reading the file is the other channel, and it must not create
+    a second key."""
     text = read("security.md")
-    assert "os_open_session" in text
+    assert "never served by any API" in text
+    assert "endpoint:" in text
+    assert "desktop app" in text.lower()
+    assert "never creates the file" in text
+    assert "postMessage" in text
+    assert "/health" in text
 
 
 @pytest.mark.asyncio
@@ -203,6 +211,29 @@ def test_the_window_frames_the_daemon_rather_than_navigating_to_it():
     assert "127.0.0.1:8765" not in shell
     assert 'invoke("ui_url")' in shell
     assert "fn ui_url()" in (DESKTOP / "src" / "lib.rs").read_text(encoding="utf-8")
+
+
+def test_the_desktop_app_reads_the_admin_key_and_does_not_create_it():
+    """The file is the daemon's. An invented copy would 403 against the one
+    in memory. The frame has no Tauri IPC, so the value travels as a parent
+    message — the same channel as screen steps, not an HTTP endpoint."""
+    daemon = (DESKTOP / "src" / "daemon.rs").read_text(encoding="utf-8")
+    lib = (DESKTOP / "src" / "lib.rs").read_text(encoding="utf-8")
+    shell = (DESKTOP.parent / "src" / "shell.js").read_text(encoding="utf-8")
+    assert "fn read_admin_key_at" in daemon
+    assert "fs::read_to_string" in daemon
+    assert 'join(".odoo-sheller/admin.key")' in daemon
+    assert "fn read_admin_key()" in lib
+    assert 'invoke("read_admin_key")' in shell
+    assert 'type: "os-admin-key"' in shell
+    assert "loadNativeAdminKey" in shell
+    # After Ready, which is after /health, not on the splash.
+    ready = shell.split('state.phase === "ready"')[1].split("return;")[0]
+    assert "loadNativeAdminKey" in ready
+    # A write in the reader would be the invented-key bug.
+    reader = daemon.split("pub fn read_admin_key_at")[1].split("pub fn")[0]
+    assert "fs::write" not in reader
+    assert "create_dir" not in reader
 
 
 def test_the_capability_covers_the_one_window_there_is():

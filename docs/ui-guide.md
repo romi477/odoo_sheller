@@ -167,10 +167,12 @@ control this:
   asks for confirmation naming the database when turned on.
 
 Closing or reclaiming a session you never owned yourself needs the daemon's
-admin key — printed at startup and kept in `~/.odoo-sheller/admin.key`. The
-UI only asks for it when the daemon actually refuses something, never up
-front. A session that's already `dead` can be closed by anyone, no key
-required — there's no process left to protect.
+admin key — printed at startup and kept in `~/.odoo-sheller/admin.key`. A
+browser tab only asks for it when the daemon actually refuses something, never
+up front. The desktop app reads the file itself after the daemon is up, so
+Grant access / Grant commit / take back do not prompt there. A session that's
+already `dead` can be closed by anyone, no key required — there's no process
+left to protect.
 
 The tab's `×` does an ordinary **Close** (Odoo unwinds cleanly); `⌥`-click
 forces a **Kill** instead. While either is in flight the tab reads

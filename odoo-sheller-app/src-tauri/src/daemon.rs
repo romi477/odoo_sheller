@@ -199,6 +199,26 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
+/// The daemon writes this before it listens. The window reads it after
+/// `/health` answers, and never creates it: a key we invented would not be
+/// the one the running daemon is holding.
+pub fn admin_key_path() -> Option<PathBuf> {
+    Some(home_dir()?.join(".odoo-sheller/admin.key"))
+}
+
+pub fn read_admin_key() -> Option<String> {
+    read_admin_key_at(&admin_key_path()?)
+}
+
+pub fn read_admin_key_at(path: &Path) -> Option<String> {
+    let key = fs::read_to_string(path).ok()?.trim().to_string();
+    if key.is_empty() {
+        None
+    } else {
+        Some(key)
+    }
+}
+
 /// onedir trees Tauri copies into Contents/Resources/. The executable sits
 /// next to `_internal/`; PyInstaller finds that from the executable, not cwd.
 pub fn bundled_bin(resource_dir: Option<&Path>, name: &str) -> Option<PathBuf> {
@@ -530,6 +550,48 @@ mod tests {
         assert!(replace_symlink(&occupied, &second).is_none());
         assert_eq!(fs::read(&occupied).unwrap(), b"someone else's");
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_admin_key_file_is_none_and_is_not_created() {
+        let dir = std::env::temp_dir().join(format!(
+            "odoo-sheller-admin-missing-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("admin.key");
+        assert!(read_admin_key_at(&path).is_none());
+        assert!(!path.exists(), "the app must not invent a key the daemon does not hold");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_admin_key_file_is_none() {
+        let dir = std::env::temp_dir().join(format!(
+            "odoo-sheller-admin-empty-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("admin.key");
+        fs::write(&path, "  \n").unwrap();
+        assert!(read_admin_key_at(&path).is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_written_admin_key_is_trimmed() {
+        let dir = std::env::temp_dir().join(format!(
+            "odoo-sheller-admin-ok-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("admin.key");
+        fs::write(&path, "the-secret\n").unwrap();
+        assert_eq!(read_admin_key_at(&path).as_deref(), Some("the-secret"));
         let _ = fs::remove_dir_all(&dir);
     }
 

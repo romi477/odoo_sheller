@@ -633,9 +633,11 @@ def test_option_command_arrows_move_between_screens():
         re.DOTALL,
     )
     assert message is not None
-    # Only the parent frame is heard, and only about which screen is shown.
+    # Only the parent frame is heard. Screen and session steps, and the admin
+    # key the window read from disk — not an HTTP response.
     assert "event.source !== window.parent" in message.group(1)
     assert "data?.type === 'os-screen'" in message.group(1)
+    assert "data?.type === 'os-admin-key'" in message.group(1)
     html = (WEB / "index.html").read_text(encoding="utf-8")
     assert html.count("\u2325\u2318\u2190/\u2192 switches tabs.") == 3
     assert "\u21e7\u2190" not in html
@@ -1552,6 +1554,27 @@ def test_a_rejected_admin_key_is_not_kept(app_js):
     body = re.search(r"async function withAdminRetry\(.*?\n\}", app_js, re.DOTALL)
     assert body is not None
     assert "localStorage.removeItem('osAdminKey')" in body.group(0)
+
+
+def test_the_framed_ui_takes_the_admin_key_from_the_parent(app_js):
+    """The window reads the file; an endpoint that returned it would hand it
+    to anything that can fetch a page. Memory, because the iframe does not
+    keep localStorage. A paste in a browser tab still uses localStorage, and
+    that paste wins — a refused native copy has to be overridable."""
+    assert "let nativeAdminKey" in app_js
+    admin = re.search(r"function adminKey\(\) \{\n(.*?)\n\}", app_js, re.DOTALL)
+    assert admin is not None
+    assert "localStorage.getItem('osAdminKey') || nativeAdminKey" in admin.group(1)
+    message = re.search(
+        r"window\.addEventListener\('message', \(event\) => \{\n(.*?)\n\}\);",
+        app_js,
+        re.DOTALL,
+    )
+    assert message is not None
+    assert "data?.type === 'os-admin-key'" in message.group(1)
+    assert "nativeAdminKey = key" in message.group(1)
+    assert "localStorage.setItem('osAdminKey'" not in message.group(1)
+    assert "postMessage({type: 'os-ready'}" in app_js
 
 
 def test_granting_commit_uses_the_key_this_browser_holds(app_js):

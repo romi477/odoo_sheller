@@ -5,6 +5,29 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.4] — 2026-09-18
+
+The window already has the file the dialog kept asking you to paste.
+
+### The admin key in the app
+
+Grant access, Grant commit, and taking a session back from an agent asked for
+the admin key every time the framed UI had forgotten it. The key lives in
+`~/.odoo-sheller/admin.key` — the daemon writes it before it listens — and the
+page stored a copy in the iframe's `localStorage`, which WKWebView treats as a
+third-party origin and does not keep. A Reload, a rebuild, a day's work of
+granting commit to an agent-opened session: the same paste, again.
+
+The window reads that file after `/health` answers, and hands it to the frame
+the same way it already hands screen steps: a `postMessage` from the parent,
+never an HTTP endpoint. The page keeps it in memory, not in `localStorage`. A
+browser tab still pastes once, because a browser is just another client of the
+unauthenticated API and must not be given the key for fetching a page. The MCP
+server still never sees it.
+
+The app does not create the file. If it is missing or empty after the daemon is
+up, the prompt is still there.
+
 ## [1.6.3] — 2026-09-17
 
 The window stops answering its own menu after a while, and a Settings dialog
@@ -901,7 +924,8 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
-[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.6.4...HEAD
+[1.6.4]: https://github.com/romi477/odoo_sheller/compare/v1.6.3...v1.6.4
 [1.6.3]: https://github.com/romi477/odoo_sheller/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/romi477/odoo_sheller/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/romi477/odoo_sheller/compare/v1.6.0...v1.6.1

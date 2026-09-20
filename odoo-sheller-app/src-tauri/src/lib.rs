@@ -93,6 +93,13 @@ fn ui_url() -> String {
     daemon::ui_url()
 }
 
+/// The file the daemon created before it listened. None if it is missing or
+/// empty — the framed UI then keeps the paste prompt. Never written here.
+#[tauri::command]
+fn read_admin_key() -> Option<String> {
+    daemon::read_admin_key()
+}
+
 #[tauri::command]
 fn pty_create(app: AppHandle, hub: State<'_, PtyHub>) -> Result<String, String> {
     let out_app = app.clone();
@@ -494,6 +501,7 @@ pub fn run() {
             retry_startup,
             quit_app,
             ui_url,
+            read_admin_key,
             pty_create,
             pty_write,
             pty_resize,

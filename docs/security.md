@@ -45,9 +45,17 @@ affect someone else's in-progress work. It is never served by any API
 endpoint: the daemon prints it once at startup and keeps it in
 `~/.odoo-sheller/admin.key`, because an endpoint that returned it would hand
 it to anything able to fetch a page from the same unauthenticated daemon.
-Read it with `cat ~/.odoo-sheller/admin.key` and paste it into the UI once —
-it's only asked for when the daemon actually refuses something, never
-up front.
+
+A browser tab is that kind of client. Read the file with
+`cat ~/.odoo-sheller/admin.key` and paste it into the UI once — it's only asked
+for when the daemon actually refuses something, never up front.
+
+The desktop app is not. After `/health` answers it reads `admin.key` itself and
+gives the framed page the value in a `postMessage` from the window's own page —
+the frame has no Tauri IPC, and this is the same channel the menu already uses
+for screen steps. The app never creates the file: a key it invented would not
+match the one the daemon is holding. If the file is missing, the prompt is still
+there. The MCP server still does not read it.
 
 ## What is deliberately *not* protected
 

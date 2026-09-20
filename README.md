@@ -534,8 +534,9 @@ agent, need nothing beyond the key you already hold: close, take back and grant
 commit all work with it. The daemon prints it at startup and
 keeps it in `~/.odoo-sheller/admin.key`; no endpoint serves it, because the UI sits
 behind the same unauthenticated API and would hand it to anything that can fetch
-a page. Read it with `cat ~/.odoo-sheller/admin.key` and paste it once when the UI
-asks. A dead session is exempt: reaping a corpse needs no key at all.
+a page. A browser tab reads it with `cat ~/.odoo-sheller/admin.key` and pastes
+it once when the UI asks. The desktop app reads the same file after `/health`
+and never asks. A dead session is exempt: reaping a corpse needs no key at all.
 `403` means the key is missing or wrong; `423` means commit is not granted for
 that session. See [docs/agent-guide.md](docs/agent-guide.md).
 

@@ -37,6 +37,32 @@ async function fail(message) {
 // The port is fixed, and fixed in one place: `daemon.rs`. Asking keeps this
 // page from becoming a second answer to the same question.
 let uiUrl = null;
+// Read from `~/.odoo-sheller/admin.key` after the daemon is up. Kept here, not
+// in the frame's localStorage: the frame is a third-party origin to WKWebView
+// and does not keep one. Empty means the paste prompt is still the way in.
+let nativeAdminKey = "";
+
+function injectAdminKey() {
+  if (!nativeAdminKey || !uiUrl || !frame.contentWindow) {
+    return;
+  }
+  frame.contentWindow.postMessage(
+    { type: "os-admin-key", key: nativeAdminKey },
+    new URL(uiUrl).origin,
+  );
+}
+
+function loadNativeAdminKey() {
+  invoke("read_admin_key")
+    .then((key) => {
+      nativeAdminKey = typeof key === "string" ? key : "";
+      injectAdminKey();
+    })
+    .catch((err) => {
+      nativeAdminKey = "";
+      console.error("admin key:", err);
+    });
+}
 
 function render(state) {
   if (state.phase === "error") {
@@ -58,6 +84,9 @@ function render(state) {
       }
       frame.hidden = false;
       splash.hidden = true;
+      // After `/health`: the daemon has already written admin.key. Asking
+      // sooner on first launch would find nothing and invent nothing useful.
+      loadNativeAdminKey();
     });
 
     return;
@@ -82,6 +111,15 @@ listen("reload-ui", () => {
   // cross-origin frame does not allow.
   if (uiUrl) {
     frame.setAttribute("src", uiUrl);
+  }
+});
+frame.addEventListener("load", injectAdminKey);
+window.addEventListener("message", (event) => {
+  if (!uiUrl || event.origin !== new URL(uiUrl).origin) {
+    return;
+  }
+  if (event.data && event.data.type === "os-ready") {
+    injectAdminKey();
   }
 });
 invoke("startup_state").then(render);

@@ -351,7 +351,7 @@ developer's machine is never in.
 
 | Situation | Expected |
 |---|---|
-| First launch, no `~/.odoo-sheller/` | Directory and `admin.key` created; app starts |
+| First launch, no `~/.odoo-sheller/` | Daemon creates the directory and `admin.key` before it listens; app starts and reads the file after `/health`. The app never writes that file |
 | `shellerd` already running | Attach; quitting the app leaves it alive |
 | Something else on 8765 | Clear error naming the port; nothing spawned |
 | Docker not running | Probe's error is visible in the UI |

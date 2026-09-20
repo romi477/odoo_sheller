@@ -4,9 +4,26 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from odoo_sheller.journal import Journal, journal_path
-from odoo_sheller.registry import Registry
+from odoo_sheller.registry import Registry, load_admin_key
 from odoo_sheller.session import SessionDead, SessionState
 from odoo_sheller.transport import Target
+
+
+def test_load_admin_key_creates_once(tmp_path):
+    path = tmp_path / "admin.key"
+    first = load_admin_key(path)
+    assert path.is_file()
+    assert path.read_text(encoding="utf-8").strip() == first
+    assert load_admin_key(path) == first
+
+
+def test_load_admin_key_empty_file_stays_empty(tmp_path):
+    """An empty file is not a missing one: creating a second key here would
+    disagree with a daemon that already read the empty string and substituted
+    a random value in memory."""
+    path = tmp_path / "admin.key"
+    path.write_text("\n", encoding="utf-8")
+    assert load_admin_key(path) == ""
 
 
 def test_subscribe_raises_for_unknown_session():

@@ -153,6 +153,12 @@ second view is a **watcher**: write keys live in the `localStorage` of whichever
 client opened the session, so another client can follow but not type until the
 session is handed over or the admin key is used.
 
+The window itself is the human admin, not a watcher. After `/health` it reads
+`~/.odoo-sheller/admin.key` — the daemon wrote that file before it listened —
+and posts the value into the frame. The frame has no Tauri IPC, so this is the
+same `postMessage` channel as the menu's screen steps, never an HTTP endpoint.
+The app does not create the file. A browser tab on the same port still pastes.
+
 Bundling the frontend later remains reasonable — with CORS and a single source
 of truth for the assets.
 
@@ -160,8 +166,9 @@ One consequence reaches into later stages: **the page served by the daemon has
 no Tauri IPC.** It is a remote origin as far as the WebView is concerned, so
 `invoke` is not there and no capability grants it. Anything that needs the
 native side — the "configure agents" action in the MCP stage, a terminal tab,
-an "open the log folder" affordance — belongs in the **application menu**, not
-in a button on the web UI. Only the app's own splash page can call into Rust.
+an "open the log folder" affordance, the admin key — belongs in the
+**application menu** or the shell page, not in a button on the web UI. Only the
+app's own splash page can call into Rust.
 
 ## Packaging the Python side
 
