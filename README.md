@@ -425,7 +425,8 @@ Every control below, with what it guarantees: [docs/ui-guide.md](docs/ui-guide.m
 |---|---|
 | **↻** (beside the title) | Re-runs `docker ps` and probes every container again. Turns while it works, until the last probe answers |
 | **re-probe** | Probes this container only — after a restart or a config change |
-| **Open session** | Expands the card's database picker. Disabled when the probe found no Odoo 19. A click on the card outside the picker collapses it again |
+| **Open session** | Expands the card's database picker and becomes **Start** in its own place, so the second click lands where the first did. Disabled when the probe found no Odoo 19. A click on the card outside the picker collapses it again |
+| **copy** (in the picker) | A two-sheet glyph at the picker's far edge. Puts the target on the clipboard as one line of JSON — container, database, Odoo version — to paste to an agent. Turns into a green check for a moment |
 | **Start** | Opens the session on the chosen database. While Odoo loads its registry the button spins, same as **New**, and the card shows the container's stderr as it arrives. Scroll back in the well and it holds position; a **Refresh** mid-start keeps the well |
 | **Close session** | Shown on a container that already has a session; closes it without leaving the screen. With several sessions on that container it reads **Close N sessions** and closes all of them — the card stands for the target, not for one session |
 
@@ -442,7 +443,7 @@ the full name and what the key does.
 | Key | What it does |
 |---|---|
 | **Grant commit** | Latch, only enabled while an agent owns the session. Amber when granted, cyan when not. Turning it on asks for confirmation naming the database; turning it off does not |
-| **Grant access** | Latch. Amber while an agent owns the session. Press to hand the session over (you keep watching); press again to take it back. OK copies `{"session_id","write_key"}` |
+| **Grant access** | Latch. Amber while an agent owns the session. Press to hand the session over (you keep watching); press again to take it back. The key is then shown once, with one button: **Copy** copies `{"session_id","write_key"}` and closes. There is no Cancel — by then the handover has happened, and dismissing would throw away the only copy of the key |
 | **Close** | Ends the session in order: the bootstrap leaves its loop, Odoo rolls back and closes the cursor, the process exits. If the process has not exited after ten seconds — a long command can hold it — the daemon escalates to a kill by itself |
 | **Kill** | `SIGKILL` now, no waiting and no Odoo teardown. Postgres rolls the transaction back on its own. The journal records `killed`, so an ordinary close stays distinguishable from one that had to be forced |
 | **Interrupt** | Enabled while busy. Sends `SIGINT` to the in-container pid, so the command ends as `KeyboardInterrupt`. The session and its namespace survive |
@@ -487,6 +488,7 @@ kill**.
 | **CELLS** fold dot | Collapses or expands every card at once |
 | Per-card fold dot, or the card header | Collapses one card to its header, and opens it again. Clicking anywhere on the header does it — the dot is the affordance, not the only target; **copy code**, **copy output** and **re-run** are exempt. Agent-authored cards start collapsed; yours start open. Remembered until reload |
 | **Copy code**, **Copy output**, **Re-run** | Per card. Re-run sends the same code as a new command |
+| `written/came back` | At the header's far end: lines of code over lines of output — stdout, the returned value, any traceback, the same three pieces **Copy output** takes. A trailing `+` means the daemon clipped it; a dash means the command is still running |
 
 One command at a time. A second one is refused, never queued. A command that
 exceeds its five-minute ceiling is interrupted, but keeps the session busy until

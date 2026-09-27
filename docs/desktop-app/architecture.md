@@ -293,6 +293,34 @@ at the bottom, from **Window → Show Terminal**, or with Ctrl+`, and resizable 
 its top edge. Attached to the window rather than floating beside it: the point
 is to reach the machine the session is running on without leaving the app.
 
+### The Window menu is the platform's, not only ours
+
+A custom `NSMenu` replaces the standard one whole, and naming a submenu
+"Window" does not make it *the* Window menu. AppKit fills that one itself —
+the list of open windows, Bring All to Front, and the Move & Resize items the
+system's own tiling shortcuts are bound to — but only for the submenu it has
+been handed, with `set_as_windows_menu_for_nsapp`. Without that call the app
+looked ordinary and fn+Control+arrow did nothing at all: the keys reached no
+menu item, because there was none.
+
+**Window → Compact Width** (Option+Cmd+C) is the one geometry the platform
+does not offer. Move & Resize does halves and quarters; this is narrower — 38%
+of the display's usable width, full height, against the left edge, and against
+the right one when pressed again on a window already parked left. It is a menu
+item rather than a button in the page's header because that header is the
+framed remote origin, which has no Tauri commands and must not be given any.
+
+The share is capped at what the page can use. `.app` in the daemon's
+stylesheet is `width: min(1180px, 100%)`, centred inside 24px of body padding
+and `.shell`'s 1px border, so 1230 CSS pixels is the whole of it; past that the
+window grows and the canvas does not. On a 4K display 38% overshoots by 229px
+of empty margin. `CANVAS_CSS_WIDTH` in `lib.rs` carries that number and
+`compact_frame` takes it as an argument, so the arithmetic stays testable
+without a display; `compact_window` multiplies it by the window's scale factor,
+because the cap is in CSS pixels and everything the window system reports is
+physical. The stylesheet and the constant are two files with one number between
+them, so a test in `tests/test_docs.py` reads both and fails if they drift.
+
 The frame asks for `/web?app=1`. A remote origin cannot be told anything else
 — there is no IPC across it and no stylesheet crosses it — and there is one
 thing it has to know: inside this window the `swagger` link is a dead end. It
@@ -391,6 +419,7 @@ odoo-sheller.app  (ad-hoc signed, hardened runtime, not notarized)
 │   ├── menu: About — our own sheet, version from the crate
 │   ├── menu: Settings — MCP and ssh: show what to paste, write nothing
 │   ├── menu: Show Terminal / New Terminal Tab / tab moves — events to the page
+│   ├── menu: Compact Width — a column against one edge, toggling sides
 │   └── exit: confirm with live sessions; kill our daemon, never a foreign one
 │
 ├── WKWebView

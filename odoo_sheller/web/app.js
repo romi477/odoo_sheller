@@ -221,6 +221,12 @@ function escapeHtml(value) {
 //
 // Drawn here, they behave the same in a browser and in the app, and cannot be
 // absent without being missed.
+// Who a handed-over session belongs to. It was a prompt whose default was
+// taken every time, and it is not a question this page can answer better
+// than a constant: the key goes to whoever is given it. It still reaches
+// the owner badge and the journal, so it is named rather than dropped.
+const AGENT_OWNER_LABEL = 'agent';
+
 let confirmParts = null;
 // One dialog element, so overlapping calls queue rather than throw:
 // `showModal()` on an already-open dialog is an InvalidStateError.
@@ -255,7 +261,7 @@ function confirmElements() {
   return confirmParts;
 }
 
-function ask(message, confirmLabel, {withCancel = true, value = null} = {}) {
+function ask(message, confirmLabel, {withCancel = true, value = null, readonly = false} = {}) {
   const run = () => new Promise((resolve) => {
     const {dialog, text, input, cancel, ok} = confirmElements();
     const prompting = value !== null;
@@ -264,6 +270,10 @@ function ask(message, confirmLabel, {withCancel = true, value = null} = {}) {
     cancel.hidden = !withCancel;
     input.hidden = !prompting;
     input.value = prompting ? value : '';
+    // Output, not a question: the field shows a value to take away rather
+    // than one to fill in. It is still an <input> because selecting it is
+    // what makes Cmd+C work when the clipboard API is refused.
+    input.readOnly = readonly;
     // The answer is settled by whoever gets there first, once. Waiting for the
     // `close` event alone was the whole failure: a WebView that does not
     // deliver it leaves this promise pending, the queue below never advances,
@@ -315,6 +325,12 @@ function ask(message, confirmLabel, {withCancel = true, value = null} = {}) {
     if (prompting) {
       input.focus();
       input.select();
+      if (readonly) {
+        // select() leaves the caret at the end, which scrolls a value longer
+        // than the field out of sight from the left. What identifies this one
+        // is at the front, so show the front.
+        input.scrollLeft = 0;
+      }
     } else if (withCancel) {
       cancel.focus();
     } else {
@@ -345,6 +361,18 @@ function noticeDialog(message) {
 function promptDialog(message, value = '', confirmLabel = 'OK') {
 
   return ask(message, confirmLabel, {value});
+}
+
+/// Show a value and put it on the clipboard. One button, because there is no
+/// answer to give: by the time this is called the thing it describes has
+/// already happened, and the value is the only copy there will ever be.
+///
+/// Esc closes a <dialog> on the platform's own terms and no markup takes that
+/// away, so Esc copies too. A clipboard that changes without being asked is a
+/// smaller surprise than a write key that is gone for good.
+async function copyDialog(message, value) {
+  await ask(message, 'Copy', {value, withCancel: false, readonly: true});
+  await copyText(value);
 }
 
 function confirmJournalExport(event) {
@@ -740,11 +768,23 @@ function buildContainerCard(name) {
   card.querySelector('.open').addEventListener('click', () => openPicker(name));
   card.querySelector('.reprobe').addEventListener('click', () => probeContainer(name));
   card.querySelector('.start').addEventListener('click', () => startSession(name));
+  card.querySelector('.copy-meta').addEventListener('click', (event) => {
+    // The picker closes on a card click, and this button lives inside it.
+    event.stopPropagation();
+    copyTarget(name);
+  });
   card.querySelector('.close-connected').addEventListener(
     'click', () => closeSessionsForTarget(name),
   );
   card.addEventListener('click', (event) => {
-    if (event.target.closest('.picker') || event.target.closest('.open')) {
+    // Start sits in the action column now, outside the picker, so this
+    // handler sees its click. Collapsing there would put Open session back in
+    // the same frame the busy Start was about to appear in.
+    if (
+      event.target.closest('.picker')
+      || event.target.closest('.open')
+      || event.target.closest('.start')
+    ) {
 
       return;
     }
@@ -872,6 +912,7 @@ function renderContainers() {
         well.replaceChildren();
       }
     }
+    syncPickerActions(card);
   });
 
   cards.forEach((card, name) => {
@@ -997,9 +1038,20 @@ async function probeContainer(name) {
   renderContainers();
 }
 
+/// Open session and Start are the same control at two moments, so only one
+/// of them is ever on the card. Driven by the picker rather than by whoever
+/// opened it: a render rebuilds nothing but reuses the card, and the card
+/// would otherwise keep whichever answer the last render left behind.
+function syncPickerActions(card) {
+  const picking = !card.querySelector('.picker').hidden;
+  card.querySelector('.open').hidden = picking;
+  card.querySelector('.start').hidden = !picking;
+}
+
 function closeAllPickers() {
-  document.querySelectorAll('#containers .picker').forEach((picker) => {
-    picker.hidden = true;
+  document.querySelectorAll('#containers .card').forEach((card) => {
+    card.querySelector('.picker').hidden = true;
+    syncPickerActions(card);
   });
 }
 
@@ -1030,6 +1082,42 @@ function fillPicker(card, container) {
   }
 }
 
+/// The target as an agent needs to be told it: which container, which
+/// database, and the Odoo version its idioms have to match. Typed by hand this
+/// is transcription, and a name like `integra_db_19_presta` is where that goes
+/// wrong. Everything else the probe found — image, status, config path — says
+/// nothing about how to work in the session, so it stays on the card.
+function copyTarget(name) {
+  const container = state.containers.find((item) => item.name === name);
+  const card = document.querySelector(`.card[data-container="${CSS.escape(name)}"]`);
+  if (!container || !card) {
+
+    return;
+  }
+  const select = card.querySelector('.databases');
+  const manual = card.querySelector('.database-manual');
+  // Read exactly the way startSession reads it, or the copy would name a
+  // database the Start button beside it would not have used.
+  const database = select.hidden ? manual.value.trim() : select.value;
+  copyText(JSON.stringify({
+    container: name,
+    database,
+    odoo_version: container.probe?.odoo_version || null,
+  }));
+  const button = card.querySelector('.copy-meta');
+  // A clipboard leaves no mark on the screen, so the glyph says it happened.
+  // Only the flag moves: both glyphs are in the markup and the stylesheet
+  // chooses, so nothing here can lose the icon.
+  button.dataset.flash = 'copied';
+  window.setTimeout(() => {
+    if (button.dataset.flash !== 'copied') {
+
+      return;
+    }
+    button.dataset.flash = '';
+  }, 900);
+}
+
 function openPicker(name) {
   const container = state.containers.find((item) => item.name === name);
   const card = document.querySelector(`.card[data-container="${CSS.escape(name)}"]`);
@@ -1039,6 +1127,7 @@ function openPicker(name) {
   }
   closeAllPickers();
   fillPicker(card, container);
+  syncPickerActions(card);
   const manual = card.querySelector('.database-manual');
   if (!manual.hidden) {
     manual.focus();
@@ -1998,6 +2087,9 @@ function feedSignature(id, record) {
       (cell.result.result || '').length,
       cell.result.error ? 1 : 0,
       cell.result.stdout_truncated ? 1 : 0,
+      // Read by resultHtml and by the line counts, so a change in it has to
+      // redraw. It was missing here before either of them needed it.
+      cell.result.result_truncated ? 1 : 0,
     ].join(',') : 'x',
   ].join(':'));
 
@@ -2092,6 +2184,7 @@ function renderFeed(feed, id, record) {
           <span class="action-sep" aria-hidden="true"></span>
           <button class="rerun" title="Run this code again as a new command.">re-run</button>
         </span>` : ''}
+        <span class="cell-lines" title="Lines written / lines that came back (stdout, the returned value, any traceback). A trailing + means the daemon clipped it — the journal has the rest.">${cellLines(cell)}</span>
       </header>
       ${body}
     `;
@@ -2118,6 +2211,39 @@ function renderFeed(feed, id, record) {
     }
     cards.append(element);
   });
+}
+
+/// Lines of text, with the trailing newline most output ends on not counted
+/// as another line. Nothing there is nothing, not one empty line.
+function lineCount(text) {
+  if (!text) {
+
+    return 0;
+  }
+  const body = String(text).replace(/\n+$/, '');
+
+  return body ? body.split('\n').length : 0;
+}
+
+/// `written / came back`, for the header of a folded cell.
+///
+/// The output side counts the same three pieces `copy output` puts on the
+/// clipboard — stdout, the returned value, a traceback — so the number
+/// describes exactly what that button would hand you. A stdout the daemon
+/// clipped gets a `+`: the journal has the rest, and a clipped count must not
+/// read as the whole of it.
+function cellLines(cell) {
+  const code = lineCount(cell.code);
+  if (!cell.result) {
+
+    return `${code}/–`;
+  }
+  const out = lineCount(cell.result.stdout)
+    + lineCount(cell.result.result)
+    + lineCount(cell.result.error?.traceback);
+  const clipped = cell.result.stdout_truncated || cell.result.result_truncated;
+
+  return `${code}/${out}${clipped ? '+' : ''}`;
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -2275,21 +2401,26 @@ async function handOver(id) {
 
     return;
   }
+  // Ownership moves on the request below, so this is the last place to say
+  // no — but only when there is something to lose. An empty session asks
+  // nothing and goes straight to the key.
   const pending = record.info.pending_commands || 0;
-  const warning = pending
-    ? `\n\n${pending} command(s) are uncommitted. They stay in the session and `
-      + 'become part of what the agent could commit. Roll back first if that is not '
-      + 'what you want.'
-    : '';
-  const label = await promptDialog(`Hand this session to which agent?${warning}`, 'claude');
-  if (!label) {
+  if (pending) {
+    const go = await confirmDialog(
+      `${pending} command(s) are uncommitted. They stay in the session and become `
+        + 'part of what the agent could commit. Roll back first if that is not what '
+        + 'you want.',
+      'Hand over',
+    );
+    if (!go) {
 
-    return;
+      return;
+    }
   }
   try {
     const result = await withAdminRetry(() => api.post(
       `/api/sessions/${id}/owner`,
-      {owner: {kind: 'agent', label}},
+      {owner: {kind: 'agent', label: AGENT_OWNER_LABEL}},
       authHeaders(id, {admin: true}),
     ));
     // The key can no longer type, but it still closes: giving work away is not
@@ -2300,13 +2431,10 @@ async function handOver(id) {
     record.info.allow_commit = result.allow_commit;
     renderSessions();
     const payload = JSON.stringify({session_id: id, write_key: result.write_key});
-    const accepted = await promptDialog(
-      'Give this to the agent — shown once, never again.\nOK copies session_id and write_key as JSON.',
+    await copyDialog(
+      'Give this to the agent — shown once, never again.',
       payload,
     );
-    if (accepted !== null) {
-      await copyText(payload);
-    }
   } catch (error) {
     noticeDialog(`Hand over failed: ${error.message}`);
   }

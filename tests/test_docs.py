@@ -6,6 +6,7 @@ reader would act on: what is guarded, and what tools exist.
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -331,3 +332,27 @@ def test_the_container_contract_matches_the_entrypoint():
         assert code in entrypoint
     assert "| 1 | No socket" in text
     assert "| 2 | The state directory does not exist" in text
+
+
+def test_the_compact_width_cap_matches_the_page_it_caps():
+    """`Window → Compact Width` stops where the page stops growing, and that
+    number lives in the daemon's stylesheet while the window that obeys it is
+    Rust. Nothing links them but this test: widen `.app` and the window would
+    go on sizing itself to the old canvas, leaving a margin nobody asked for.
+    """
+    css = (Path(__file__).resolve().parent.parent
+           / "odoo_sheller" / "web" / "style.css").read_text(encoding="utf-8")
+    canvas = re.search(r"\.app \{[^}]*?width: min\((\d+)px", css, re.DOTALL)
+    assert canvas is not None, "the canvas no longer declares a maximum width"
+    padding = re.search(r"^body \{[^}]*?\n  padding: (\d+)px;", css, re.DOTALL | re.MULTILINE)
+    assert padding is not None
+    border = re.search(r"^\.shell \{[^}]*?\n  border: (\d+)px", css, re.DOTALL | re.MULTILINE)
+    assert border is not None
+    wanted = int(canvas.group(1)) + 2 * int(padding.group(1)) + 2 * int(border.group(1))
+
+    lib = (DESKTOP / "src" / "lib.rs").read_text(encoding="utf-8")
+    declared = re.search(r"const CANVAS_CSS_WIDTH: f64 = ([^;]+);", lib)
+    assert declared is not None, "the window has no cap to compare"
+    assert abs(eval(declared.group(1).replace("_", "")) - wanted) < 0.5, (  # noqa: S307
+        f"the stylesheet says {wanted}px, lib.rs says {declared.group(1).strip()}"
+    )

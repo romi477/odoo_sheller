@@ -105,8 +105,11 @@ Tool descriptions are delivered whole (this server's longest is ~1 kB), so
 anything that belongs to one tool lives in its description rather than in the
 shared text.
 
-The topics: `sessions`, `ownership`, `commit`, `remote`, `limits`, `orm`,
-`code`, `log`, `records`, `modules`, `jobs`, `tests`, `watching`.
+The topics: `sessions`, `ownership`, `commit`, `remote_server`, `limits`,
+`orm`, `code`, `log`, `records`, `modules`, `jobs`, `tests`, `watching`.
+`remote` still answers as an alias for `remote_server`, so an agent that read
+the old name — or a transcript that recorded it — does not land on
+`no_such_topic`.
 
 In short, what the instructions and the topics between them say:
 
@@ -124,7 +127,25 @@ In short, what the instructions and the topics between them say:
   `queue_job__no_delay=True` on the environment context to run delayed
   methods inline.
 - Close a session with `os_close_session` when the work is finished and you
-  do not plan to continue. Leaving it open across many steps is fine.
+  do not plan to continue. Leaving it open across many steps of the *same*
+  work is fine; opening a second one for the next piece while the first is
+  still there is not. One at a time, and `os_list_sessions` reports what is
+  held under `yours`.
+- Editing the project's Python ends the session you have. The interpreter
+  imported those files when it started and nothing makes it read them again,
+  so the session keeps running the old code however the file on disk now
+  reads. Close it and open a new one. Data, views and schema are the
+  opposite case — an upgrade picks those up in place.
+- The transaction boundaries are tools and only tools: never `env.cr.commit()`
+  or `env.cr.rollback()` inside exec'd code. `os_commit` is `flush_all()`,
+  `cr.commit()`, `invalidate_all(flush=False)`; a bare `cr.commit()` skips
+  both halves, leaving `env` holding stale values, and draws no boundary in
+  the journal — so it is a write to a real database that the human watching
+  never sees. `env.cr.savepoint()` is the one that belongs in code: nested,
+  self-rolling-back, and it persists nothing.
+- A record with an XML ID is reached by it, not searched for:
+  `env.ref("base.module_integration")`, module and id joined by a dot, with
+  `raise_if_not_found=False` for an empty recordset instead of `ValueError`.
 - Work only in sessions you opened yourself or were explicitly handed. Never
   attach with a write key you weren't given.
 - Never touch `~/.odoo-sheller/` directly and never call the daemon's admin
@@ -144,8 +165,13 @@ In short, what the instructions and the topics between them say:
   and `button_immediate_install()` for a module that is not installed yet
   (dependencies come with it; an empty recordset means `update_list()` has
   not been run since the module appeared on disk).
-  Either commits by itself — a write the commit gate does not cover — so the
-  human is asked first, and never on a remote session. It is also how the
+  Either commits by itself — a write the commit gate does not cover — and
+  that is deliberately *not* a reason to ask permission: the agent changed
+  the code, so the database has to catch up, and an upgrade is the
+  consequence of its own edit rather than a decision to put to the human.
+  Agents were asking, every time, and the answer was always yes. The one
+  exception is a session running on someone else's instance, where access
+  was lent and the database was not: never there. It is also how the
   module's migration scripts run, which is usually the point: they are
   selected by `installed_version < script version <= manifest version`, so a
   database that already records the manifest's version redoes schema and data

@@ -13,7 +13,9 @@ use std::time::Duration;
 use daemon::{PortState, occupied_message, quit_message};
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, RunEvent, State, WindowEvent,
+};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use base64::Engine;
@@ -241,6 +243,102 @@ fn should_allow_exit(app: &AppHandle) -> bool {
     true
 }
 
+/// A window rectangle, in physical pixels, the way macOS reports both a
+/// display's usable area and a window's own frame.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Frame {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+/// How wide a compact window is, as a share of the display's usable width.
+/// Narrow enough that an editor beside it keeps a readable line length, wide
+/// enough that this UI's own cards do not start wrapping.
+const COMPACT_SHARE: f64 = 0.38;
+
+/// Past this the window grows but the page does not: `.app` in the daemon's
+/// stylesheet is `width: min(1180px, 100%)` and centred, inside 24px of body
+/// padding and the 1px border of `.shell` on each side. Everything wider is
+/// the window's own empty margin, which is what a share of a 4K display buys.
+/// In CSS pixels, so a display's scale factor applies before it is compared
+/// with anything the window system reports.
+const CANVAS_CSS_WIDTH: f64 = 1180.0 + 2.0 * 24.0 + 2.0 * 1.0;
+
+/// How far off an edge a window may sit and still count as parked there.
+/// `set_position` and `outer_position` disagree by a pixel or two on a scaled
+/// display, and an exact comparison would break the toggle on exactly the
+/// machines this is for.
+const EDGE_SLACK: i32 = 8;
+
+/// Where a compact window goes on a given display.
+///
+/// `cap` is the widest the page can actually use. A share of a big display
+/// overshoots it — on a 4K panel 38% is wider than the canvas will ever fill,
+/// and the difference is empty margin inside the window rather than anything
+/// to read.
+///
+/// The left edge first: whatever is read beside it — an editor, a browser —
+/// is the wider of the two and belongs where the eye starts. Called again on
+/// a window that is already parked there, it crosses to the right edge, so
+/// one menu item reaches both sides and there is no second one to remember.
+///
+/// Height is never a question: a compact window is full height, because the
+/// point is a column beside something else, not a smaller window.
+fn compact_frame(area: Frame, current: Frame, cap: u32) -> Frame {
+    let width = ((f64::from(area.width) * COMPACT_SHARE).round() as u32).min(cap);
+    let right = area.x + area.width as i32 - width as i32;
+    let parked_left = (current.x - area.x).abs() <= EDGE_SLACK
+        && (current.width as i32 - width as i32).abs() <= EDGE_SLACK;
+
+    Frame {
+        x: if parked_left { right } else { area.x },
+        y: area.y,
+        width,
+        height: area.height,
+    }
+}
+
+/// Put the window into a column against one edge of the display it is on.
+fn compact_window(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+
+        return;
+    };
+    // Nothing to resize inside a full-screen space, and the call would be
+    // swallowed without a word.
+    if window.is_fullscreen().unwrap_or(false) {
+        let _ = window.set_fullscreen(false);
+    }
+    let _ = window.unmaximize();
+    let Ok(Some(monitor)) = window.current_monitor() else {
+
+        return;
+    };
+    let work = monitor.work_area();
+    let area = Frame {
+        x: work.position.x,
+        y: work.position.y,
+        width: work.size.width,
+        height: work.size.height,
+    };
+    let (Ok(at), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+
+        return;
+    };
+    // The cap is a CSS measurement and the frame is in physical pixels, so it
+    // only means the same thing on a 1x display until the scale is applied.
+    let cap = (CANVAS_CSS_WIDTH * window.scale_factor().unwrap_or(1.0)).round() as u32;
+    let next = compact_frame(
+        area,
+        Frame { x: at.x, y: at.y, width: size.width, height: size.height },
+        cap,
+    );
+    let _ = window.set_size(PhysicalSize::new(next.width, next.height));
+    let _ = window.set_position(PhysicalPosition::new(next.x, next.y));
+}
+
 fn focus_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -404,6 +502,17 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         true,
         Some("Control+Command+ArrowRight"),
     )?;
+    // A column against one edge, for working beside an editor. macOS's own
+    // Move & Resize does halves and quarters; this is the narrower stop it
+    // does not offer, and it is here rather than in the page's header because
+    // that header is a framed remote origin with no Tauri commands at all.
+    let compact = MenuItem::with_id(
+        app,
+        "compact",
+        "Compact Width",
+        true,
+        Some("Alt+Command+C"),
+    )?;
     let window = Submenu::with_items(
         app,
         "Window",
@@ -411,6 +520,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         &[
             &PredefinedMenuItem::minimize(app, None)?,
             &PredefinedMenuItem::fullscreen(app, None)?,
+            &compact,
             &PredefinedMenuItem::separator(app)?,
             &terminal,
             &new_tab,
@@ -422,6 +532,14 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
     )?;
     let menu = Menu::with_items(app, &[&app_menu, &edit, &view, &window])?;
     app.set_menu(menu)?;
+    // Naming a submenu "Window" is not what makes it the Window menu. AppKit
+    // fills that one itself — the list of open windows, Bring All to Front,
+    // and the Move & Resize items the system's own tiling shortcuts are bound
+    // to — but only for the submenu it has been handed. Without this the
+    // custom menu replaced all of that with nothing, and fn+Control+arrow
+    // pressed in this app reached no menu item and did nothing at all.
+    #[cfg(target_os = "macos")]
+    window.set_as_windows_menu_for_nsapp()?;
 
     Ok(())
 }
@@ -535,6 +653,7 @@ pub fn run() {
                 "terminal-next" => tell_shell(app, "terminal-next"),
                 "terminal-taller" => tell_shell(app, "terminal-taller"),
                 "terminal-shorter" => tell_shell(app, "terminal-shorter"),
+                "compact" => compact_window(app),
                 // Reload the framed UI, not the shell: reloading the shell
                 // would take every terminal tab with it. With no daemon
                 // behind the frame there is nothing to reload, so it is a
@@ -586,4 +705,89 @@ pub fn run() {
             RunEvent::Reopen { .. } => focus_main(app),
             _ => {}
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SCREEN: Frame = Frame { x: 0, y: 25, width: 1920, height: 1055 };
+
+    // Wider than any display in these tests, so the share is what decides
+    // unless a test says otherwise.
+    const NO_CAP: u32 = 100_000;
+
+    #[test]
+    fn a_compact_window_takes_the_left_edge_and_the_full_height() {
+        let now = Frame { x: 320, y: 300, width: 1280, height: 800 };
+        let next = compact_frame(SCREEN, now, NO_CAP);
+        assert_eq!(next.x, 0);
+        assert_eq!(next.y, 25);
+        assert_eq!(next.height, 1055);
+        assert_eq!(next.width, 730); // 38% of 1920, rounded
+    }
+
+    #[test]
+    fn a_second_call_sends_it_to_the_other_edge() {
+        let left = compact_frame(SCREEN, Frame { x: 320, y: 300, width: 1280, height: 800 }, NO_CAP);
+        let right = compact_frame(SCREEN, left, NO_CAP);
+        assert_eq!(right.width, left.width);
+        assert_eq!(right.x, 1920 - left.width as i32);
+        // And back, so one menu item reaches both sides.
+        assert_eq!(compact_frame(SCREEN, right, NO_CAP), left);
+    }
+
+    #[test]
+    fn a_window_that_is_merely_near_the_edge_is_not_treated_as_compact() {
+        // Dragged roughly into place by hand: the point of the item is to
+        // make that exact, not to bounce it across the screen.
+        let sloppy = Frame { x: 4, y: 40, width: 1100, height: 900 };
+        assert_eq!(compact_frame(SCREEN, sloppy, NO_CAP).x, 0);
+    }
+
+    #[test]
+    fn a_few_pixels_of_drift_still_counts_as_already_compact() {
+        // set_position and outer_position disagree by a pixel or two on a
+        // scaled display; an exact comparison would break the toggle there.
+        let left = compact_frame(SCREEN, Frame { x: 0, y: 25, width: 1280, height: 800 }, NO_CAP);
+        let drifted = Frame { x: left.x + 2, y: left.y, width: left.width - 1, height: left.height };
+        assert!(compact_frame(SCREEN, drifted, NO_CAP).x > 0, "should have gone right");
+    }
+
+    #[test]
+    fn a_wide_display_stops_at_the_width_the_page_can_use() {
+        // 38% of a 4K display is more than the page's canvas will ever fill,
+        // so the rest of it would be the window's own empty margins.
+        let uhd = Frame { x: 0, y: 25, width: 3840, height: 2135 };
+        let next = compact_frame(uhd, Frame { x: 900, y: 300, width: 1600, height: 900 }, 1230);
+        assert_eq!(next.width, 1230, "38% would have been 1459");
+        assert_eq!(next.x, 0);
+        assert_eq!(next.height, 2135, "the cap is on width alone");
+    }
+
+    #[test]
+    fn a_narrow_display_is_still_decided_by_the_share() {
+        let next = compact_frame(SCREEN, Frame { x: 320, y: 0, width: 1280, height: 800 }, 1230);
+        assert_eq!(next.width, 730, "38% of 1920 is under the cap");
+    }
+
+    #[test]
+    fn the_other_edge_is_measured_from_the_capped_width() {
+        let uhd = Frame { x: 0, y: 25, width: 3840, height: 2135 };
+        let left = compact_frame(uhd, Frame { x: 900, y: 300, width: 1600, height: 900 }, 1230);
+        let right = compact_frame(uhd, left, 1230);
+        assert_eq!(right.x, 3840 - 1230, "flush right, not 38% from the left");
+        assert_eq!(compact_frame(uhd, right, 1230), left);
+    }
+
+    #[test]
+    fn a_second_display_is_measured_by_its_own_work_area() {
+        // work_area positions are global, so an external display to the right
+        // of the built-in one starts at a non-zero x.
+        let external = Frame { x: 1920, y: 0, width: 2560, height: 1440 };
+        let next = compact_frame(external, Frame { x: 2000, y: 100, width: 1280, height: 800 }, NO_CAP);
+        assert_eq!(next.x, 1920);
+        assert_eq!(next.width, 973); // 38% of 2560, rounded
+        assert_eq!(next.height, 1440);
+    }
 }

@@ -75,42 +75,44 @@ MAX_LISTING = 400
 MAX_RESULT = 2000
 
 INSTRUCTIONS = """\
-odoo-sheller runs Python inside a live Odoo shell. `env` and `self` are Odoo's
-own namespace and variables persist between commands: a session is a
-workspace, not a series of scripts.
+odoo-sheller runs Python in a live Odoo shell. `env` and `self` are Odoo's
+own, and variables persist between commands: a session is a workspace, not a
+series of scripts.
 
-Hosts deliver only the first 2048 characters of this text. The rest is behind
-os_help(topic) — one cheap call, and cheaper than guessing:
+Hosts deliver only the first 2048 characters of this. The rest is behind
+os_help(topic), one cheap call:
 
-  sessions   opening, adopting, death, closing
-  ownership  handover, whose session it is
-  commit     the grant ritual
-  remote     an odoo.sh build, and production
-  limits     what never to attempt
-  orm        idioms instead of Python loops
-  code       which override actually runs
-  log        what Odoo logged, and where it is
-  records    reading a record whole
-  modules    installing, upgrading, migrations
-  jobs       with_delay, run inline
-  tests      running one, reading the outcome
-  watching   the human sees this live
+  sessions       opening, closing, death, one at a time
+  ownership      handover, whose session it is
+  commit         the grant ritual
+  remote_server  an odoo.sh build, and production
+  limits         what never to attempt
+  orm            idioms instead of Python loops
+  code           which override actually runs
+  log            what Odoo logged
+  records        reading a record whole
+  modules        installing, upgrading, migrations
+  jobs           with_delay, run inline
+  tests          running one, reading the outcome
+  watching       the human watches
 
-Read the topic before working around something. These rules arrive whatever a
-host truncates, and none of them are negotiable:
+Read the topic before working around something. These rules survive
+truncation and are not negotiable:
 
 - One command at a time per session; a second is `session_busy`, never
-  queued. Wait for it, or stop it with os_interrupt.
-- Rollback is the default. Nothing persists until a commit, and close, kill
-  or process death discard it. End experiments with os_rollback.
+  queued. Wait, or stop it with os_interrupt.
+- One session at a time: os_close_session the one you hold before opening
+  another. After editing project Python open a fresh one — the running one
+  imported the old code.
+- Rollback is the default. Nothing persists until a commit; close, kill or
+  death discard it. End experiments with os_rollback.
 - Commit is a right the human grants. On `commit_not_allowed`: stop, say
-  plainly what you want to write and why, then poll os_session until
-  allow_commit is true. Do not spin on os_commit and do not ask in chat —
-  os_session is how you know. `commit_forbidden` is never granted: read what
-  you came for and roll back.
-- Work only in a session you opened or were handed. `not_owner` means ask for
-  a handover, not a second session behind the human's back; never attach with
-  a write key you were not given.
+  what you want to write and why, then poll os_session until allow_commit
+  is true, not os_commit. `commit_forbidden` is never granted: read what
+  you came for and roll back. Never env.cr.commit() or env.cr.rollback()
+  in code: each has a tool.
+- Work only in a session you opened or were handed. `not_owner` means ask
+  for a handover, not a second session; never use a key you were not given.
 - Never touch ~/.odoo-sheller/ and never call the daemon's admin endpoints.
 - Read Odoo source with os_source, never with docker exec: os_help('code').
 """
@@ -139,10 +141,21 @@ one tool a dead session still answers: it returns the transcript, and says so in
 over.
 
 A session may stay open for as long as you have more steps to run in it —
-that is what a workspace is. When the work is finished and you do not plan
-to continue, close it with os_close_session. An idle session still holds a
-process inside the container. Closing discards uncommitted work, the same
-as rollback.
+that is what a workspace is. But hold one at a time: when you move on to the
+next piece of work, close the one you have with os_close_session before
+opening another. An idle session still holds a process inside the container,
+and a pile of them is the usual way this tool is left in a mess.
+os_list_sessions shows what you are holding under `yours`; keep that list at
+one. Closing discards uncommitted work, the same as rollback.
+
+Editing the project's Python is the other reason to close. The interpreter
+imported those files when the session started, and nothing makes it read them
+again — not an upgrade, not a rollback, not a new command. A session that was
+already open when you changed a `.py` is running the old code whatever the
+file on disk now says, so every result it gives you is about code that no
+longer exists. Close it and open a new one. Data, views and schema are the
+opposite case: those an upgrade does pick up, without a new session —
+os_help('modules').
 """,
     "ownership": """\
 ## Ownership
@@ -197,9 +210,29 @@ Say whose work is in the transaction and what you are about to write, then
 call os_commit(include_inherited=True) — or os_rollback to discard all of it.
 Any commit or rollback clears the count; after that the transaction is yours
 alone.
+
+Both boundaries are tools, and only tools. Never write `env.cr.commit()` or
+`env.cr.rollback()` in code you hand to os_exec. os_commit is not a wrapper
+around `cr.commit()`: it is `flush_all()`, then `cr.commit()`, then
+`invalidate_all(flush=False)`, and os_rollback is `invalidate_all(flush=False)`
+then `cr.rollback()` — the order a discard needs. A bare `env.cr.commit()`
+skips both halves: it ends the transaction and leaves `env` holding values
+that are now stale, so what you read afterwards in that session can be wrong
+in a way nothing announces. It is invisible, too. The journal records a
+boundary when a tool draws one, so a commit buried in exec'd code is a write
+to a real database that the human watching never sees happen.
+
+What is fine inside code is `env.cr.savepoint()` — a nested block that rolls
+itself back if the body raises and leaves the outer transaction untouched:
+
+    with env.cr.savepoint():
+        risky.write({"state": "done"})
+
+That is a savepoint, not a commit: it persists nothing on its own, and
+os_commit remains the only thing in this tool that writes.
 """,
-    "remote": """\
-## Sessions on someone else's Odoo
+    "remote_server": """\
+## Connecting to a remote Odoo server
 
 A human may hand you a session that runs on a remote instance rather than a
 local container — an odoo.sh build, say. You cannot open one yourself: no tool
@@ -256,6 +289,17 @@ filtering in Python: `env['res.partner'].search([('is_company', '=', True)])`
 reads and returns only what matches. `search_count(domain)` answers "how
 many" without materializing any records at all — reach for it over
 `len(records.search(domain))` whenever the records themselves are not needed.
+
+A record that has an XML ID is fetched by that ID rather than searched for.
+`env.ref` takes the module and the ID joined by a dot:
+
+    env.ref("base.module_integration")          # the `integration` module
+    env.ref(f"{module}.{xml_id}")               # when you are building one
+
+It raises `ValueError` when nothing is there; pass `raise_if_not_found=False`
+for an empty recordset instead. Prefer it over `search([('name', '=', ...)])`
+whenever the XML ID is known — a name is data and can be changed by anyone,
+while an XML ID is the identity the module itself declared.
 
 Recordsets support the usual set operations directly — `|` union, `&`
 intersection, `-` difference, `in` membership, `<=` / `<` / `>=` / `>` for
@@ -417,10 +461,18 @@ loader has never seen that module: call `Module.update_list()` first — it
 scans the addons paths for manifests — then search again.
 
 Either one commits on its own — it has to, to rebuild the registry — so it is
-a write the commit gate does not cover: ask the human first, the same way you
-would before os_commit, and never call either on a session that runs on
-someone else's instance. Modules that depend on the one you name are upgraded with
-it, and installing one installs whatever it depends on.
+a write the commit gate does not cover. That is not a reason to ask
+permission. You changed the code; the database has to catch up. An upgrade is
+the consequence of your own edit, not a decision the human has to weigh, and
+so is installing a module your work needs or running a migration script. Do
+not ask, and do not wait for an answer: say what you are upgrading and run
+it.
+
+The one place this does not apply is a session running on someone else's
+instance — os_session reports it as `kind` — where you were lent access, not
+given the database. Never call either one there. Modules that depend on the
+one you name are upgraded with it, and installing one installs whatever it
+depends on.
 
 This is how the module's migration scripts run, which is usually the point. A
 script runs only if its version is above what `ir.module.module.latest_version`
@@ -428,8 +480,8 @@ records and no higher than the manifest's, so a database already at the
 manifest version redoes schema and data but runs no script.
 
 Edited Python is not picked up: the process imported those files at startup
-and an upgrade does not re-import them. For a change in a `.py`, open a new
-session.
+and an upgrade does not re-import them. For a change in a `.py`, close this
+session and open a new one — os_help('sessions').
 """,
     "jobs": """\
 ## Delayed jobs
@@ -502,6 +554,11 @@ prefer small steps over one large opaque script, and say what you are doing when
 it is not obvious from the code.
 """,
 }
+
+# A topic that was renamed still answers to what it was called: an agent that
+# read the old name once, or a transcript that recorded it, must not land on
+# no_such_topic. Kept out of HELP itself so os_help() lists each topic once.
+HELP_ALIASES = {"remote": "remote_server"}
 
 
 mcp = MCPServer("odoo-sheller", instructions=INSTRUCTIONS)
@@ -1012,8 +1069,8 @@ def _source_snippet(path, model, method, first, last, module=None) -> str:
         "The parts of this server's instructions a host did not deliver. "
         "Hosts cut server instructions at 2048 characters, which is a small "
         "fraction of what there is to say, so the rest is here by topic: "
-        "sessions, ownership, commit, remote, limits, orm, code, log, "
-        "records, modules, jobs, tests, watching. Call with no topic for the "
+        "sessions, ownership, commit, remote_server, limits, orm, code, "
+        "log, records, modules, jobs, tests, watching. Call with no topic for the "
         "list. Read-only, no session, no side effects — cheaper than working "
         "around a rule you were never shown."
     ),
@@ -1027,6 +1084,7 @@ async def os_help(topic: str | None = None) -> Any:
             "instructions_truncated_at": INSTRUCTION_CAP,
             "recovery": "call os_help(topic) for one of these",
         }
+    topic = HELP_ALIASES.get(topic, topic)
     text = HELP.get(topic)
     if text is None:
 

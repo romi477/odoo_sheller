@@ -5,6 +5,150 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.8.0] — 2026-09-27
+
+Less to retype, and less to get wrong.
+
+Nothing here changes the API or the wire protocol. What changed is the number
+of small things a person or an agent had to do by hand, or had to know without
+being told: a target retyped into a prompt, a trip from one corner of a card to
+the other, a window that would not tile, a script whose size was invisible
+until it was opened, and four rules agents broke because the instructions left
+them to be inferred.
+
+### The agent instructions say what agents kept getting wrong
+
+Five things that agents did wrong in practice, each now stated where the
+mistake happens rather than left to be inferred.
+
+A session that was open before its project's Python changed is running the
+old code, and nothing in it ever re-reads the file: not an upgrade, not a
+rollback, not a new command. Close it and open a new one. And hold one
+session at a time — a new piece of work is a reason to close the old session,
+not a reason to open a second one beside it. Both rules are in the delivered
+instructions rather than only in `os_help('sessions')`, because a rule that
+has to be fetched cannot stop the mistake that keeps it from being fetched.
+
+`env.cr.commit()` and `env.cr.rollback()` are now refused as guidance
+outright. `os_commit` is `flush_all()`, `cr.commit()`,
+`invalidate_all(flush=False)`; a bare `cr.commit()` in exec'd code skips both
+halves, leaves `env` holding stale values, and draws no boundary in the
+journal — a write to a real database the watching human never sees happen.
+`env.cr.savepoint()` is the transaction primitive that does belong in code.
+
+Upgrading, installing or migrating a module locally no longer asks the human
+first. The agent changed the code, so the database has to catch up: the
+upgrade is the consequence of its own edit, not a decision to put to someone.
+The gate stays exactly where it was earned — a session running on someone
+else's instance, where access was lent and the database was not.
+
+`os_help('orm')` gains `env.ref`, and the `remote` topic is now
+`remote_server`, since the bare word read as a way of working rather than as
+someone else's machine. `remote` still answers, as an alias.
+
+### The write key is shown with one button
+
+Handing a session to an agent shows the write key once and never again. The
+dialog that showed it had Cancel and OK — but by then the handover had already
+happened: ownership moved on the request above it, and the dialog only
+displayed the result. Cancel undid nothing. It threw away the only copy of the
+key, leaving a session handed to an agent it could no longer be given to, with
+Take back and a second handover as the way out.
+
+There is no "no" to give, so there is one button. `Copy` copies and closes.
+Esc copies too — it closes a `<dialog>` on the platform's own terms and no
+markup takes that away, and a clipboard that changes unasked is a smaller
+surprise than a key that is gone for good. The field is read-only and
+pre-selected, scrolled to the front where the session id is, so Cmd+C still
+works where the clipboard API is refused.
+
+A handover no longer asks who it is for, either. The prompt defaulted to
+`claude` and the default was taken every time; the label is now the constant
+`agent`, which is what the owner badge and the journal record. What that
+dialog also carried — the warning that uncommitted commands stay in the
+session and become part of what the agent could commit — is kept, as a
+confirm rather than a field to type in, and only when there is something
+uncommitted to warn about. So the ordinary handover is one click and one
+dialog: the key.
+
+### A target you can hand over without typing it
+
+The container card's picker gains a `copy` at the far edge, opposite `Start`.
+It puts the target on the clipboard as one line of JSON — container, database
+and Odoo version — which is what an agent has to be told before it can work:
+where to run, against what, and which version's idioms apply. The rest of what
+the probe found says nothing about that and stays on the card.
+
+The database is read exactly the way `Start` reads it, so the copy can never
+name one that clicking Start would not have used.
+
+### The desktop app gets its Window menu back
+
+macOS window tiling did nothing in this app — fn+Control+arrow, the halves and
+quarters every other window obeys — and it was not because the app is a
+WebView. The custom menu replaces the standard one whole, and naming a submenu
+"Window" does not make it the Window menu: AppKit fills that one itself, with
+the window list, Bring All to Front and the Move & Resize items those
+shortcuts are bound to, but only for the submenu handed to it. The app never
+handed it over, so the keys reached no menu item. One call,
+`set_as_windows_menu_for_nsapp`, and all of it is there.
+
+**Window → Compact Width** (Option+Cmd+C) adds the one geometry macOS does not
+offer: 38% of the display's usable width, full height, against the left edge —
+a column to work in beside an editor. Pressed again on a window already parked
+there it crosses to the right edge, so one item reaches both sides. It is a
+menu item and not a button in the page's header because that header is the
+framed daemon UI, a remote origin that has no Tauri commands and is not going
+to be given any.
+
+A share of a display stops meaning anything once it passes what the page can
+fill, so it is capped at the canvas: `.app` is `width: min(1180px, 100%)` and
+centred, inside the body's 24px and the 1px border of `.shell`. On a 4K panel
+38% is 1459px and the last 229 of them were the window's own empty margin —
+the window now stops at 1230, measured in CSS pixels so the display's scale
+factor applies. A test reads both the stylesheet and the Rust constant, since
+nothing else ties them together.
+
+### A container card you do not have to cross
+
+**Open session** sat in the card's action column and **Start** at the other end
+of the row below it, so opening a session was a trip from one corner to the
+other. They are one control now: clicking **Open session** turns it into
+**Start** in the same place, and the second click lands where the first did.
+What stays below is the target rather than an action — which database, and the
+**copy** beside it — a faint two-sheet glyph rather than a word, since a word
+in that corner read as a third key beside **Start** and **probe**. It turns
+into a green check for the moment after a copy. Both glyphs ship in the markup
+and the stylesheet picks one, so nothing can throw the icon away by rewriting
+the button's text.
+
+The card also stopped stacking itself on a narrow desktop window. Two
+`width: 100%` rules under the 760px breakpoint forced the name onto its own
+line and the database select onto another, whether or not the room was short.
+At 684px — the width **Compact Width** gives — the row needs 241 of the 626 it
+has. Those two rules now wait for 520px, an actual phone; wrapping itself stays
+where it was, since it costs nothing until something genuinely overflows and a
+long container name should push the keys down.
+
+### How big was that script, and how much came back
+
+Every cell header now ends with two numbers — lines of code over lines of
+output. The output side counts the three pieces **copy output** puts on the
+clipboard: stdout, the returned value, and any traceback. A trailing `+` means
+the daemon clipped it, so a shortened count cannot read as the whole; a command
+still running shows a dash rather than a zero.
+
+Cells an agent wrote arrive folded, which is exactly when this matters: the
+size of a script was otherwise invisible until you opened it. The figures are
+tabular, so a column of folded cells lines up and can be compared without being
+read one by one.
+
+Redrawing the feed is gated on a signature of what each cell shows, and that
+signature was missing `result_truncated` — which `resultHtml` had been reading
+all along. Added, so a change in either truncation flag redraws.
+
 ## [1.7.0] — 2026-09-20
 
 A daemon you do not have to install.
@@ -1007,7 +1151,8 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
-[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/romi477/odoo_sheller/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/romi477/odoo_sheller/compare/v1.6.4...v1.7.0
 [1.6.4]: https://github.com/romi477/odoo_sheller/compare/v1.6.3...v1.6.4
 [1.6.3]: https://github.com/romi477/odoo_sheller/compare/v1.6.2...v1.6.3

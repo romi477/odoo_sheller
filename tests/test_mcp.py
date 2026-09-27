@@ -1741,3 +1741,85 @@ def test_an_explicit_url_wins_over_the_port(monkeypatch):
     monkeypatch.setenv("ODOO_SHELLER_URL", "http://10.0.0.2:8765")
     monkeypatch.setenv("ODOO_SHELLER_PORT", "9123")
     assert server.daemon_url() == "http://10.0.0.2:8765"
+
+
+# --- the guidance an agent kept getting wrong in practice ------------------
+#
+# Every test below records a mistake that was actually observed: a stale
+# session after an edit, a pile of sessions nobody closed, a bare
+# `env.cr.commit()` in the middle of exec'd code, and a permission request
+# for an upgrade the agent's own edit had made necessary.
+
+
+def test_the_remote_topic_says_what_it_is_about():
+    """`remote` alone reads as a mode of working, not as a machine. An agent
+    that never opens the topic never learns it is about someone else's Odoo."""
+    assert "remote_server" in server.HELP
+    assert "remote_server" in server.INSTRUCTIONS
+    assert "remote" not in server.HELP, "the bare name is an alias, not a topic"
+
+
+async def test_the_old_remote_topic_name_still_answers():
+    """Renaming a topic must not strand an agent that read the old name."""
+    out = await server.os_help("remote")
+    assert out["topic"] == "remote_server"
+    assert "odoo.sh" in out["text"]
+
+
+async def test_an_alias_is_not_offered_as_a_topic_of_its_own():
+    out = await server.os_help()
+    assert "remote" not in out["topics"]
+    assert "remote_server" in out["topics"]
+
+
+def test_a_session_is_told_to_close_before_the_next_one_opens():
+    """Observed: an agent opened a session per task and closed none of them,
+    each one holding a process inside the container."""
+    text = server.INSTRUCTIONS + server.HELP["sessions"]
+    assert "os_close_session" in text
+    assert "os_list_sessions" in server.HELP["sessions"]
+    # The rule has to survive truncation: this is where the leak happens.
+    assert "os_close_session" in server.INSTRUCTIONS
+
+
+def test_the_sessions_topic_says_edited_python_needs_a_new_session():
+    """The interpreter imported the project's .py at startup. Nothing in a
+    live session re-reads them — not an upgrade, not a rollback."""
+    sessions = server.HELP["sessions"]
+    assert "re-import" in sessions or "imported" in sessions
+    assert "new session" in sessions
+
+
+def test_the_commit_topic_forbids_a_transaction_boundary_inside_code():
+    """A bare cr.commit() ends the transaction and leaves `env` holding stale
+    values, and it happens where the journal records no boundary at all."""
+    commit = server.HELP["commit"]
+    assert "env.cr.commit()" in commit
+    assert "env.cr.rollback()" in commit
+    assert "invalidate_all" in commit, "say why, not just that it is banned"
+    # The one transaction primitive that is fine inside exec'd code.
+    assert "env.cr.savepoint()" in commit
+
+
+def test_the_delivered_rules_carry_the_cr_commit_ban():
+    """An agent that never calls os_help still must not write one."""
+    assert "env.cr.commit()" in server.INSTRUCTIONS
+
+
+def test_a_local_module_upgrade_is_not_asked_for():
+    """You changed the code; the database has to catch up. Asking permission
+    for the consequence of your own edit is noise, not safety."""
+    # The topic is hard-wrapped prose, so a phrase that reads as one line here
+    # may hold a newline there. Compare on the words, not on the wrapping.
+    modules = " ".join(server.HELP["modules"].split())
+    assert "ask the human first" not in modules
+    assert "Do not ask" in modules
+    # The one place it still does not apply.
+    assert "someone else's instance" in modules
+
+
+def test_the_orm_topic_resolves_an_xml_id():
+    orm = server.HELP["orm"]
+    assert "env.ref(" in orm
+    assert "base.module_integration" in orm
+    assert "raise_if_not_found=False" in orm

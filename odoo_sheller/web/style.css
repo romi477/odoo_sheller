@@ -579,6 +579,51 @@ button.odoosh-add {
   border-top: 1px solid var(--border);
 }
 
+/* Pushed to the far edge of the picker row, away from Start: one is the
+   thing you do here, the other is a note you take with you. Faint until
+   wanted — a framed word there read as a third verb beside Start and probe,
+   and this row holds no verbs. */
+.copy-meta {
+  margin-left: auto;
+  align-self: center;
+  border: 0;
+  padding: 0;
+  color: var(--muted);
+  line-height: 0;
+  background: transparent;
+  opacity: 0.55;
+}
+
+.copy-meta svg {
+  display: block;
+}
+
+.copy-meta .copy-done {
+  display: none;
+}
+
+.copy-meta[data-flash='copied'] .copy-idle {
+  display: none;
+}
+
+.copy-meta[data-flash='copied'] .copy-done {
+  display: block;
+}
+
+.copy-meta:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--cyan);
+  opacity: 1;
+}
+
+/* After the hover rule, and matching its specificity: the click that copies
+   leaves the pointer on the button, so a plainer selector here would lose and
+   the confirmation would never be green. */
+.copy-meta[data-flash='copied']:not(:disabled) {
+  color: var(--green);
+  opacity: 1;
+}
+
 .startup-log {
   box-sizing: border-box;
   min-height: calc(12 * 1.35em + 16px);
@@ -1395,6 +1440,21 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
   color: var(--amber);
 }
 
+/* Written over came back, in the header's far corner. Tabular figures so a
+   column of folded cells lines up and the sizes can be compared at a glance
+   rather than read one by one. */
+.cell-lines {
+  color: var(--muted-low);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Watching someone else's session draws no verbs, so nothing else is pushing
+   this to the right. */
+.cell-head:not(:has(.cell-actions)) .cell-lines {
+  margin-left: auto;
+}
+
 /* The divider the header tabs use, at this row's size: four verbs in a line
    read as one word without it. */
 .action-sep {
@@ -1903,10 +1963,6 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
     flex-wrap: wrap;
   }
 
-  .identity {
-    width: 100%;
-  }
-
   .session-keys {
     width: 100%;
     height: calc(2 * 1.55rem);
@@ -1919,11 +1975,6 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
     flex-wrap: wrap;
   }
 
-  .picker select,
-  .picker input {
-    width: 100%;
-  }
-
   .journal-row,
   .journal-columns {
     grid-template-columns: 10.5rem 3.6rem 7.2rem 6.2rem auto 1.4rem;
@@ -1934,6 +1985,23 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
      there is no column for a header to name. */
   .journal-columns {
     display: none;
+  }
+}
+
+/* An actual phone, which a narrow desktop column is not. 760px is where the
+   page's chrome gives up its margins; these two rules *force* a card to stack
+   whether or not it needs to, and at 684px — the desktop app's compact width —
+   the row needs 241px of the 626 it has. So they wait until the width is
+   really gone: below this a card is 464px wide inside its padding, which is
+   still enough for a long container name beside its buttons. */
+@media (max-width: 520px) {
+  .identity {
+    width: 100%;
+  }
+
+  .picker select,
+  .picker input {
+    width: 100%;
   }
 }
 
@@ -2099,6 +2167,15 @@ dialog.confirm::backdrop {
   border-radius: 7px;
   background: var(--background);
   color: var(--text);
+}
+
+/* A value to carry off, not one to type: sunken rather than framed, so the
+   field does not invite an edit it would refuse. */
+.confirm-input[readonly] {
+  border-color: var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  cursor: default;
 }
 
 .confirm-actions {

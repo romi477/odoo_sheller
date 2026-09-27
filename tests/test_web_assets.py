@@ -174,7 +174,7 @@ def test_abandoning_the_database_picker_collapses_the_card(app_js):
     assert "function closeAllPickers(" in app_js
     closer = re.search(r"function closeAllPickers\(.*?\n\}", app_js, re.DOTALL)
     assert closer is not None
-    assert "picker.hidden = true" in closer.group(0)
+    assert ".hidden = true" in closer.group(0)
     opener = re.search(r"function openPicker\(.*?\n\}", app_js, re.DOTALL)
     assert opener is not None
     assert "closeAllPickers(" in opener.group(0)
@@ -184,6 +184,11 @@ def test_abandoning_the_database_picker_collapses_the_card(app_js):
     body = build.group(0)
     assert "closest('.picker')" in body
     assert "closest('.open')" in body
+    # Start left the picker for the action column, so the card's own click
+    # handler now sees it. Without this the click that opens a session also
+    # collapses the picker, and the busy Start it was about to show is
+    # swapped back to Open session in the same frame.
+    assert "closest('.start')" in body
     assert "closeAllPickers(" in body
 
 
@@ -1529,8 +1534,9 @@ def test_a_handover_keeps_a_close_only_key(app_js):
     assert "JSON.stringify" in body.group(0)
     assert "session_id" in body.group(0)
     assert "write_key" in body.group(0)
-    assert "copyText" in body.group(0)
-    assert "accepted !== null" in body.group(0)
+    # copyDialog is what copies now — one button, and no answer to lose the
+    # key on. That it reaches copyText is its own test.
+    assert "copyDialog" in body.group(0)
 
     closer = re.search(r"function closeKeyFor\(.*?\n\}", app_js, re.DOTALL)
     assert closer is not None
@@ -2335,3 +2341,276 @@ def test_a_daemon_that_lost_its_sessions_does_not_leave_ghost_tabs(app_js):
     assert reattach is not None
     body = reattach.group(0)
     assert "forgetSession(" in body, "sessions the daemon does not list are gone"
+
+
+# --- the write key is shown once, so the dialog that shows it has no "no" ---
+
+
+def test_the_write_key_dialog_offers_one_button(app_js):
+    """The handover is already done by the time the key is shown: ownership
+    moved on the POST above it. Cancel there did not undo anything — it threw
+    away the only copy of a key that is never shown again, leaving a session
+    handed to an agent it can no longer be given to."""
+    handover = re.search(
+        r"const payload = JSON\.stringify.*?\n\}\n", app_js, re.DOTALL
+    )
+    assert handover is not None
+    body = handover.group(0)
+    assert "copyDialog(" in body, "one button, and it copies"
+    assert "promptDialog(" not in body, "the key is output, not something to type"
+    assert "accepted" not in body, "there is no answer to branch on any more"
+    assert "OK copies" not in body, "the old label described two buttons"
+
+
+def test_copy_dialog_copies_however_it_is_dismissed(app_js):
+    """Esc closes a <dialog> on the platform's own terms, and no button can
+    take that away. Since there is no "no", Esc copies too — otherwise the
+    trap is exactly where it was, just without a button on it."""
+    copy_dialog = re.search(
+        r"function copyDialog\(.*?\n\}\n", app_js, re.DOTALL
+    )
+    assert copy_dialog is not None
+    body = copy_dialog.group(0)
+    assert "copyText(" in body
+    assert "withCancel: false" in body
+    assert "readonly: true" in body
+
+
+def test_a_readonly_dialog_field_cannot_be_typed_into_and_is_preselected(app_js):
+    """It is output. Selecting it is the fallback for a blocked clipboard."""
+    body = re.search(r"function ask\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert "readOnly" in body
+    assert "readonly = false" in body, "an input dialog stays writable"
+    # select() parks the caret at the end and scrolls the front of a long
+    # value out of view — and the front is the part that identifies it.
+    assert "input.scrollLeft = 0" in body
+
+
+def test_the_readonly_dialog_field_is_styled():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert ".confirm-input[readonly]" in css
+
+
+def test_a_handover_does_not_ask_who_it_is_for(app_js):
+    """The answer was the default every time. The label still reaches the
+    badge and the journal, so it stays — as a constant, not a question."""
+    body = re.search(r"async function handOver\(.*?\n\}", app_js, re.DOTALL).group(0)
+    assert "promptDialog(" not in body, "one dialog, and it is the one with the key"
+    assert "'claude'" not in body
+    assert "AGENT_OWNER_LABEL" in body
+    assert "const AGENT_OWNER_LABEL = 'agent';" in app_js
+
+
+def test_a_handover_still_warns_about_work_the_agent_could_commit(app_js):
+    """Ownership moves on the request below this. It is the last place to say
+    no, so dropping the prompt must not drop the warning with it."""
+    body = re.search(r"async function handOver\(.*?\n\}", app_js, re.DOTALL).group(0)
+    assert "pending_commands" in body
+    assert "uncommitted" in body
+    assert "confirmDialog(" in body, "a choice, not a field to type in"
+    # Only when there is something to lose: an empty session asks nothing.
+    assert "if (pending" in body
+
+
+# --- handing a target to an agent without retyping it ----------------------
+
+
+def test_the_picker_offers_the_target_as_one_copy(markup, app_js):
+    """Naming a container and a database to an agent by hand is transcription,
+    and a database name like integra_db_19_presta is where it goes wrong."""
+    assert "copy-meta" in markup.classes
+    body = re.search(
+        r"card\.querySelector\('\.copy-meta'\).*?\n  \}\);", app_js, re.DOTALL
+    )
+    assert body is not None
+    assert "copyTarget(name" in body.group(0)
+
+
+def test_the_copied_target_carries_what_an_agent_acts_on(app_js):
+    body = re.search(r"function copyTarget\(.*?\n\}\n", app_js, re.DOTALL)
+    assert body is not None
+    text = body.group(0)
+    assert "JSON.stringify" in text
+    for key in ("container", "database", "odoo_version"):
+        assert key in text, key
+    # The same read startSession does, or the copy would name a database the
+    # Start button would not have used.
+    assert "select.hidden ? manual.value.trim() : select.value" in text
+
+
+def test_the_copy_flashes_so_a_silent_clipboard_is_visible(app_js):
+    """Copying leaves no trace on screen; without this the button looks dead."""
+    body = re.search(r"function copyTarget\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert "copied" in body
+    assert "setTimeout" in body
+
+
+def test_the_copy_sits_at_the_far_edge_of_the_picker():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    block = re.search(r"\.copy-meta \{.*?\n\}", css, re.DOTALL)
+    assert block is not None
+    assert "margin-left: auto" in block.group(0)
+
+
+# --- the two clicks that open a session land in one place ------------------
+
+
+def test_start_stands_where_open_session_stood(markup, app_js):
+    """Open session sat in the card's action column and Start at the far end
+    of the row below it, so opening a session was a trip across the card.
+    They are one control now: the second click lands where the first did."""
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    card = re.search(r'<template id="container-card">(.*?)</template>', html, re.DOTALL)
+    assert card is not None
+    # Up to the next sibling block: the row holds nested divs, so the first
+    # closing tag is the identity's, not the row's.
+    row = re.search(
+        r'<div class="row">(.*?)<div class="card-facts">', card.group(1), re.DOTALL
+    ).group(1)
+    assert 'class="open"' in row
+    assert 'class="start primary"' in row, "Start belongs in the action column"
+    picker = re.search(r'<div class="picker"(.*?)</div>', card.group(1), re.DOTALL).group(1)
+    assert "start" not in picker, "and no longer at the end of the picker"
+    # What stays below is the target, not an action: which database, and the
+    # copy that hands that target to an agent.
+    assert "databases" in picker
+    assert "copy-meta" in picker
+
+
+def test_exactly_one_of_the_two_is_shown(app_js):
+    body = re.search(r"function syncPickerActions\(.*?\n\}", app_js, re.DOTALL)
+    assert body is not None
+    text = body.group(0)
+    assert "picker" in text
+    assert "'.open').hidden" in text
+    assert "'.start').hidden" in text
+    # Called wherever the picker's state changes, including a re-render: the
+    # card outlives the render and would otherwise keep the last one's answer.
+    for caller in ("function openPicker", "function closeAllPickers", "function renderContainers"):
+        block = re.search(rf"{caller}\(.*?\n\}}", app_js, re.DOTALL).group(0)
+        assert "syncPickerActions" in block, caller
+
+
+def test_a_card_only_stacks_when_it_really_has_to():
+    """760px is the phone breakpoint, and a compact desktop column is not a
+    phone: at 684px the row needs 241 of 626 available. What forced the stack
+    was two `width: 100%`, not a shortage of room."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    phone = re.search(r"@media \(max-width: 520px\) \{(.*?)\n\}", css, re.DOTALL)
+    assert phone is not None, "the forced stacking needs a breakpoint of its own"
+    assert ".identity" in phone.group(1)
+    assert ".picker select" in phone.group(1)
+    wide = re.search(r"@media \(max-width: 760px\) \{(.*?)\n\}", css, re.DOTALL).group(1)
+    rules = {
+        selector.strip(): body
+        for selector, body in re.findall(r"([^{}]*)\{([^{}]*)\}", wide)
+    }
+    assert "width: 100%" not in rules.get(".identity", ""), "this is what stacked it"
+    # Wrapping itself stays: it costs nothing until something truly overflows,
+    # and then a long container name should push the buttons down.
+    assert "flex-wrap: wrap" in rules.get(".row", "")
+
+
+def test_the_copy_is_a_glyph_rather_than_a_word(markup):
+    """A word in that corner reads as a third action beside Start and probe.
+    The target row is not where the card's verbs live."""
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    button = re.search(r'<button[^>]*class="copy-meta".*?</button>', html, re.DOTALL)
+    assert button is not None
+    text = button.group(0)
+    assert "<svg" in text
+    assert ">copy<" not in text, "no label to read"
+    # No text, so the name has to come from somewhere.
+    assert "aria-label" in text
+    assert "title=" in text
+    # Both states ship in the markup and CSS chooses; rewriting the button's
+    # content would throw the icon away on the first copy.
+    assert 'class="copy-idle"' in text
+    assert 'class="copy-done"' in text
+
+
+def test_the_copied_state_swaps_the_glyph_without_touching_the_markup(app_js):
+    body = re.search(r"function copyTarget\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert "dataset.flash" in body
+    assert "textContent" not in body, "that would delete the icon"
+
+
+def test_the_copy_glyph_is_dimmed_until_it_is_wanted():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    idle = re.search(r"\.copy-meta \{.*?\n\}", css, re.DOTALL).group(0)
+    assert "opacity" in idle
+    assert "border: 0" in idle, "a framed icon is a button pretending to be a glyph"
+    hover = re.search(r"\.copy-meta:hover[^{]*\{.*?\n\}", css, re.DOTALL).group(0)
+    assert "opacity: 1" in hover
+    # One glyph at a time, chosen by the flash the copy sets.
+    assert ".copy-meta .copy-done" in css
+    assert ".copy-meta[data-flash='copied'] .copy-idle" in css
+
+
+def test_the_copied_colour_beats_the_hover_it_happens_under():
+    """The click that copies leaves the pointer on the button, so the two
+    rules always meet. A plain attribute selector loses to `:hover:not()` and
+    the confirmation stays hover-coloured."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    hover = css.index(".copy-meta:hover:not(:disabled)")
+    copied = css.index(".copy-meta[data-flash='copied']:not(:disabled)")
+    assert copied > hover, "equal specificity, so the later rule has to be this one"
+
+
+# --- how big was that script, and how much came back ----------------------
+
+
+def test_a_cell_head_carries_the_two_line_counts(app_js, markup):
+    """Cells arrive folded when an agent is writing them, so the header is
+    the only place the size of a script is visible without opening it."""
+    assert "cell-lines" in markup.classes or "cell-lines" in app_js
+    head = re.search(r"<header class=\"cell-head\">(.*?)</header>", app_js, re.DOTALL)
+    assert head is not None
+    body = head.group(0)
+    assert "cell-lines" in body
+    # Last in the header, after the verbs: it is a measurement, not an action.
+    assert body.index("cell-lines") > body.index("cell-actions")
+
+
+def test_the_counts_are_code_lines_over_output_lines(app_js):
+    body = re.search(r"function cellLines\(.*?\n\}", app_js, re.DOTALL)
+    assert body is not None
+    text = body.group(0)
+    # The same three pieces `copy output` puts on the clipboard, so the number
+    # describes what that button would hand you.
+    for part in ("stdout", "result", "traceback"):
+        assert part in text, part
+    assert "stdout_truncated" in text, "a clipped stdout must not read as the whole"
+
+
+def test_an_empty_or_missing_text_counts_as_no_lines(app_js):
+    body = re.search(r"function lineCount\(.*?\n\}", app_js, re.DOTALL)
+    assert body is not None
+    text = body.group(0)
+    assert "return 0" in text
+    # A trailing newline is how most output ends; it is not another line.
+    assert "replace(" in text
+
+
+def test_the_counts_reach_the_right_corner_without_the_verbs():
+    """An observer's header has no action row to push them there."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert ".cell-head:not(:has(.cell-actions)) .cell-lines" in css
+    block = re.search(
+        r"\.cell-head:not\(:has\(\.cell-actions\)\) \.cell-lines \{(.*?)\}", css, re.DOTALL
+    )
+    assert "margin-left: auto" in block.group(1)
+
+
+def test_a_change_in_the_counts_redraws_the_feed(app_js):
+    """The feed is redrawn only when its signature changes, so everything the
+    counts read has to be in it — including the truncation flags."""
+    body = re.search(r"function feedSignature\(.*?\n\}", app_js, re.DOTALL).group(0)
+    for part in ("code", "stdout", "result", "stdout_truncated", "result_truncated"):
+        assert part in body, part
+
+
+def test_a_running_cell_does_not_claim_an_output_size(app_js):
+    body = re.search(r"function cellLines\(.*?\n\}", app_js, re.DOTALL).group(0)
+    assert "result" in body
+    assert "–" in body or "—" in body, "no result yet is a dash, not a zero"

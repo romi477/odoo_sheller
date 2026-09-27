@@ -25,7 +25,7 @@
     <nav id="top">
       <a class="brand" href="https://github.com/romi477/odoo_sheller" target="_blank" rel="noopener noreferrer" title="odoo-sheller on GitHub">
         <img class="logo" src="/static/logo.svg" alt="" width="18" height="18">
-        <span class="wordmark">odoo-sheller.<sub>v1.7.0</sub></span>
+        <span class="wordmark">odoo-sheller.<sub>v1.8.0</sub></span>
       </a>
       <div class="nav-tabs">
         <button data-screen="connect" class="active" title="Running containers. Probe and start a session. ⌥⌘←/→ switches tabs.">Connect</button>
@@ -97,6 +97,10 @@
               </span>
             </div>
             <button class="open" title="Pick a database and start a session on this container.">Open session</button>
+            <!-- Takes Open session's place rather than sitting at the end of
+                 the picker: the second click of opening a session should land
+                 where the first one did. -->
+            <button class="start primary" hidden title="Open the session. Odoo loads its registry once; then commands are cheap.">Start</button>
             <button class="close-connected" hidden title="Close the session on this container. Uncommitted work is discarded.">Close session</button>
             <button class="reprobe" title="Looks for odoo-bin on PATH or at a few common locations (/opt/odoo/odoo-bin, /usr/bin/odoo, /odoo/odoo-bin, /mnt/odoo/odoo-bin, /usr/lib/python3/dist-packages/odoo-bin) — first one found wins, exact layout doesn't matter. A config file is optional, only used for the default database and Postgres credentials; checked at $ODOO_RC, /etc/odoo/odoo.conf, /etc/odoo.conf, /opt/odoo.conf, next to odoo-bin, or ~/.odoorc. Re-run this after a restart or a config change.">probe</button>
           </div>
@@ -107,7 +111,27 @@
           <div class="picker" hidden>
             <select class="databases"></select>
             <input class="database-manual mono" placeholder="database name" hidden>
-            <button class="start primary" title="Open the session. Odoo loads its registry once; then commands are cheap.">Start</button>
+            <!-- Both glyphs ship; CSS picks one from data-flash. Swapping the
+                 button's text instead would throw the icon away on the first
+                 copy and never put it back. -->
+            <button
+              type="button"
+              class="copy-meta"
+              aria-label="Copy this target as JSON"
+              title="Copy this target as JSON — container, database and Odoo version — to paste to an agent."
+            >
+              <svg class="copy-idle" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
+                   fill="none" stroke="currentColor" stroke-width="1.25"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <path d="M11 6V3a1.5 1.5 0 0 0-1.5-1.5H3A1.5 1.5 0 0 0 1.5 3v6.5A1.5 1.5 0 0 0 3 11h3"/>
+                <rect x="6" y="6" width="8" height="8" rx="1.5"/>
+              </svg>
+              <svg class="copy-done" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
+                   fill="none" stroke="currentColor" stroke-width="1.5"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 8.5 6.3 12 13 4.5"/>
+              </svg>
+            </button>
           </div>
           <div class="startup-log" hidden></div>
         </li>

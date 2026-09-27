@@ -56,10 +56,23 @@ restart or a config change.
   here stands for a target, not for one session, so it closes all of them.
   Uncommitted work is discarded, and the question is asked once for the
   batch rather than once per session.
-- **Open session** expands the card into a database picker. The default
-  database comes from `db_name` in the container's `odoo.conf`, which in a
-  dev container is almost always the right answer. If the database list
-  couldn't be read at all, a free-text field takes its place.
+- **Open session** expands the card into a database picker, and becomes
+  **Start** in the same place. The two are one control at two moments, so the
+  second click of opening a session lands where the first one did rather than
+  across the card. What the picker holds is the target and nothing else: which
+  database, and a faint two-sheet copy glyph at its far edge that puts
+  container, database and Odoo version on the clipboard as one line of JSON —
+  what an agent has to be told before it can work. It turns into a green check
+  for a moment, because a clipboard leaves no other mark; a word there would
+  have read as a third key beside **Start** and **probe**, and that row holds
+  no actions. The default database comes from `db_name` in the
+  container's `odoo.conf`, which in a dev container is almost always the right
+  answer. If the database list couldn't be read at all, a free-text field takes
+  its place.
+- A card stacks its name above its keys only when the width is really gone —
+  below 520px, a phone. The page gives up its margins earlier, at 760px, but a
+  narrow desktop column is not a phone: at 684px, the width the desktop app's
+  **Compact Width** uses, the card's row needs 241 of the 626 it has.
 - Probe failures are explained specifically — "no odoo-bin found in this
   container", "Odoo 14.0 found; supported: 15, 16, 17, 18, 19", "could not read database
   list — enter the name manually" — rather than as a generic error. A
@@ -70,6 +83,13 @@ restart or a config change.
   fold remembers whether it was opened. A container that fails its probe for
   any other reason keeps its card and its probe button; it
   just can't be opened until whatever's wrong is fixed.
+- Each cell's header ends with two numbers, `written/came back`: lines of code
+  over lines of output — stdout, the returned value and any traceback, the
+  same three pieces **copy output** puts on the clipboard. A trailing `+`
+  means the daemon clipped the output and the journal has the rest. Cells an
+  agent wrote arrive folded, so this is the only place the size of a script
+  is visible without opening it; the figures are tabular, so a column of
+  folded cells can be compared at a glance.
 - Opening a session takes a few seconds while Odoo loads its registry.
   **Start** goes inert with a spinning arrow over its own label, which stays
   legible as a blurred shape rather than vanishing — a key that empties reads
