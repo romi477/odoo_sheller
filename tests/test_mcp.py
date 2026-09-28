@@ -1823,3 +1823,12 @@ def test_the_orm_topic_resolves_an_xml_id():
     assert "env.ref(" in orm
     assert "base.module_integration" in orm
     assert "raise_if_not_found=False" in orm
+
+
+def test_an_actor_without_a_label_is_named_not_crashed():
+    """`_actor` indexed the label. A session handed over as {"kind": "agent"}
+    — which the daemon used to accept — made os_history raise KeyError, so the
+    agent could not read the history of the very session it was given."""
+    assert server._actor({"kind": "agent"}) == "agent:agent"
+    assert server._actor({"kind": "agent", "label": "migrator"}) == "agent:migrator"
+    assert server._actor(None) is None

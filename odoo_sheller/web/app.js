@@ -1779,7 +1779,11 @@ function bindSessionPanel(panel, id, record) {
   const owned = Boolean(keyFor(id));
   const ownerBadge = panel.querySelector('.owner-badge');
   ownerBadge.hidden = owner.kind === 'human' && owned;
-  ownerBadge.textContent = owned ? `${owner.kind} · ${owner.label}` : `watching · ${owner.label}`;
+  // The daemon names a label-less owner after its kind now, but sessions
+  // opened by an older one are still live and their journals are on disk.
+  // A badge is the wrong place to find that out.
+  const who = owner.label || owner.kind;
+  ownerBadge.textContent = owned ? `${owner.kind} · ${who}` : `watching · ${who}`;
   ownerBadge.className = `owner-badge badge ${owner.kind}`;
   panel.classList.toggle('observer', !owned);
   const grant = panel.querySelector('.grant-commit');

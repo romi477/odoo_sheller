@@ -618,7 +618,7 @@ answers `409` until that command's result finally arrives. Use `interrupt`, or
 | `POST` | `/api/sessions/{id}/rollback` | discard the transaction |
 | `POST` | `/api/sessions/{id}/interrupt` | `SIGINT` |
 | `DELETE` | `/api/sessions/{id}` | close; `?force=true` kills |
-| `POST` | `/api/sessions/{id}/owner` | hand the session over; rotates the write key (admin) |
+| `POST` | `/api/sessions/{id}/owner` | hand the session over; rotates the write key (admin). Body `{"owner": {"kind": "human"\|"agent", "label": "…"}}` — any other `kind` is a `422`, and an absent `label` becomes the kind, so `{"kind": "agent"}` is named `agent` rather than nothing |
 | `POST` | `/api/sessions/{id}/policy` | grant or revoke `allow_commit` (admin). `409` on revoking from a human owner: the right only gates an agent |
 | `GET` | `/api/sessions/{id}/logs` | stderr tail |
 | `GET` | `/api/sessions/{id}/history` | feed from the journal; a closed session answers `200` with `session.state: "gone"` and a `session.gone` object; `?logs=true` adds journalled stderr |

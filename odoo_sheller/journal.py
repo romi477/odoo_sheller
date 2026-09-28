@@ -156,6 +156,18 @@ def _markdown_header(meta: dict) -> list[str]:
     return lines
 
 
+def _named(actor: dict) -> str:
+    """What to call an owner in a transcript.
+
+    The daemon names an owner that arrives without a label after its kind, but
+    journals written before it did are on disk and are never rewritten. They
+    read `by agent (None)`, which names nobody and looks like a hole in the
+    record rather than in the record-keeping.
+    """
+
+    return actor.get("label") or actor.get("kind") or "unknown"
+
+
 def to_markdown(records: list[dict], meta: dict | None = None) -> str:
     lines = list(_markdown_header(meta)) if meta else []
     ordinals = {}
@@ -185,14 +197,14 @@ def to_markdown(records: list[dict], meta: dict | None = None) -> str:
             next_ordinal += 1
             ordinals[record.get("id")] = next_ordinal
             actor = record.get("actor") or {}
-            by = f" by {actor.get('kind')} ({actor.get('label')})" if actor else ""
+            by = f" by {actor.get('kind')} ({_named(actor)})" if actor else ""
             lines.append(f"## Command {next_ordinal}{by} — {stamp}\n")
             lines.append(f"```python\n{record.get('code', '').rstrip()}\n```\n")
         elif kind == "run_test":
             next_ordinal += 1
             ordinals[record.get("id")] = next_ordinal
             actor = record.get("actor") or {}
-            by = f" by {actor.get('kind')} ({actor.get('label')})" if actor else ""
+            by = f" by {actor.get('kind')} ({_named(actor)})" if actor else ""
             spec = f"{record.get('module', '')}.{record.get('test_class', '')}"
             if record.get("test_method"):
                 spec += f".{record['test_method']}"
@@ -226,8 +238,8 @@ def to_markdown(records: list[dict], meta: dict | None = None) -> str:
             was = record.get("from") or {}
             now = record.get("to") or {}
             lines.append(
-                f"**Ownership moved** from {was.get('kind')} ({was.get('label')}) "
-                f"to {now.get('kind')} ({now.get('label')}), "
+                f"**Ownership moved** from {was.get('kind')} ({_named(was)}) "
+                f"to {now.get('kind')} ({_named(now)}), "
                 f"{record.get('pending_commands', 0)} command(s) pending — {stamp}\n"
             )
         elif kind == "policy_changed":

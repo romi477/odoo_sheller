@@ -415,6 +415,12 @@ starting ──(hello)──> ready ──(exec)──> busy ──(result)─�
 
 ## Ownership and agent access
 
+An owner is a kind and a name: the kind is `human` or `agent` and nothing
+else, because it decides whether commit is gated; the name is free text and
+falls back to the kind when a caller sends none. Both matter beyond the
+badge — the journal records who ran every command, and `os_history` hands
+that back to an agent reading its own past.
+
 Every session has an owner — `human` or `agent` — and a write key. The key is
 returned exactly once, at open or at handover, and is required for `exec`,
 `commit`, and `rollback`. Watching a session (seeing its output as it happens)

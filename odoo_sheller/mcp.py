@@ -1460,8 +1460,18 @@ async def os_close_session(session_id: str | None = None) -> Any:
 
 
 def _actor(actor: dict | None) -> str | None:
+    """`kind:label`, with the label falling back to the kind.
 
-    return f"{actor['kind']}:{actor['label']}" if actor else None
+    It used to index `label`. A session handed over as `{"kind": "agent"}` —
+    which the daemon accepted until it began naming them — made this raise
+    KeyError, so os_history failed on the very session an agent was given.
+    """
+    if not actor:
+
+        return None
+    kind = actor.get("kind") or "unknown"
+
+    return f"{kind}:{actor.get('label') or kind}"
 
 
 def _history_run_test_entry(entry: dict) -> dict:

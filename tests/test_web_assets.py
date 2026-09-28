@@ -2614,3 +2614,17 @@ def test_a_running_cell_does_not_claim_an_output_size(app_js):
     body = re.search(r"function cellLines\(.*?\n\}", app_js, re.DOTALL).group(0)
     assert "result" in body
     assert "–" in body or "—" in body, "no result yet is a dash, not a zero"
+
+
+def test_the_owner_badge_never_prints_undefined(app_js):
+    """It did, on a session an outside caller handed over as {"kind": "agent"}.
+    The daemon names those now, but journals and sessions opened by an older
+    one still exist, and a badge is the wrong place to learn that."""
+    block = re.search(
+        r"const owner = record\.info\.owner.*?ownerBadge\.textContent = .*",
+        app_js,
+        re.DOTALL,
+    )
+    assert block is not None
+    assert "owner.label || owner.kind" in block.group(0)
+    assert "${owner.label}" not in block.group(0), "the raw label is what printed it"

@@ -7,6 +7,30 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.8.1] — 2026-09-28
+
+### An owner is a kind and a name
+
+A program that drives this daemon over plain HTTP — a migration tool, say —
+opens a session and hands it to its own agent without the browser's help. The
+body model for that was a bare `dict`, so `{"kind": "agent"}` was accepted
+verbatim and stored with no name at all. What the session then showed was not
+a missing name but a broken one: `watching · undefined` in the owner badge,
+`by agent (None)` through its own transcript, and `KeyError: 'label'` out of
+`os_history` — so an agent could not read the history of the very session it
+had just been given.
+
+`owner` is a model now. `kind` is `human` or `agent` and nothing else, since
+it decides whether commit is gated and a typo must not pass as a third kind
+nobody has heard of. `label` stays optional and becomes the kind when it is
+absent: a caller with nothing better to say is not made to invent something,
+and `agent` names an agent well enough.
+
+Journals already on disk carry the hole and are never rewritten, so the three
+places that read one were taught the same fallback — the transcript, the MCP
+actor, and the badge. `_actor` in particular stopped indexing the label, which
+is what turned a thin session record into an exception.
+
 ## [1.8.0] — 2026-09-27
 
 Less to retype, and less to get wrong.
@@ -1151,7 +1175,8 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
-[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/romi477/odoo_sheller/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/romi477/odoo_sheller/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/romi477/odoo_sheller/compare/v1.6.4...v1.7.0
 [1.6.4]: https://github.com/romi477/odoo_sheller/compare/v1.6.3...v1.6.4

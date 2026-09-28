@@ -1139,3 +1139,53 @@ def test_health_admits_it_cannot_say_rather_than_guessing(monkeypatch):
     with TestClient(app) as client:
         body = client.get("/health").json()
     assert body["mcp"] is None
+
+
+# --- an owner is a kind and a name, and callers send only the kind ---------
+#
+# A program that drives this daemon — a migration tool, say — opens a session
+# and hands it to its agent over plain HTTP, without the browser's help. It
+# sent `{"kind": "agent"}`, the body model was a bare dict, and the daemon
+# stored exactly that. The session then read `watching · undefined` in the UI,
+# `by agent (None)` in its own transcript, and os_history raised KeyError on
+# it. The kind is a usable name on its own; an absent label becomes it.
+
+
+def test_a_handover_without_a_label_is_named_after_its_kind(client):
+    response = client.post(
+        "/api/sessions/s1/owner", json={"owner": {"kind": "agent"}}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["owner"] == {"kind": "agent", "label": "agent"}
+
+
+def test_a_label_that_was_given_is_kept(client):
+    response = client.post(
+        "/api/sessions/s1/owner",
+        json={"owner": {"kind": "agent", "label": "migrator"}},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["owner"]["label"] == "migrator"
+
+
+def test_an_owner_of_an_unknown_kind_is_refused(client):
+    """`kind` decides whether commit is gated, so a typo must not pass as one
+    more kind the daemon has never heard of."""
+    response = client.post(
+        "/api/sessions/s1/owner", json={"owner": {"kind": "robot", "label": "x"}}
+    )
+    assert response.status_code == 422
+
+
+def test_opening_a_session_without_a_label_is_named_the_same_way(client):
+    response = client.post(
+        "/api/sessions",
+        json={
+            "container": "c1",
+            "database": "db",
+            "odoo_bin": "/opt/odoo/odoo-bin",
+            "owner": {"kind": "agent"},
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert client.registry.open_kwargs["owner"] == {"kind": "agent", "label": "agent"}

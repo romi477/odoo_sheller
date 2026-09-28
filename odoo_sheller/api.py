@@ -9,12 +9,13 @@ import socket
 import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from odoo_sheller import discovery, journal
 from odoo_sheller.paths import web_dir
@@ -64,11 +65,38 @@ class RunTestBody(BaseModel):
     timeout: float | None = Field(default=None, gt=0, le=3600)
 
 
+class Owner(BaseModel):
+    """Who a session belongs to.
+
+    `label` is the name that reaches the owner badge, the journal transcript
+    and os_history. It used to be whatever a caller put in a free-form dict,
+    including nothing at all: a program driving this daemon over plain HTTP
+    handed a session over as `{"kind": "agent"}`, the daemon stored exactly
+    that, and the session then read `watching · undefined` in the UI, `by
+    agent (None)` in its own transcript, and raised KeyError in os_history.
+
+    The kind is a usable name on its own, so an absent label becomes it — a
+    caller that has nothing better to say is not made to invent something.
+    The kind itself is closed: it decides whether commit is gated, and a typo
+    must not pass as one more kind nobody has heard of.
+    """
+
+    kind: Literal["human", "agent"]
+    label: str | None = None
+
+    @model_validator(mode="after")
+    def _named(self):
+        if not self.label:
+            self.label = self.kind
+
+        return self
+
+
 class OpenBody(BaseModel):
     container: str | None = None
     database: str | None = None
     odoo_bin: str | None = None
-    owner: dict | None = None
+    owner: Owner | None = None
     allow_commit: bool | None = None
     replace: str | None = None
     client_token: str | None = None
@@ -92,7 +120,7 @@ class ProbeOdooshBody(BaseModel):
 
 
 class OwnerBody(BaseModel):
-    owner: dict
+    owner: Owner
 
 
 class PolicyBody(BaseModel):
@@ -374,7 +402,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
                 container=body.container,
                 database=body.database,
                 odoo_bin=body.odoo_bin,
-                owner=body.owner,
+                owner=body.owner.model_dump() if body.owner else None,
                 allow_commit=body.allow_commit,
                 replace=body.replace,
                 client_token=body.client_token,
@@ -582,7 +610,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         if not session.held_by(x_os_session_key):
             require_admin(x_os_admin_key)
         pending = session.pending_commands
-        write_key = session.transfer_owner(body.owner)
+        write_key = session.transfer_owner(body.owner.model_dump())
 
         # The new key is returned once, here. The previous one is already dead.
         return {

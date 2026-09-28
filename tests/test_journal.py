@@ -455,3 +455,21 @@ def test_markdown_labels_the_log_between_two_commands_separately():
     text = journal.to_markdown(records)
     assert text.count("Odoo log") == 2
     assert text.index("first") < text.index("## Command 2")
+
+
+def test_a_transcript_names_an_actor_that_carries_no_label(tmp_path):
+    """Journals written before the daemon insisted on a label still exist, and
+    they read `by agent (None)` — which names nobody and looks like a bug in
+    the record rather than in the record-keeping."""
+    log = journal.Journal(tmp_path / "j.jsonl")
+    log.write("session_open", container="c", database="d")
+    log.write(
+        "owner_changed",
+        **{"from": {"kind": "human", "label": "browser"},
+           "to": {"kind": "agent"}, "pending_commands": 0},
+    )
+    log.write("exec", id="r1", code="1 + 1", actor={"kind": "agent"})
+    text = journal.to_markdown(log.records())
+    assert "(None)" not in text
+    assert "to agent (agent)" in text
+    assert "by agent (agent)" in text
