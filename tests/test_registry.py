@@ -460,6 +460,100 @@ async def test_opening_an_odoosh_build_needs_a_build_and_a_host(tmp_path):
         await registry.open(kind="odoosh", host="h")
 
 
+# --- odoo_bin is found, not asked for ------------------------------------
+
+
+def _local_probe(monkeypatch, captured, **payload):
+    async def fake_probe(container, runner=None):
+        captured.setdefault("probed", []).append(container)
+
+        return {
+            "ok": True, "supported": True, "odoo_bin": "/opt/odoo/odoo-bin",
+            "odoo_version": "19.0", "odoo_major": 19, "error": None, **payload,
+        }
+
+    monkeypatch.setattr("odoo_sheller.registry.probe", fake_probe)
+
+
+@pytest.mark.asyncio
+async def test_a_local_open_without_odoo_bin_takes_it_from_the_probe(tmp_path, monkeypatch):
+    """odoo_bin is a fact about the container, not a choice. An agent that left
+    it out got `http_422` and had to probe every container to learn one path."""
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _local_probe(monkeypatch, captured)
+
+    registry = Registry(journal_root=tmp_path)
+    await registry.open(container="odoo19", database="db")
+
+    assert captured["probed"] == ["odoo19"]
+    assert captured["target"].odoo_bin == "/opt/odoo/odoo-bin"
+    assert captured["target"].database == "db"
+
+
+@pytest.mark.asyncio
+async def test_a_given_odoo_bin_is_not_probed_for(tmp_path, monkeypatch):
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _local_probe(monkeypatch, captured)
+
+    registry = Registry(journal_root=tmp_path)
+    await registry.open(container="odoo19", database="db", odoo_bin="/srv/odoo-bin")
+
+    assert "probed" not in captured
+    assert captured["target"].odoo_bin == "/srv/odoo-bin"
+
+
+@pytest.mark.asyncio
+async def test_a_probe_that_refuses_the_container_opens_nothing(tmp_path, monkeypatch):
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _local_probe(
+        monkeypatch, captured, supported=False, odoo_version="14.0", odoo_major=14,
+        error="Odoo 14.0 found; supported: 15, 16, 17, 18, 19, 20",
+    )
+
+    registry = Registry(journal_root=tmp_path)
+    with pytest.raises(ValueError, match="14.0"):
+        await registry.open(container="odoo14", database="db")
+    assert "argv" not in captured, "nothing may be spawned for a refused target"
+
+
+@pytest.mark.asyncio
+async def test_a_container_with_no_odoo_bin_says_so(tmp_path, monkeypatch):
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _local_probe(
+        monkeypatch, captured, ok=False, supported=False, odoo_bin=None,
+        error="no odoo-bin in this container",
+    )
+
+    registry = Registry(journal_root=tmp_path)
+    with pytest.raises(ValueError, match="no odoo-bin in this container"):
+        await registry.open(container="postgres", database="db")
+    assert "argv" not in captured
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("given", "missing"),
+    [({"database": "db"}, "container"), ({"container": "odoo19"}, "database")],
+)
+async def test_a_missing_choice_is_named(tmp_path, monkeypatch, given, missing):
+    """container and database are the caller's to choose; say which one is
+    missing rather than list every field as if all were."""
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _local_probe(monkeypatch, captured)
+
+    registry = Registry(journal_root=tmp_path)
+    with pytest.raises(ValueError) as raised:
+        await registry.open(**given)
+    assert str(raised.value).startswith(f"{missing} is required")
+    assert "odoo_bin" not in str(raised.value)
+    assert "probed" not in captured, "no probe before the request is known to be whole"
+
+
 @pytest.mark.asyncio
 async def test_replacing_a_lost_session_stays_local_only(tmp_path, monkeypatch):
     """A journal records the identity slot but not how to reach it again over

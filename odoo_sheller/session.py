@@ -2,7 +2,9 @@
 
 import asyncio
 import contextlib
+import re
 import secrets
+import time
 from collections import deque
 from enum import Enum
 
@@ -98,6 +100,34 @@ EXEC_STDERR_LIMIT = 2000
 # reason `_read_frames` drains stderr before declaring the process dead.
 STDERR_DRAIN = 0.05
 
+# What Odoo's test result logs around each test, identical in 15 through 20
+# (`odoo/tests/result.py`, `runner.py` in 15): `Starting X ...` from
+# startTest, `FAIL: X` / `ERROR: X` from logError, `skipped X : why` from
+# addSkip. The logger is the test's own module, which always sits under an
+# addon's `tests` package — anchoring on it keeps an unrelated `ERROR:` out
+# of the counts. What follows the message is perf_info, empty or `- - -`.
+_TEST_LOGGER = r" odoo\.addons\.\S+\.tests(?:\.\S+)?: "
+_TEST_LINES = (
+    ("start", re.compile(_TEST_LOGGER + r"Starting (.+?) \.\.\.(?:\s|$)")),
+    ("failure", re.compile(_TEST_LOGGER + r"FAIL: (.+?)\s*$")),
+    ("error", re.compile(_TEST_LOGGER + r"ERROR: (.+?)\s*$")),
+    ("skip", re.compile(_TEST_LOGGER + r"skipped (.+?) : ")),
+)
+_PROGRESS_COUNTER = {
+    "start": "started", "failure": "failures", "error": "errors", "skip": "skipped",
+}
+
+
+def parse_test_line(line: str) -> tuple[str, str] | None:
+    """`(kind, test description)` if Odoo logged this about a test, else None."""
+    for kind, pattern in _TEST_LINES:
+        match = pattern.search(line)
+        if match:
+
+            return kind, match.group(1)
+
+    return None
+
 
 class Session:
     def __init__(
@@ -156,6 +186,9 @@ class Session:
         # What is holding BUSY (`exec`, `run_test`, …). None when not busy.
         # A timeout leaves the session BUSY, so this stays set until the result.
         self._activity: str | None = None
+        # How far the running test has got, read off Odoo's own log lines.
+        # None unless a run_test holds BUSY — see `parse_test_line`.
+        self._test_progress: dict | None = None
         self._hello_waiter: asyncio.Future = asyncio.get_running_loop().create_future()
         self._stderr: deque[str] = deque(maxlen=2000)
         # A session opened to run one test and then get out of the way. It
@@ -202,6 +235,7 @@ class Session:
             "allow_commit": self.allow_commit,
             "client_token": self.client_token,
             "activity": self._activity,
+            "test_progress": dict(self._test_progress) if self._test_progress else None,
         }
 
     # -- lifecycle -------------------------------------------------------
@@ -387,6 +421,18 @@ class Session:
         self._ran_test = True
         window = _StderrWindow(RUN_STDERR_LIMIT)
         self._stderr_collectors.append(window)
+        # Cleared with `_activity`, when the session leaves BUSY: a timed-out
+        # run is still running and still worth watching.
+        self._test_progress = {
+            "spec": ".".join(part for part in (module, test_class, test_method) if part),
+            "current": None,
+            "started": 0,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "started_at": time.time(),
+        }
+        self._emit_test_progress()
         try:
             result = await self._request(
                 run_test_frame(request_id, module, test_class, test_method), timeout
@@ -558,6 +604,28 @@ class Session:
                 collector.append(text)
             self.journal.write("stderr", line=text)
             self._emit({"kind": "stderr", "line": text})
+            self._note_test_line(text)
+
+    def _note_test_line(self, line: str) -> None:
+        if self._test_progress is None:
+
+            return
+        parsed = parse_test_line(line)
+        if parsed is None:
+
+            return
+        kind, description = parsed
+        self._test_progress[_PROGRESS_COUNTER[kind]] += 1
+        if kind == "start":
+            self._test_progress["current"] = description
+        self._emit_test_progress()
+
+    def _emit_test_progress(self) -> None:
+        self._emit({
+            "kind": "test_progress",
+            "progress": self.describe()["test_progress"],
+            "session": self.id,
+        })
 
     def _stderr_text(self) -> str:
 
@@ -663,6 +731,9 @@ class Session:
             self._abandoned_id = None  # nothing is coming back now
         if state is not SessionState.BUSY:
             self._activity = None
+            if self._test_progress is not None:
+                self._test_progress = None
+                self._emit_test_progress()
         self._state = state
         self._emit({
             "kind": "state",

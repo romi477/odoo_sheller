@@ -249,8 +249,17 @@ with its traceback, and how long it took.
 - A running cell shows a spinner and a live elapsed-seconds counter — output
   for this version arrives in one piece at the end, so the counter is the
   only progress signal there is while it's still running. An empty feed
-  during a test run does not offer `⌘+Enter`: it says to open Logs and
-  watch them live instead.
+  during a test run does not offer `⌘+Enter`; the test-run card above it
+  says what is running.
+- While a test runs, a rose card sits above the cells: the test asked for
+  (`account.TestAccountMoveReconcile`), the seconds since it started, the
+  test running right now, and `started N · ✗ N fail · ! N error · ⏭ N
+  skipped`. Fail and error turn red and bold once they are above zero. The
+  card moves once per test, not per log line, stays visible with Logs open,
+  and goes away when the run's result arrives. Before the first test starts
+  it reads `no test started yet — Odoo logs each one at INFO`: an Odoo
+  configured above `INFO` never logs one, and then the card only shows the
+  test asked for and the clock.
 - A command restored from the journal whose original run blew its timeout is
   marked as a **late result**, so an abandoned command never quietly reads as
   an ordinary success.
@@ -293,19 +302,25 @@ both back.
 
 Every past session, kept as a file, grouped by container and database. A
 group currently holding a live session is marked `live`. Click a group
-heading to expand or collapse its rows (groups start collapsed).
+heading to expand or collapse its rows (groups start collapsed). The
+heading reads `117 sessions · 99,756 / 30,761 KB · last …`: the size is the
+sum of its rows.
 
 Each row: timestamp, owner (`human`, `agent`, or `human→agent` for a
 handover), session id, duration, command count, `committed` / `discarded`,
-and the row's own controls — `.jsonl`, `.md`, `copy`, and a trash icon. A
+size — `772 / 243 KB`, records in the journal file and its size on disk,
+never `0 KB` for a file with anything in it — and the row's own controls:
+`.jsonl`, `.md`, a two-sheet copy glyph, and a trash icon. A
 sticky header names every column; on a narrow window it's dropped and rows
 wrap instead.
 
 - Click anywhere on a row except a control to open that transcript.
 - **.jsonl** / **.md** export the session; both confirm first, because
   **journals are unmasked** — see [security.md](security.md).
-- **copy** puts the whole transcript on the clipboard, no confirmation, but
-  the same warning applies: a clipboard is a way out of this machine too.
+- The **copy** glyph puts the whole transcript on the clipboard, no
+  confirmation, but the same warning applies: a clipboard is a way out of
+  this machine too. It turns into a green tick once the copy lands, or red
+  if it failed, and back after a moment.
 - The trash icon deletes that journal file. It's hidden while the session is
   still live, and — because unlinking a file is the one truly irreversible
   thing this API does — it asks for the admin key the first time. A group

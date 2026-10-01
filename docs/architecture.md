@@ -252,6 +252,24 @@ own output up to `RUN_STDERR_LIMIT` and reporting `stderr_truncated` past
 that. The window is removed in a `finally`, so a run that times out or dies
 does not leave a collector filling for the rest of the session.
 
+The same reader also says how far a run has got, because the result only
+arrives once the run is over. Odoo's test result logs a line per test, and
+the lines are the same in 15 through 20: `Starting X ...` from `startTest`,
+`FAIL: X` and `ERROR: X` from `logError`, `skipped X : why` from `addSkip`.
+All of them come from the test module's own logger, which always sits under
+an addon's `tests` package, so `parse_test_line` anchors on
+`odoo.addons.<…>.tests` and an unrelated `ERROR:` from elsewhere is not
+counted. While a `run_test` holds the session, each matching line updates
+`test_progress`: `spec` (the `module.Class[.method]` asked for), `current`
+(the last test started), `started`, `failures`, `errors`, `skipped` and
+`started_at` (epoch seconds). `describe()` carries it, and the session
+WebSocket gets `{"kind": "test_progress", "progress": …}` on each change —
+one event per test, not per log line. It is cleared to `null`, with one
+last event, when the session leaves `busy`; a run past its timeout is
+still running, so it keeps counting until the late result lands. Odoo set
+above `INFO` logs no `Starting` line, and then only `spec` and the clock
+move. Nothing here is journalled: the journal already has every line.
+
 `exec` collects the same way, into a smaller window (`EXEC_STDERR_LIMIT`),
 and returns `stderr` and `stderr_truncated` beside `stdout`. It used to
 return neither, and the lines were only on the journal — which cost a real
@@ -453,6 +471,13 @@ nothing extra to add). The probe process exits the moment it has answered.
 A major outside `SUPPORTED_MAJORS` (15 through 20) is refused right here, with a
 specific message naming what would work, rather than accepted and left to
 fail on the first real command.
+
+`POST /api/sessions` for a local container needs `container` and `database`
+— those are choices. `odoo_bin` is a fact about the container, so when a
+caller leaves it out the daemon runs the same probe and takes it from there,
+refusing an unsupported or unreadable container before anything is spawned.
+The browser always passes the path it already probed for; an agent usually
+does not know it, and used to get a bare `http_422` for not asking.
 
 **An odoo.sh build is entered, not discovered.** There is no `docker ps` for
 odoo.sh, so this is the one place the "discovered live, never configured"

@@ -1128,7 +1128,7 @@ def test_the_journal_list_names_its_columns(app_js, markup):
     assert header is not None
     labels = re.findall(r"<span[^>]*>([a-z ]+)</span>", header.group(0))
     assert labels == [
-        "opened", "owner", "session", "duration", "commands", "outcome", "export",
+        "opened", "owner", "session", "duration", "commands", "outcome", "size", "export",
     ]
     assert "journal-delete-col" in header.group(0)
     assert "journal-columns" in markup_or_script_classes(markup, app_js)
@@ -1749,7 +1749,7 @@ def test_a_running_test_shows_a_rose_testing_badge(app_js):
     assert "label = testing ? 'testing'" in app_js or 'label = testing ? "testing"' in app_js
 
 
-def test_an_empty_feed_during_a_test_run_points_at_the_live_log(app_js):
+def test_an_empty_feed_during_a_test_run_leaves_it_to_the_run_card(app_js):
     """⌘+Enter is a lie while a test is running; the log is what to watch.
 
     History already has a `run_test` entry while the class is in flight. That
@@ -1765,7 +1765,9 @@ def test_an_empty_feed_during_a_test_run_points_at_the_live_log(app_js):
     body = render.group(0)
     assert "sessionIsTesting(record)" in body
     assert "execCount === 0" in body
-    assert "Tests are running — open Logs to watch them live." in body
+    assert "Tests are running — open Logs to watch them live." not in body, (
+        "the test-run card says it now"
+    )
     assert "No commands yet — press ⌘+Enter to run" in body
 
 
@@ -2628,3 +2630,111 @@ def test_the_owner_badge_never_prints_undefined(app_js):
     assert block is not None
     assert "owner.label || owner.kind" in block.group(0)
     assert "${owner.label}" not in block.group(0), "the raw label is what printed it"
+
+
+def test_the_feed_has_a_test_run_card_above_the_cells(markup):
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    feed = re.search(r'<section class="feed">(.*?)</section>', html, re.DOTALL)
+    assert feed is not None
+    body = feed.group(1)
+    assert '<div class="test-run" hidden></div>' in body
+    assert body.index('class="test-run"') < body.index('class="feed-cards"')
+
+
+def test_test_progress_redraws_only_the_run_card(app_js):
+    """One event per test; a module of hundreds must not rebuild the feed each time."""
+    handler = re.search(
+        r"socket\.addEventListener\('message'.*?\n  \}\);", app_js, re.DOTALL
+    )
+    assert handler is not None
+    branch = handler.group(0).split("message.kind === 'test_progress'")[1].split("return;")[0]
+    assert "current.info.test_progress = message.progress" in branch
+    assert "renderTestRun(" in branch
+    assert "renderSessions" not in branch
+    assert "renderFeed" not in branch
+
+
+def test_run_card_shows_spec_current_test_and_counts(app_js):
+    render = re.search(r"function renderTestRun\(.*?\n\}", app_js, re.DOTALL)
+    assert render is not None
+    body = render.group(0)
+    for field in ("spec", "current", "started", "failures", "errors", "skipped"):
+        assert f"progress.{field}" in body
+    assert "escapeHtml(progress.spec)" in body
+    assert "escapeHtml(progress.current)" in body
+
+
+def test_run_card_elapsed_ticks_without_a_redraw(app_js):
+    tick = re.search(r"function tickSessionAges\(.*?\n\}", app_js, re.DOTALL)
+    assert tick is not None
+    assert "paintTestRunElapsed" in tick.group(0)
+
+
+def test_run_card_is_drawn_with_the_session_panel(app_js):
+    """A reload or tab switch must show the card from describe(), not wait for an event."""
+    assert re.search(
+        r"renderTestRun\(panel, record\);\n  renderFeed\(panel\.querySelector\('\.feed'\), id, record\);",
+        app_js,
+    )
+
+
+def test_run_card_is_rose_and_failures_light_up():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    card = re.search(r"\.test-run\s*\{([^}]*)\}", css)
+    assert card is not None
+    assert "var(--red)" in card.group(1)
+    assert re.search(r"\.test-run\[hidden\]\s*\{\s*display:\s*none;", css)
+    bad = re.search(r"\.test-run-counts \.bad\s*\{([^}]*)\}", css)
+    assert bad is not None
+    assert "var(--red)" in bad.group(1)
+
+
+# --- journal size and the copy glyph --------------------------------------
+
+
+def test_journal_size_column_follows_outcome(app_js):
+    columns = re.search(r"function journalColumns\(.*?\n\}", app_js, re.DOTALL).group(0)
+    assert columns.index("<span>outcome</span>") < columns.index("<span>size</span>")
+    assert columns.index("<span>size</span>") < columns.index("journal-export-links")
+    row = re.search(r"function journalRow\(.*?\n\}", app_js, re.DOTALL).group(0)
+    assert "journalSize(entry.lines, entry.bytes)" in row
+    assert row.index("journal-status") < row.index("journal-size")
+
+
+def test_journal_size_reads_lines_slash_kilobytes(app_js):
+    body = re.search(r"function journalSize\(.*?\n\}", app_js, re.DOTALL).group(0)
+    assert "/ 1024" in body
+    assert "KB" in body
+    assert "Math.max(1" in body, "a non-empty file is never 0 KB"
+
+
+def test_journal_group_meta_sums_the_size(app_js):
+    load = re.search(r"async function loadJournals\(.*?\n\}", app_js, re.DOTALL).group(0)
+    assert "journalSize(" in load
+    assert "entry.lines" in load and "entry.bytes" in load
+
+
+def test_journal_grid_has_a_track_for_size():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    grid = re.search(
+        r"\.journal-row,\s*\.journal-columns\s*\{[^}]*grid-template-columns:\s*([^;]+);", css
+    ).group(1)
+    assert len(grid.split()) == 9
+
+
+def test_journal_copy_is_a_glyph_not_a_word(app_js):
+    row = re.search(r"function journalRow\(.*?\n\}", app_js, re.DOTALL).group(0)
+    assert "copyButton.textContent" not in row
+    assert 'class="copy-idle"' in row
+    assert 'class="copy-done"' in row
+    assert "aria-label" in row
+    body = re.search(r"async function copyJournal\(.*?\n\}", app_js, re.DOTALL).group(0)
+    assert "dataset.flash" in body
+    assert "textContent" not in body, "that would delete the icon"
+
+
+def test_journal_copy_glyph_swaps_like_the_target_copy():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert ".journal-copy .copy-done" in css
+    assert ".journal-copy[data-flash='copied'] .copy-idle" in css
+    assert ".journal-copy[data-flash='failed']" in css

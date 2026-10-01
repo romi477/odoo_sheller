@@ -609,7 +609,7 @@ answers `409` until that command's result finally arrives. Use `interrupt`, or
 | `POST` | `/api/probe` | probe one container |
 | `POST` | `/api/probe/odoosh` | probe an odoo.sh build (`{"build", "host"}`); answers `stage`, `db_name`, version |
 | `GET` | `/api/containers/{container}/tests` | test classes/methods in one addon (`?module=`) |
-| `POST` | `/api/sessions` | open a session, wait for `hello`. `kind: "odoosh"` with `build`/`host` opens on an odoo.sh build instead of a container; the instance dictates the database, and its stage is read from the build itself, not from the request. Optional `client_token` is echoed back in the session description, so a client recognises its own `session_starting` among several |
+| `POST` | `/api/sessions` | open a session, wait for `hello`. A local container needs `container` and `database`; leave `odoo_bin` out and the daemon probes that container for it, refusing an unsupported one with a `422` before anything starts. `kind: "odoosh"` with `build`/`host` opens on an odoo.sh build instead of a container; the instance dictates the database, and its stage is read from the build itself, not from the request. Optional `client_token` is echoed back in the session description, so a client recognises its own `session_starting` among several |
 | `GET` | `/api/sessions` | live sessions |
 | `GET` | `/api/sessions/{id}` | one session |
 | `POST` | `/api/sessions/{id}/exec` | run code |
@@ -622,11 +622,11 @@ answers `409` until that command's result finally arrives. Use `interrupt`, or
 | `POST` | `/api/sessions/{id}/policy` | grant or revoke `allow_commit` (admin). `409` on revoking from a human owner: the right only gates an agent |
 | `GET` | `/api/sessions/{id}/logs` | stderr tail |
 | `GET` | `/api/sessions/{id}/history` | feed from the journal; a closed session answers `200` with `session.state: "gone"` and a `session.gone` object; `?logs=true` adds journalled stderr |
-| `GET` | `/api/journals` | past sessions |
+| `GET` | `/api/journals` | past sessions; each carries `lines` and `bytes`, the journal file's record count and size on disk |
 | `GET` | `/api/journals/{id}` | export (`?fmt=jsonl` or `markdown`) |
 | `DELETE` | `/api/journals/{id}` | unlink the file (admin); `409` if the session is still live. The id is matched exactly, never globbed |
 | `WS` | `/ws/sessions` | `session_starting` (id assigned, still waiting for `hello`), `session_failed` (with `reason` — a start that never reached `hello`), `session_opened`, `session_closed`, plus owner/policy/state (`activity` on state events) |
-| `WS` | `/ws/sessions/{id}` | state changes (`activity` names `exec` / `run_test` / `null`), process death, stderr |
+| `WS` | `/ws/sessions/{id}` | state changes (`activity` names `exec` / `run_test` / `null`), process death, stderr, and `test_progress` while a test runs — the test asked for, the one running now, and started / failed / errored / skipped counts read off Odoo's log; `null` once the run is over |
 
 Example (after the daemon is up and a session exists):
 
@@ -637,7 +637,7 @@ curl -sS -X POST http://127.0.0.1:8765/api/probe \
   -d '{"container":"integra19"}'
 curl -sS -X POST http://127.0.0.1:8765/api/sessions \
   -H 'Content-Type: application/json' \
-  -d '{"container":"integra19","database":"integra_db_19_presta","odoo_bin":"/opt/odoo/odoo-bin"}'
+  -d '{"container":"integra19","database":"integra_db_19_presta"}'
 ```
 
 ## Journals

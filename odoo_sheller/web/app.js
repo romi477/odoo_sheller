@@ -1591,6 +1591,9 @@ function connectSocket(id) {
     if (message.kind === 'state') {
       current.info.state = message.state;
       current.info.activity = message.activity ?? null;
+      if (message.state !== 'busy') {
+        current.info.test_progress = null;  // the daemon clears it here too
+      }
       noteTesting(current, current.info.activity);
       if (message.state === 'dead') {
         maybeLoadDeadCause(id, current);
@@ -1605,6 +1608,13 @@ function connectSocket(id) {
       current.info.owner = message.owner;
     } else if (message.kind === 'policy') {
       current.info.allow_commit = message.allow_commit;
+    } else if (message.kind === 'test_progress') {
+      // One event per test, not per log line — but a module still has
+      // hundreds, so only the card is redrawn, never the feed under it.
+      current.info.test_progress = message.progress;
+      renderTestRun(current.panel, current);
+
+      return;
     } else if (message.kind === 'stderr') {
       // Odoo emits a few hundred lines just starting up. Append the one line
       // instead of re-rendering tabs, panel and the whole cell feed per line.
@@ -1886,7 +1896,53 @@ function bindSessionPanel(panel, id, record) {
     bindLogs(panel, record);
   }
   renderLogs(panel, record);
+  renderTestRun(panel, record);
   renderFeed(panel.querySelector('.feed'), id, record);
+}
+
+// How far the running test has got. The daemon counts Odoo's own `Starting …`,
+// `FAIL:`, `ERROR:` and `skipped` lines; this only draws what it was told.
+function renderTestRun(panel, record) {
+  const box = panel?.querySelector('.test-run');
+  if (!box) {
+
+    return;
+  }
+  const progress = record.info.test_progress;
+  box.hidden = !progress;
+  if (!progress) {
+    box.replaceChildren();
+
+    return;
+  }
+  // Odoo set above INFO logs no `Starting` line at all: say so rather than
+  // leave a card that looks stuck on nothing.
+  const now = progress.current
+    ? `now: ${escapeHtml(progress.current)}`
+    : 'no test started yet — Odoo logs each one at INFO';
+  box.innerHTML = `
+    <div class="test-run-head">
+      <span class="test-run-spec mono">${escapeHtml(progress.spec)}</span>
+      <span class="test-run-elapsed mono"></span>
+    </div>
+    <div class="test-run-now mono">${now}</div>
+    <div class="test-run-counts mono">
+      <span>started ${progress.started}</span>
+      <span class="${progress.failures ? 'bad' : ''}">✗ ${progress.failures} fail</span>
+      <span class="${progress.errors ? 'bad' : ''}">! ${progress.errors} error</span>
+      <span>⏭ ${progress.skipped} skipped</span>
+    </div>`;
+  paintTestRunElapsed(record);
+}
+
+function paintTestRunElapsed(record) {
+  const elapsed = record.panel?.querySelector('.test-run-elapsed');
+  const progress = record.info.test_progress;
+  if (!elapsed || !progress) {
+
+    return;
+  }
+  elapsed.textContent = `${Math.max(0, Math.floor(Date.now() / 1000 - progress.started_at))}s`;
 }
 
 function createEditor(panel, id, record) {
@@ -2126,8 +2182,8 @@ function renderFeed(feed, id, record) {
   fold.setAttribute('aria-label', allFolded ? 'Expand all cells' : 'Collapse all cells');
   cards.replaceChildren();
   if (sessionIsTesting(record) && execCount === 0) {
-    cards.innerHTML =
-      '<p class="empty">Tests are running — open Logs to watch them live.</p>';
+    // The test-run card above says what is running; an `.empty` note here
+    // would also hide the feed, card and all, once Logs are open.
 
     return;
   }
@@ -2847,10 +2903,14 @@ async function loadJournals() {
       const live = [...state.sessions.values()].some((record) =>
         record.info.container === entries[0].container &&
         record.info.database === entries[0].database);
+      const size = journalSize(
+        entries.reduce((sum, entry) => sum + (entry.lines || 0), 0),
+        entries.reduce((sum, entry) => sum + (entry.bytes || 0), 0),
+      );
       group.innerHTML = `
         <header>
           <h2 class="mono">${escapeHtml(entries[0].container)} / ${escapeHtml(entries[0].database)}</h2>
-          <span class="journal-meta">${entries.length} session${entries.length === 1 ? '' : 's'} · last ${escapeHtml(formatStamp(entries[0].opened_at))}</span>
+          <span class="journal-meta">${entries.length} session${entries.length === 1 ? '' : 's'} · ${size} · last ${escapeHtml(formatStamp(entries[0].opened_at))}</span>
           ${live ? '<span class="journal-live">live</span>' : ''}
         </header>`;
       const header = group.querySelector('header');
@@ -2947,7 +3007,6 @@ function journalOwner(entry) {
 }
 
 async function copyJournal(id, button) {
-  const label = button.textContent;
   button.disabled = true;
   try {
     const response = await fetch(`/api/journals/${id}?fmt=markdown`);
@@ -2955,16 +3014,23 @@ async function copyJournal(id, button) {
       throw new Error(response.statusText);
     }
     await copyText(await response.text());
-    button.textContent = 'copied';
+    button.dataset.flash = 'copied';
   } catch (error) {
-    button.textContent = 'failed';
+    button.dataset.flash = 'failed';
     console.warn('could not copy journal', error);
   } finally {
     button.disabled = false;
     window.setTimeout(() => {
-      button.textContent = label;
+      button.dataset.flash = '';
     }, 1200);
   }
+}
+
+// `12,840 / 1,532 KB`: records in the file, then its size on disk.
+function journalSize(lines, bytes) {
+  const kilobytes = bytes ? Math.max(1, Math.round(bytes / 1024)) : 0;
+
+  return `${lines.toLocaleString('en-US')} / ${kilobytes.toLocaleString('en-US')} KB`;
 }
 
 // Six mono columns and a pile of export links say nothing about themselves.
@@ -2979,6 +3045,7 @@ function journalColumns() {
     <span>duration</span>
     <span>commands</span>
     <span>outcome</span>
+    <span>size</span>
     <span class="journal-export-links">export</span>
     <span class="journal-delete-col"></span>`;
 
@@ -3001,6 +3068,7 @@ function journalRow(entry) {
     <span>${escapeHtml(formatDuration(entry.duration))}</span>
     <span>${commands}</span>
     <span class="journal-status ${disposition}">${disposition}</span>
+    <span class="journal-size">${journalSize(entry.lines, entry.bytes)}</span>
     <span class="journal-export-links"></span>`;
   const exportLinks = row.querySelector('.journal-export-links');
   const jsonlLink = document.createElement('a');
@@ -3016,9 +3084,13 @@ function journalRow(entry) {
   mdLink.title = 'Export this session as Markdown. Journals are unmasked.';
   bindJournalExportLink(mdLink, '.md');
   const copyButton = document.createElement('button');
+  copyButton.type = 'button';
   copyButton.className = 'journal-copy';
-  copyButton.textContent = 'copy';
+  // Both glyphs ship and the stylesheet picks one by `data-flash`, the same
+  // as the target copy on the Connect screen.
+  copyButton.innerHTML = '<svg class="copy-idle" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M11 6V3a1.5 1.5 0 0 0-1.5-1.5H3A1.5 1.5 0 0 0 1.5 3v6.5A1.5 1.5 0 0 0 3 11h3"/><rect x="6" y="6" width="8" height="8" rx="1.5"/></svg><svg class="copy-done" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5 6.3 12 13 4.5"/></svg>';
   copyButton.title = `Copy the transcript to the clipboard. ${JOURNAL_UNMASKED_WARNING}`;
+  copyButton.setAttribute('aria-label', 'Copy the transcript to the clipboard');
   copyButton.addEventListener('click', (event) => {
     event.stopPropagation();  // the row itself opens the preview
     copyJournal(entry.session_id, copyButton);
@@ -3237,6 +3309,7 @@ function paintSessionAge(record) {
 function tickSessionAges() {
   for (const record of state.sessions.values()) {
     paintSessionAge(record);
+    paintTestRunElapsed(record);
   }
 }
 

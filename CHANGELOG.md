@@ -7,6 +7,48 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.8.2] — 2026-10-01
+
+### A test run says where it is
+
+A test run used to be a rose badge, a blinking lamp, and an empty feed that
+said to go and read the log. The log runs too fast to read, so nobody could
+tell which test was running or whether anything had failed yet until the
+whole class was done.
+
+Odoo already says it: one `Starting X ...` line per test, `FAIL:` and
+`ERROR:` lines as they happen, all from the test module's own logger and the
+same in 15 through 20. The session now counts those lines while a
+`run_test` holds it, and `describe()` and a new `test_progress` WebSocket
+event carry the result: the test asked for, the one running now, and how
+many have started, failed, errored and been skipped. The feed shows that as
+a card above the cells, with a clock, and drops it when the result lands.
+
+### odoo_bin is found, not asked for
+
+An agent that ran `os_run_test` with a container and a database got
+`http_422` back, and the message listed odoo_bin among the required fields
+as though it were a choice. It is not: it is a fact about the container,
+which the agent could only learn by calling `os_list_containers` and probing
+every container on the machine. `POST /api/sessions` now probes the one
+container it was given when the path is left out, and refuses an
+unsupported or unreadable one before spawning anything. `os_open_session`
+and `os_run_test` get it for free. A missing container or database is named
+on its own instead of in a list.
+
+### Journals say how big they are
+
+Nineteen hundred journals came to 1.4 GB on one machine, and nothing on the
+Journals screen said which of them were the weight. Each row now has a
+`size` column after `outcome` — records in the file and kilobytes on disk,
+`772 / 243 KB` — and a group heading sums its rows. `/api/journals` carries
+the two numbers as `lines` and `bytes`; they describe the file, so they stay
+out of the session metadata every export carries.
+
+The row's `copy` word is now the same two-sheet glyph the Connect screen
+copies a target with, to give the new column its room. It turns into a
+green tick when the copy lands, red when it fails.
+
 ## [1.8.1] — 2026-09-28
 
 ### An owner is a kind and a name
@@ -1175,7 +1217,8 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
-[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.8.1...HEAD
+[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.8.2...HEAD
+[1.8.2]: https://github.com/romi477/odoo_sheller/compare/v1.8.1...v1.8.2
 [1.8.1]: https://github.com/romi477/odoo_sheller/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/romi477/odoo_sheller/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/romi477/odoo_sheller/compare/v1.6.4...v1.7.0

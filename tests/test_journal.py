@@ -65,6 +65,39 @@ def test_list_journals_summarises_each_file(tmp_path):
     assert entries[0]["duration"] >= 0
 
 
+def test_list_journals_reports_the_file_size_on_disk(tmp_path):
+    path = journal.journal_path(
+        tmp_path, "abc123", "c", "db", datetime(2026, 8, 15, 14, 30, 5, tzinfo=UTC)
+    )
+    log = journal.Journal(path)
+    log.write("session_open", container="c", database="db", odoo="19.0")
+    log.write("stderr", line="ж" * 100)  # bytes, not characters
+    log.write("exec", id=1, code="a")
+
+    entry = journal.list_journals(tmp_path)[0]
+    assert entry["lines"] == len(path.read_text(encoding="utf-8").splitlines()) == 3
+    assert entry["bytes"] == path.stat().st_size
+
+
+def test_list_journals_size_of_an_empty_file_is_zero(tmp_path):
+    path = journal.journal_path(
+        tmp_path, "empty1", "c", "db", datetime(2026, 8, 15, 14, 30, 5, tzinfo=UTC)
+    )
+    path.write_text("", encoding="utf-8")
+
+    entry = journal.list_journals(tmp_path)[0]
+    assert entry["lines"] == 0
+    assert entry["bytes"] == 0
+
+
+def test_size_is_a_listing_field_not_session_metadata(tmp_path):
+    """Exports carry session_meta; a file size there would describe the
+    export's source, not the session, and change with every line appended."""
+    meta = journal.session_meta([], "abc")
+    assert "lines" not in meta
+    assert "bytes" not in meta
+
+
 def test_list_journals_duration_is_seconds_between_first_and_last_record(tmp_path):
     path = journal.journal_path(
         tmp_path, "abc123", "c", "db", datetime(2026, 8, 15, 14, 30, 5, tzinfo=UTC)

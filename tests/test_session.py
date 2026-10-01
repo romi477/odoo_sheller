@@ -14,6 +14,7 @@ from odoo_sheller.session import (
     SessionDead,
     SessionNotReady,
     SessionState,
+    parse_test_line,
 )
 from odoo_sheller.transport import Target
 
@@ -1123,4 +1124,125 @@ async def test_a_transaction_boundary_clears_what_was_inherited(tmp_path):
     assert session.describe()["inherited_pending"] == 1
     await session.commit()
     assert session.describe()["inherited_pending"] == 0
+    await session.close()
+
+
+# -- live test progress --------------------------------------------------
+
+LOGGER = "odoo.addons.sale.tests.test_sale_order"
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        # Odoo 19: the perf_info suffix trails the message.
+        (f"2026-10-01 10:00:00,123 42 INFO db {LOGGER}: Starting TestSaleOrder.test_x ... - - -",
+         ("start", "TestSaleOrder.test_x")),
+        # Odoo 15: perf_info empty, so only a trailing space.
+        (f"2026-10-01 10:00:00,123 42 INFO db {LOGGER}: Starting TestSaleOrder.test_x ... ",
+         ("start", "TestSaleOrder.test_x")),
+        (f"2026-10-01 10:00:00,123 42 ERROR db {LOGGER}: FAIL: TestSaleOrder.test_x",
+         ("failure", "TestSaleOrder.test_x")),
+        (f"2026-10-01 10:00:00,123 42 ERROR db {LOGGER}: ERROR: TestSaleOrder.test_y",
+         ("error", "TestSaleOrder.test_y")),
+        (f"2026-10-01 10:00:00,123 42 ERROR db {LOGGER}: FAIL: Subtest TestSaleOrder.test_x (n=2)",
+         ("failure", "Subtest TestSaleOrder.test_x (n=2)")),
+        (f"2026-10-01 10:00:00,123 42 INFO db {LOGGER}: skipped TestSaleOrder.test_z : no stock",
+         ("skip", "TestSaleOrder.test_z")),
+        # A traceback line under a FAIL, an unrelated logger, plain noise.
+        ('  File "/opt/odoo/addons/sale/tests/test_sale_order.py", line 12, in test_x', None),
+        ("2026-10-01 10:00:00,123 42 ERROR db odoo.sql_db: ERROR: relation does not exist", None),
+        ("2026-10-01 10:00:00,123 42 INFO db odoo.modules.loading: Starting registry ... ", None),
+        ("plain noise", None),
+    ],
+)
+def test_parse_test_line(line, expected):
+    assert parse_test_line(line) == expected
+
+
+PROGRESS_FAKE = r"""
+import json, sys, time
+L = "2026-10-01 10:00:00,123 42 %s db odoo.addons.sale.tests.test_sale_order: %s - - -\n"
+sys.stdout.write(json.dumps({"t":"hello","protocol":1,"odoo":"19.0","python":"3.12.0",
+                             "db":"db","uid":1,"pid":4242}) + "\n")
+sys.stdout.flush()
+# Before any run: must not count.
+sys.stderr.write(L % ("INFO", "Starting TestOld.test_old ..."))
+sys.stderr.flush()
+for line in sys.stdin:
+    frame = json.loads(line)
+    if frame["t"] == "close":
+        sys.stdout.write(json.dumps({"t":"bye","id":frame["id"]}) + "\n")
+        sys.stdout.flush()
+        break
+    if frame["t"] == "run_test":
+        for message in (("INFO", "Starting TestSaleOrder.test_a ..."),
+                        ("INFO", "Starting TestSaleOrder.test_b ..."),
+                        ("ERROR", "FAIL: TestSaleOrder.test_b"),
+                        ("INFO", "noise that is not a test"),
+                        ("INFO", "skipped TestSaleOrder.test_c : why")):
+            sys.stderr.write(L % message)
+            sys.stderr.flush()
+        time.sleep(0.4)
+    sys.stdout.write(json.dumps({"t":"result","id":frame["id"],"stdout":"",
+                                 "stdout_truncated":False,"result":None,
+                                 "result_truncated":False,"error":None,"duration":0.01}) + "\n")
+    sys.stdout.flush()
+"""
+
+
+async def test_describe_reports_live_test_progress(tmp_path):
+    session = await make_session(tmp_path, script=PROGRESS_FAKE)
+    await session.start()
+    await asyncio.sleep(0.1)  # the pre-run line lands outside any run
+    assert session.describe()["test_progress"] is None
+    running = asyncio.create_task(session.run_test("sale", "TestSaleOrder"))
+    await asyncio.sleep(0.25)
+    progress = session.describe()["test_progress"]
+    assert progress["spec"] == "sale.TestSaleOrder"
+    assert progress["current"] == "TestSaleOrder.test_b"
+    assert progress["started"] == 2
+    assert progress["failures"] == 1
+    assert progress["errors"] == 0
+    assert progress["skipped"] == 1
+    assert isinstance(progress["started_at"], float)
+    await running
+    assert session.describe()["test_progress"] is None
+    await session.close()
+
+
+async def test_spec_names_the_method_when_one_was_asked_for(tmp_path):
+    session = await make_session(tmp_path, script=PROGRESS_FAKE)
+    await session.start()
+    running = asyncio.create_task(session.run_test("sale", "TestSaleOrder", "test_a"))
+    await asyncio.sleep(0.25)
+    assert session.describe()["test_progress"]["spec"] == "sale.TestSaleOrder.test_a"
+    await running
+    await session.close()
+
+
+async def test_progress_events_fire_per_change_not_per_line(tmp_path):
+    seen = []
+    session = await make_session(tmp_path, script=PROGRESS_FAKE,
+                                 on_event=lambda event: seen.append(event))
+    await session.start()
+    await session.run_test("sale", "TestSaleOrder")
+    progress = [event for event in seen if event["kind"] == "test_progress"]
+    # One when the run starts, one per matched line (4), one clearing it.
+    assert len(progress) == 6
+    assert progress[0]["progress"]["started"] == 0
+    assert progress[-2]["progress"]["skipped"] == 1
+    assert progress[-1]["progress"] is None
+    assert all(event["session"] == "s1" for event in progress)
+    await session.close()
+
+
+async def test_exec_does_not_count_test_lines(tmp_path):
+    seen = []
+    session = await make_session(tmp_path, script=PROGRESS_FAKE,
+                                 on_event=lambda event: seen.append(event))
+    await session.start()
+    await session.execute("1")
+    assert not [event for event in seen if event["kind"] == "test_progress"]
+    assert session.describe()["test_progress"] is None
     await session.close()

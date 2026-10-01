@@ -34,7 +34,7 @@ no way for an agent to grant itself write access.
 | Tool | Arguments | Notes |
 |---|---|---|
 | `os_list_containers` | — | running containers with their probe results |
-| `os_open_session` | `container`, `database`, `odoo_bin`, `replace=None` | opens as `agent`, `allow_commit=False`; stores the write key for you |
+| `os_open_session` | `container`, `database`, `odoo_bin=None`, `replace=None` | opens as `agent`, `allow_commit=False`; stores the write key for you. Leave `odoo_bin` out: the daemon probes the container for it |
 | `os_attach_session` | `session_id`, `write_key` | adopts a session a human handed over |
 | `os_list_sessions` | — | every session with its owner and state (read-only) |
 | `os_session` | `session_id=None` | one session's state, including `allow_commit` (read-only) |

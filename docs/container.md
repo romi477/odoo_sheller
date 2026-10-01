@@ -86,7 +86,7 @@ no session on its own, so `healthy` means ready.
 ```json
 {
   "ok": true,
-  "version": "1.8.1",
+  "version": "1.8.2",
   "container": true,
   "mcp": {
     "command": "docker",

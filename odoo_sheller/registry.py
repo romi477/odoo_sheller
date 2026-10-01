@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from odoo_sheller.discovery import probe_odoosh
+from odoo_sheller.discovery import probe, probe_odoosh
 from odoo_sheller.journal import (
     JOURNAL_ROOT,
     Journal,
@@ -74,6 +74,31 @@ class Registry:
             return None
 
         return target_from_records(past.records())
+
+    async def _docker_target(
+        self, container: str | None, database: str | None, odoo_bin: str | None
+    ) -> Target:
+        """A local container, with odoo-bin found rather than asked for.
+
+        Container and database are the caller's choice; odoo-bin is a fact
+        about the container. An agent that left it out used to get a bare
+        `http_422` and probe every running container to learn one path. The
+        probe here is the same one Connect runs, so it also refuses an
+        unsupported version before anything is spawned. A caller that already
+        knows the path skips it.
+        """
+        for name, value in (("container", container), ("database", database)):
+            if not value:
+                raise ValueError(f"{name} is required for a local container")
+        if not odoo_bin:
+            found = await probe(container)
+            if not (found.get("ok") and found.get("supported") and found.get("odoo_bin")):
+                raise ValueError(
+                    found.get("error") or f"no usable Odoo in container {container}"
+                )
+            odoo_bin = found["odoo_bin"]
+
+        return Target(container=container, database=database, odoo_bin=odoo_bin)
 
     async def _odoosh_target(self, build: str | None, host: str | None) -> Target:
         """Ask the build what it is before opening anything in it.
@@ -144,9 +169,7 @@ class Registry:
         if kind == ODOOSH:
             target = await self._odoosh_target(build, host)
         else:
-            if not (container and database and odoo_bin):
-                raise ValueError("container, database and odoo_bin are required")
-            target = Target(container=container, database=database, odoo_bin=odoo_bin)
+            target = await self._docker_target(container, database, odoo_bin)
         session_id = uuid.uuid4().hex[:12]
         process = await spawn(build_command(target, bootstrap_source()))
         session = None

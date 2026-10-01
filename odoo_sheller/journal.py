@@ -108,6 +108,10 @@ def list_journals(root: Path) -> list[dict]:
             "container": meta["container"] or "?",
             "database": meta["database"] or "?",
             "odoo": meta["odoo"] or "?",
+            # The file, not the session: what deleting it frees. Kept out of
+            # session_meta, which every export carries.
+            "lines": len(records),
+            "bytes": path.stat().st_size,
         })
 
     return entries
