@@ -107,15 +107,66 @@ STDERR_DRAIN = 0.05
 # addon's `tests` package — anchoring on it keeps an unrelated `ERROR:` out
 # of the counts. What follows the message is perf_info, empty or `- - -`.
 _TEST_LOGGER = r" odoo\.addons\.\S+\.tests(?:\.\S+)?: "
+# A fixture that fails outside any test — setUpClass, setUpModule and their
+# teardowns — is reported through an `_ErrorHolder`, and the result logs
+# under the holder's module, not the test's: `odoo.tests.suite` from 16,
+# `unittest.suite` in 15. Those two loggers say nothing else, but the
+# description is pinned to the fixture shape anyway.
+_SUITE_LOGGER = r" (?:odoo\.tests|unittest)\.suite: "
+_FIXTURE = r"((?:setUp|tearDown)(?:Class|Module) \([\w.]+\))"
+# perf_info on a one-line message: `- - -`, `- - - -`, or a query count and
+# two timings, sometimes followed by a cursor mode.
+_PERF = r"(?: - - -(?: -)?| \d+ \d+\.\d+ \d+\.\d+(?: \S+)?)?\s*$"
 _TEST_LINES = (
     ("start", re.compile(_TEST_LOGGER + r"Starting (.+?) \.\.\.(?:\s|$)")),
-    ("failure", re.compile(_TEST_LOGGER + r"FAIL: (.+?)\s*$")),
-    ("error", re.compile(_TEST_LOGGER + r"ERROR: (.+?)\s*$")),
+    ("failure", re.compile(_TEST_LOGGER + r"FAIL: (.+?)" + _PERF)),
+    ("error", re.compile(_TEST_LOGGER + r"ERROR: (.+?)" + _PERF)),
     ("skip", re.compile(_TEST_LOGGER + r"skipped (.+?) : ")),
+    ("failure", re.compile(_SUITE_LOGGER + r"FAIL: " + _FIXTURE + _PERF)),
+    ("error", re.compile(_SUITE_LOGGER + r"ERROR: " + _FIXTURE + _PERF)),
+    ("skip", re.compile(_SUITE_LOGGER + r"skipped " + _FIXTURE + r" : ")),
 )
 _PROGRESS_COUNTER = {
     "start": "started", "failure": "failures", "error": "errors", "skip": "skipped",
 }
+
+
+# How unittest names a fixture that failed outside any test. A class:
+# `setUpClass (odoo.addons.sale.tests.test_sale_order.TestBroken)`. A test
+# file: `setUpModule (odoo.addons.sale.tests.test_sale_order)` — whose last
+# part is a file, not a class, and no test tag can name a file.
+_CLASS_FIXTURE = re.compile(r"^(?:setUp|tearDown)Class \((?:[\w.]+\.)?(\w+)\)$")
+_MODULE_FIXTURE = re.compile(r"^(?:setUp|tearDown)Module \([\w.]+\)$")
+# `Subtest TestX.test_y (n=2)`: the method is what can be run again.
+_SUBTEST = re.compile(r"^Subtest (\w+\.\w+) ")
+
+
+def rerun_spec(module: str, description: str) -> str:
+    """What os_run_test takes to run this failure again.
+
+    Odoo names a test `Class.method`; the module is the run's own, since a
+    run only ever loads one module's tests. A failed subtest is rerun as its
+    method, a class that failed to set up as the class, and a test file that
+    failed to set up as the whole module — the narrowest thing a tag can
+    name that still holds it. Anything else is returned as Odoo said it
+    rather than guessed at.
+    """
+    subtest = _SUBTEST.match(description)
+    if subtest:
+
+        return f"{module}.{subtest.group(1)}"
+    fixture = _CLASS_FIXTURE.match(description)
+    if fixture:
+
+        return f"{module}.{fixture.group(1)}"
+    if _MODULE_FIXTURE.match(description):
+
+        return module
+    if re.fullmatch(r"\w+\.\w+", description):
+
+        return f"{module}.{description}"
+
+    return description
 
 
 def parse_test_line(line: str) -> tuple[str, str] | None:
@@ -151,13 +202,8 @@ class Session:
         # a browser is opening its own, and both need to know which is theirs.
         self.client_token = client_token
         self.owner = dict(owner or HUMAN_OWNER)
-        # A human drives the UI and confirms every commit there; an agent has to
-        # be granted the right explicitly. On a remote instance neither applies:
-        # being the owner is enough locally, and is not enough on someone's
-        # own Odoo, so a human starts without the right there too.
         if allow_commit is None:
-            local_human = self.owner.get("kind") == "human" and not target.is_remote
-            self.allow_commit = local_human
+            self.allow_commit = self._starts_with_commit()
         else:
             self.allow_commit = allow_commit
         if target.stage == PRODUCTION:
@@ -169,6 +215,10 @@ class Session:
         # a session over keeps the right to end it or to take it back: giving
         # away the right to type is not giving away the session.
         self.former_keys: set[str] = set()
+        # Who each key was issued to, current and former. Granting commit, or
+        # handing a session to a human, is a human's act: an agent holding its
+        # own key must not be able to do either and so lift its own gate.
+        self._key_kinds: dict[str, str | None] = {self.write_key: self.owner.get("kind")}
         self.hello: dict | None = None
         self.pending_commands = 0
         self.inherited_pending = 0
@@ -183,12 +233,20 @@ class Session:
         # stays BUSY until its result frame finally arrives. Going READY here
         # would let a second command queue up behind the first one in the pipe.
         self._abandoned_id: int | None = None
+        # The frame type of that command, so its late result is accounted for
+        # the way an answer in time would have been: an exec is pending work,
+        # a commit or rollback that finally finished ends the transaction.
+        self._abandoned_kind: str | None = None
         # What is holding BUSY (`exec`, `run_test`, …). None when not busy.
         # A timeout leaves the session BUSY, so this stays set until the result.
         self._activity: str | None = None
         # How far the running test has got, read off Odoo's own log lines.
         # None unless a run_test holds BUSY — see `parse_test_line`.
         self._test_progress: dict | None = None
+        # What failed in the running test, as specs to run again. A whole
+        # module's log is thousands of lines; this is the part an agent acts on.
+        self._test_failed: list[dict] = []
+        self._test_module: str | None = None
         self._hello_waiter: asyncio.Future = asyncio.get_running_loop().create_future()
         self._stderr: deque[str] = deque(maxlen=2000)
         # A session opened to run one test and then get out of the way. It
@@ -320,9 +378,13 @@ class Session:
         self.inherited_pending = self.pending_commands
         self.former_keys.add(self.write_key)
         self.write_key = secrets.token_urlsafe(24)
-        # Humans confirm each commit in the UI. An agent starts without the
-        # right; a grant does not travel either way.
-        self.allow_commit = self.owner.get("kind") == "human"
+        self._key_kinds[self.write_key] = self.owner.get("kind")
+        # A grant does not travel either way: the new owner starts where
+        # anyone of their kind starts on this target. That used to be "a human
+        # may", full stop — and on a remote instance a session handed to an
+        # agent and taken back came home able to commit, with no grant ever
+        # made, while on production it claimed a right nothing would honour.
+        self.allow_commit = self._starts_with_commit()
         self.journal.write(
             "owner_changed",
             **{"from": previous, "to": dict(self.owner),
@@ -331,6 +393,43 @@ class Session:
         self._emit({"kind": "owner", "owner": dict(self.owner), "session": self.id})
 
         return self.write_key
+
+    def _starts_with_commit(self) -> bool:
+        """Whether the current owner holds the right without being granted it.
+
+        A human drives the UI and confirms every commit there; an agent has
+        to be granted the right explicitly. On a remote instance neither
+        applies: being the owner is enough locally, and is not enough on
+        someone's own Odoo, so a human starts without the right there too —
+        and on production nothing ever holds it.
+        """
+
+        return (
+            self.owner.get("kind") == "human"
+            and not self.target.is_remote
+            and self.target.stage != PRODUCTION
+        )
+
+    def held_by_human(self, key: str | None) -> bool:
+        """`held_by`, for a key that was issued to a human.
+
+        What separates "the agent this session was handed to" from "the human
+        who handed it over": both hold a key that `held_by` accepts, and only
+        one of them may grant commit or give the session to a human.
+        """
+
+        return self.held_by(key) and self._key_kinds.get(key) == "human"
+
+    def key_status(self, key: str | None) -> str:
+        """What a presented key is worth here, without saying whose it is."""
+        if key and key == self.write_key:
+
+            return "owner"
+        if key and key in self.former_keys:
+
+            return "former_owner"
+
+        return "invalid"
 
     def set_allow_commit(self, allowed: bool) -> None:
         if allowed and self.target.stage == PRODUCTION:
@@ -370,17 +469,31 @@ class Session:
 
     # -- commands --------------------------------------------------------
 
-    async def execute(self, code: str, timeout: float = 300.0) -> dict:
+    async def execute(
+        self, code: str, timeout: float = 300.0, read_only: bool = False
+    ) -> dict:
+        """Run code; `read_only` is the caller's word that it writes nothing.
+
+        Such a command is journalled like any other, flagged, and not counted
+        as pending work: a source read from os_source is not something a
+        handover should warn about, nor a test run report as discarded.
+        """
         self._ensure_acceptable("exec")
         request_id = self._take_id()
-        self.journal.write("exec", id=request_id, code=code, actor=dict(self.owner))
+        flags = {"read_only": True} if read_only else {}
+        self.journal.write(
+            "exec", id=request_id, code=code, actor=dict(self.owner), **flags
+        )
         # Collected the same way as for a test run: the lines are on the
         # journal either way, but a caller that is not handed them concludes
         # there was no log — and writes a logging handler of its own.
         window = _StderrWindow(EXEC_STDERR_LIMIT)
         self._stderr_collectors.append(window)
         try:
-            result = await self._request(exec_frame(request_id, code), timeout)
+            result = await self._request(
+                exec_frame(request_id, code), timeout,
+                account="read" if read_only else "exec",
+            )
             if window.total:
                 # Only when Odoo actually said something. exec is the hot
                 # path — a trivial command runs in under a millisecond, and
@@ -395,14 +508,15 @@ class Session:
             "stderr_truncated": window.truncated,
         }
         self.journal.write("result", **_journal_fields(result))
-        self.pending_commands += 1
+        if not read_only:
+            self.pending_commands += 1
 
         return result
 
     async def run_test(
         self,
         module: str,
-        test_class: str,
+        test_class: str | None = None,
         test_method: str | None = None,
         timeout: float = 300.0,
     ) -> dict:
@@ -433,6 +547,8 @@ class Session:
             "started_at": time.time(),
         }
         self._emit_test_progress()
+        self._test_failed = []
+        self._test_module = module
         try:
             result = await self._request(
                 run_test_frame(request_id, module, test_class, test_method), timeout
@@ -442,8 +558,10 @@ class Session:
             # A run that raised (timeout, death) must not leave a collector
             # behind: it would keep filling for the rest of the session.
             self._stderr_collectors.remove(window)
+            self._test_module = None
         result = {
             **result,
+            "failed": self._test_failed,
             "stderr": list(window.lines),
             "stderr_truncated": window.truncated,
             "discarded_pending": discarded_pending,
@@ -498,7 +616,15 @@ class Session:
         if self._state is SessionState.BUSY and frame_type != "close":
             raise SessionBusy(self._busy_reason())
 
-    async def _request(self, frame: dict, timeout: float) -> dict:
+    async def _request(
+        self, frame: dict, timeout: float, account: str | None = None
+    ) -> dict:
+        """Send one frame and wait for its answer.
+
+        `account` is how a late answer is booked if this one is abandoned —
+        the frame type unless the caller says otherwise; see
+        `_settle_abandoned`.
+        """
         self._ensure_acceptable(frame.get("t", ""))
 
         loop = asyncio.get_running_loop()
@@ -520,6 +646,7 @@ class Session:
         except TimeoutError:
             abandoned = True
             self._abandoned_id = frame.get("id")
+            self._abandoned_kind = account or frame.get("t")
             pid = (self.hello or {}).get("pid")
             if pid:
                 with contextlib.suppress(Exception):
@@ -530,7 +657,11 @@ class Session:
             if self._waiter is waiter:  # a concurrent close may own it by now
                 self._waiter = None
                 self._waiter_id = None
-            if self._state is SessionState.BUSY and not abandoned:
+            # Not while closing: the command a close cut short is still what
+            # the container is doing, and going READY in between told every
+            # watcher the session was free — then busy with `close`, then
+            # free again, then closed — and cleared a live test run's card.
+            if self._state is SessionState.BUSY and not abandoned and not self._closing:
                 self._set_state(SessionState.READY)
 
     def held_by(self, key: str | None) -> bool:
@@ -615,6 +746,10 @@ class Session:
 
             return
         kind, description = parsed
+        if kind in ("failure", "error") and self._test_module:
+            failed = {"test": rerun_spec(self._test_module, description), "kind": kind}
+            if failed not in self._test_failed:
+                self._test_failed.append(failed)
         self._test_progress[_PROGRESS_COUNTER[kind]] += 1
         if kind == "start":
             self._test_progress["current"] = description
@@ -666,11 +801,27 @@ class Session:
         """The command we stopped waiting for has finally finished.
 
         Nobody is listening for its result any more, so it goes to the journal
-        and the session becomes usable again.
+        and the session becomes usable again. What it did is booked the way an
+        answer in time would have been: an exec that ran on past its ceiling
+        may still have written, and a commit that finally got its lock did
+        commit — the journal has to say so, or a transcript reads "discarded"
+        over a write that happened.
         """
+        kind = self._abandoned_kind
         self._abandoned_id = None
+        self._abandoned_kind = None
         self.journal.write("abandoned_result", **_journal_fields(frame))
-        if self._state is SessionState.BUSY:
+        if kind == "exec":
+            self.pending_commands += 1
+        elif kind in ("commit", "rollback"):
+            self.journal.write(
+                kind, id=frame.get("id"), error=frame.get("error"),
+                actor=dict(self.owner), late=True,
+            )
+            if not frame.get("error"):
+                self.pending_commands = 0
+                self.inherited_pending = 0
+        if self._state is SessionState.BUSY and not self._closing:
             self._set_state(SessionState.READY)
         self._maybe_autoclose()
 
@@ -705,7 +856,15 @@ class Session:
         if self._waiter is not None and not self._waiter.done():
             self._waiter.set_exception(SessionDead(f"{reason}: {self._stderr_text()}"))
         if not self._hello_waiter.done():
-            self._hello_waiter.set_exception(SessionDead(reason))
+            # The cause is in what Odoo logged on its way out — a database
+            # that does not exist, a broken config, an import error. Without
+            # it an agent was told only "process ended" and had nothing to
+            # act on; the UI was not, because it streams the startup log.
+            tail = self._stderr_text()
+            self._hello_waiter.set_exception(SessionDead(
+                f"{reason} before the session started"
+                + (f": {tail}" if tail else "")
+            ))
 
     def _cancel_readers(self) -> None:
         for task in (self._reader, self._stderr_reader):
@@ -729,6 +888,7 @@ class Session:
             return
         if state in (SessionState.CLOSED, SessionState.DEAD):
             self._abandoned_id = None  # nothing is coming back now
+            self._abandoned_kind = None
         if state is not SessionState.BUSY:
             self._activity = None
             if self._test_progress is not None:

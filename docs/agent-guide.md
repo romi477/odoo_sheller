@@ -27,7 +27,11 @@ instance at all — see [Sessions it did not open](#sessions-it-did-not-open).
 
 Either way, committing anything still requires the human to flip **Grant
 commit** in the session keyboard after watching what the agent did. There is
-no way for an agent to grant itself write access.
+no way for an agent to grant itself write access: the daemon refuses a grant
+made with an agent's own key, a session opened for an agent with the right
+already in it, and a handover to "a human" made with an agent's key — all as
+`needs_a_human`. The key that comes back from such a handover would type as a
+human, and a local human commits without asking anyone.
 
 ## Tools
 
@@ -35,20 +39,20 @@ no way for an agent to grant itself write access.
 |---|---|---|
 | `os_list_containers` | — | running containers with their probe results |
 | `os_open_session` | `container`, `database`, `odoo_bin=None`, `replace=None` | opens as `agent`, `allow_commit=False`; stores the write key for you. Leave `odoo_bin` out: the daemon probes the container for it |
-| `os_attach_session` | `session_id`, `write_key` | adopts a session a human handed over |
+| `os_attach_session` | `session_id`, `write_key` | adopts a session a human handed over; a key that does not type there is refused at once as `not_owner`, with `key_status` saying whether it was never this session's or was before ownership moved |
 | `os_list_sessions` | — | every session with its owner and state (read-only) |
 | `os_session` | `session_id=None` | one session's state, including `allow_commit` (read-only) |
 | `os_exec` | `code`, `session_id=None`, `stderr=False` | blocks; returns stdout, result, error, duration and `stderr_lines`. `stderr=True` adds the log lines themselves |
-| `os_list_tests` | `module`, `container=None` | classes and methods in one addon, as `os_run_test` specs; disk catalogue, no session |
-| `os_run_test` | `test`, `container=None`, `database=None`, `odoo_bin=None`, `timeout=30.0`, `session_id=None` | runs one Odoo test method or a whole class; opens its own new session (which then closes itself), or runs in one it was handed |
+| `os_list_tests` | `module`, `container=None` | classes and methods in one addon, as `os_run_test` specs; disk catalogue, no session. A local container's disk only: on a remote build it answers `not_a_container` and points at `os_source` |
+| `os_run_test` | `test`, `container=None`, `database=None`, `odoo_bin=None`, `timeout=None`, `session_id=None` | runs a whole module's standard tests (`module`), one class or one method; answers with counts and `failed`, each a spec to rerun; opens its own new session (which then closes itself), or runs in one it was handed. Without `timeout` the ceiling follows the spec: 30s, 300s, 1800s |
 | `os_test_result` | `session_id` | waits for a run started by `os_run_test` and returns its outcome (read-only, no key needed) |
 | `os_rollback` | `session_id=None` | discards the open transaction |
 | `os_commit` | `session_id=None`, `include_inherited=False` | fails unless the human has granted commit; refused once as `inherited_pending` on a session handed over with work already in its transaction |
 | `os_interrupt` | `session_id=None` | stops a running command |
 | `os_close_session` | `session_id=None` | ends the session |
 | `os_history` | `session_id`, `limit=20` | recent commands and results, rebuilt from the journal |
-| `os_journal` | `session_id`, `fmt="markdown"` | the full transcript |
-| `os_source` | `path`/`model`, `method=None`, `module=None`, `first=None`, `last=None`, `session_id=None` | Odoo source from inside the instance: a module's file tree, a file's line range, or the method that actually runs plus the chain of modules overriding it |
+| `os_journal` | `session_id`, `fmt="markdown"`, `first=None`, `last=None` | the transcript, a page at a time: the end by default, any stretch by 1-based line range, with `total_lines` (`fmt="jsonl"` for the raw records) |
+| `os_source` | `path`/`model`, `method=None`, `module=None`, `first=None`, `last=None`, `session_id=None` | Odoo source from inside the instance: a module's file tree, a file's line range, or the method that actually runs plus the chain of modules overriding it. Journalled as a read, so it never counts as pending work |
 | `os_help` | `topic=None` | the parts of this server's instructions the host did not deliver; no topic lists them (read-only, no session) |
 
 `session_id` defaults to the one session the server currently holds a key
@@ -56,11 +60,15 @@ for; it becomes required once it holds more than one.
 
 ## Defaults chosen for a model, not a human
 
-- **The exec ceiling is 30 seconds**, not the API's usual five minutes.
-  Most MCP clients give up well before that, and a client that stops waiting
-  while the daemon is still holding the command open is exactly the kind of
-  confusion the timeout-handling rules in the architecture doc exist to
-  avoid. On timeout, the tool says plainly that the session is still busy.
+- **`os_exec` waits about 40 seconds; the command gets five minutes.**
+  MCP hosts cut a tool call off at around a minute, so the server stops
+  waiting before that and answers `request_timed_out`. The daemon's own
+  ceiling is unchanged: the command runs on, and the session stays busy,
+  until it ends or is interrupted at five minutes. The answer says exactly
+  that — still running, do not run it again, `os_history` for when it
+  finished, `os_interrupt` to stop it now. These docs once promised a
+  30-second ceiling; there never was one on the daemon's side, and an agent
+  believing it would have read a running command as a stopped one.
 - **The Odoo log is one flag away, and its existence is free.** Every
   `os_exec` reports `stderr_lines`, a count; `stderr=True` returns the lines
   as `stderr`, clipped from the end. The split is deliberate: an agent told
@@ -68,11 +76,15 @@ for; it becomes required once it holds more than one.
   out of the process — one did — while a log attached to every response is
   context spent on output nobody asked for. The count is the part that
   cannot be guessed, so it is always sent, and the lines are on request.
-  `os_run_test` sends its log unasked, because there the log is the answer.
+  `os_run_test` sends a class's or a method's log unasked, because there the
+  log is the answer. A whole module's is a count, like `os_exec`'s: its log
+  runs to thousands of lines, and `failed` already says what to look at.
   Either way the full log is on the journal, `kind: "stderr"` records
   interleaved with the commands by time, so a log wanted after the fact is
   read rather than re-produced — re-running a command that wrote to the
-  database writes again.
+  database writes again. `os_journal` hands it back a page at a time — the
+  end by default, any other stretch by line range — because a module run's
+  journal is near a megabyte and whole it is context nothing else can use.
 - **Output is truncated hard**: 4 KB of stdout, 2 KB of the returned value.
   An agent's context window is the scarce resource here, not disk — the
   untruncated text is one `os_journal` call away.
@@ -188,8 +200,8 @@ In short, what the instructions and the topics between them say:
 
 ## Running a test
 
-`os_run_test("module.TestClass")` or `os_run_test("module.TestClass.test_method")`
-runs through Odoo's own shell-native test runner
+`os_run_test("module")`, `os_run_test("module.TestClass")` or
+`os_run_test("module.TestClass.test_method")` runs through Odoo's own shell-native test runner
 (`odoo.tests.shell.run_tests`) — the same mechanism `odoo-bin shell` itself
 would use, not a reimplementation. Unlike every other tool here, it always
 opens a **brand-new session** first, rather than running against one the
@@ -198,19 +210,38 @@ test setup to silently discard. That session then **closes itself**: it is
 opened with `autoclose`, so once the run settles and is journalled the daemon
 closes it —
 no `os_close_session` to remember, no container process left running, no test
-HTTP daemon holding a port. Run several classes by calling `os_run_test` once
-per class, in turn. In the web UI that
+HTTP daemon holding a port. To run everything a module has, pass the module
+rather than one call per class. In the web UI that
 session's badge reads `testing` and its tab shows a blinking lamp, so the
 human watching can tell a test apart from ordinary `exec`.
 
 When the class name is unknown, call `os_list_tests(module)` rather than
-inventing names. Prefer running `module.TestClass` — one class, one
-`os_run_test`. Do not open a session per method unless a single
-method is the point. Do not fire the whole list as parallel `os_run_test`
-calls.
+inventing names. Do not open a session per method unless a single
+method is the point. Do not fire a list of classes as parallel `os_run_test`
+calls: one module run covers them in one session.
+
+A bare module runs what Odoo calls its standard tests, at_install and
+post_install — the set `--test-tags /module` runs, not `*/module`. A test
+tagged `-standard` or `external` is left out on purpose: those are the ones
+that call real third-party services, and running one should be a decision.
+Name its class to run it.
+
+Every answer carries `failed`, one entry per failing test:
+`{"test": "module.TestClass.test_method", "kind": "failure" | "error"}`. The
+daemon reads it off Odoo's own `FAIL:` / `ERROR:` log lines while the run
+goes, so `test` is a spec to pass straight back to `os_run_test` — a failed
+subtest as its method, a class whose `setUpClass` failed as the class, a test
+file whose `setUpModule` failed as the whole module (no tag can name a file),
+and anything Odoo named some other way as Odoo named it. Odoo logs a failed
+fixture under the suite rather than under the test — `odoo.tests.suite`, or
+`unittest.suite` in 15 — and the daemon reads both. The intended loop is a
+module run, then one run per failed spec: a class or a method answers with
+its log tail, which is where the reason is. A module run's log comes back as
+`stderr_lines`, a count, and stays on the journal.
 
 The response separates what the test printed (`stdout`) from what Odoo logged
-while it ran (`stderr`), plus `tests_run`, `failures`, `errors`, `skipped` and
+while it ran (`stderr` for a class or a method, `stderr_lines` for a module),
+plus `tests_run`, `failures`, `errors`, `skipped` and
 `success`. `tests_run: 0` needs its own check — `success` reads `true` for a
 name that matched nothing at all, which otherwise looks exactly like a pass.
 `stderr` is clipped from the *end* — on a long run the last line is the one
@@ -233,9 +264,10 @@ nothing to lose), but running a test a second time in the *same* returned
 session, after using `os_exec` in it meanwhile, discards that work — the
 response's `discarded_pending` field says whether that happened.
 
-The default `timeout` is 30 seconds, matching `os_exec` — generous for one
-test, short for a whole class. Pass a larger one explicitly
-(`os_run_test(..., timeout=600)`) when deliberately running a slower class.
+Without a `timeout`, the ceiling follows what the spec names: 30 seconds for
+a method, 300 for a class, 1800 for a module. One default for every form used
+to stop a whole module at 30 seconds unless the agent remembered to say
+otherwise. Pass a `timeout` only to go past those — the most is 3600.
 
 A run longer than about a minute cannot be answered in one call, whatever
 `timeout` says. MCP hosts cut a tool call off at around that mark and nothing

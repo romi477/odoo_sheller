@@ -353,6 +353,6 @@ def test_the_compact_width_cap_matches_the_page_it_caps():
     lib = (DESKTOP / "src" / "lib.rs").read_text(encoding="utf-8")
     declared = re.search(r"const CANVAS_CSS_WIDTH: f64 = ([^;]+);", lib)
     assert declared is not None, "the window has no cap to compare"
-    assert abs(eval(declared.group(1).replace("_", "")) - wanted) < 0.5, (  # noqa: S307
+    assert abs(eval(declared.group(1).replace("_", "")) - wanted) < 0.5, (
         f"the stylesheet says {wanted}px, lib.rs says {declared.group(1).strip()}"
     )

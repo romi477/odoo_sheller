@@ -1,7 +1,9 @@
 import ast
 import json
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -11,7 +13,7 @@ BOOTSTRAP = ROOT / "odoo_sheller" / "bootstrap.py"
 HARNESS = ROOT / "tests" / "bootstrap_harness.py"
 
 ALLOWED_IMPORTS = {
-    "ast", "importlib", "io", "json", "os", "socket", "sys", "time", "traceback",
+    "ast", "importlib", "io", "json", "os", "signal", "socket", "sys", "time", "traceback",
 }
 
 
@@ -263,3 +265,124 @@ def test_run_test_on_fifteen_reads_the_result_it_is_given():
     assert result["test"]["skipped"] == 0
     assert result["test"]["success"] is True
     assert "make_suite(sale,at_install)" in calls
+
+
+def test_a_whole_module_runs_its_standard_tests_only():
+    """`/module`, not `*/module`: no tag means `standard` to Odoo's selector,
+    the same set `--test-tags /module` runs. `*` would pull in tests tagged
+    `-standard` or `external`, which may call real third-party services."""
+    out, _, calls = run_bootstrap([
+        {"t": "run_test", "id": 1, "module": "sale", "test_class": None,
+         "test_method": None},
+    ], fake_odoo="17")
+    assert out[1]["error"] is None, out[1]["error"]
+    assert "shell.run_tests(/sale)" in calls
+    assert out[1]["test"]["test_class"] is None
+
+
+def test_a_whole_module_on_the_fallback_uses_the_same_tag():
+    out, _, calls = run_bootstrap([
+        {"t": "run_test", "id": 1, "module": "sale", "test_class": None,
+         "test_method": None},
+    ], fake_odoo="16")
+    assert out[1]["error"] is None, out[1]["error"]
+    assert "run_suite(tags=/sale,enable=True)" in calls
+
+
+class LiveBootstrap:
+    """The bootstrap under the harness, kept running so it can be signalled
+    mid-command — the way the daemon's Interrupt and timeout reach it."""
+
+    def __init__(self):
+        self.proc = subprocess.Popen(
+            [sys.executable, str(HARNESS), str(BOOTSTRAP)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={"OS_CMD_FD": "0", "PATH": "/usr/bin:/bin"},
+            cwd=ROOT,
+        )
+        assert json.loads(self.proc.stdout.readline())["t"] == "hello"
+
+    def send(self, frame):
+        self.proc.stdin.write(json.dumps(frame) + "\n")
+        self.proc.stdin.flush()
+
+    def answer(self):
+        line = self.proc.stdout.readline()
+        assert line, "the bootstrap died: " + self.proc.stderr.read()[-500:]
+
+        return json.loads(line)
+
+    def interrupt_after(self, seconds):
+        time.sleep(seconds)
+        self.proc.send_signal(signal.SIGINT)
+
+    def close(self):
+        if self.proc.poll() is None:
+            self.send({"t": "close", "id": 999})
+        try:
+            self.proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.communicate()
+
+
+@pytest.fixture
+def live():
+    bootstrap = LiveBootstrap()
+    yield bootstrap
+    bootstrap.close()
+
+
+def test_an_interrupt_stops_a_running_command_and_keeps_the_session(live):
+    live.send({"t": "exec", "id": 1, "code": "import time\ntime.sleep(5)"})
+    live.interrupt_after(0.5)
+    assert live.answer()["error"]["type"] == "KeyboardInterrupt"
+    live.send({"t": "exec", "id": 2, "code": "'alive'"})
+    assert live.answer()["result"] == "'alive'"
+
+
+def test_an_interrupt_while_the_result_renders_keeps_the_session(live):
+    """The command had finished; only its repr was running — a million-record
+    recordset's takes seconds, long enough to look stuck. The interrupt used
+    to land outside every handler and end the process, namespace and open
+    transaction with it."""
+    code = (
+        "import time\n"
+        "class Big:\n"
+        "    def __repr__(self):\n"
+        "        time.sleep(3)\n"
+        "        return 'big'\n"
+        "kept = 41\n"
+        "Big()"
+    )
+    live.send({"t": "exec", "id": 1, "code": code})
+    live.interrupt_after(0.5)
+    answer = live.answer()
+    assert answer["error"] is None, "the command itself ran to the end"
+    assert answer["result"] == "<unrepresentable Big: KeyboardInterrupt>"
+    live.send({"t": "exec", "id": 2, "code": "kept + 1"})
+    assert live.answer()["result"] == "42", "the namespace survived"
+
+
+def test_an_interrupt_between_commands_means_nothing(live):
+    live.proc.send_signal(signal.SIGINT)
+    time.sleep(0.3)
+    assert live.proc.poll() is None
+    live.send({"t": "exec", "id": 1, "code": "'alive'"})
+    assert live.answer()["result"] == "'alive'"
+
+
+def test_an_interrupt_while_a_frame_is_written_never_cuts_it(live):
+    """Half a frame is a line the daemon cannot parse: the result never
+    arrives and the session stays busy forever. The reader here is held
+    back so the write blocks on a full pipe, and the signal lands inside it."""
+    live.send({"t": "exec", "id": 1, "code": "print('x' * 900_000)"})
+    live.interrupt_after(0.5)
+    answer = live.answer()
+    assert answer["id"] == 1
+    assert len(answer["stdout"]) == 900_001
+    live.send({"t": "exec", "id": 2, "code": "'alive'"})
+    assert live.answer()["result"] == "'alive'"

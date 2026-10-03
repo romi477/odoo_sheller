@@ -2990,6 +2990,11 @@ function highlightJournalRow(id) {
   }
 }
 
+// The kinds the stylesheet knows. A journal is read back from disk, and one
+// written before the daemon closed the set could carry any string a caller
+// sent — which then went into a class attribute unescaped.
+const OWNER_KINDS = new Set(['human', 'agent']);
+
 function journalOwner(entry) {
   const seen = entry.owners_seen || [];
   const last = entry.owner || seen[seen.length - 1];
@@ -3003,7 +3008,7 @@ function journalOwner(entry) {
     return {kind: 'shared', text: kinds.join('→')};
   }
 
-  return {kind: last.kind, text: last.kind};
+  return {kind: OWNER_KINDS.has(last.kind) ? last.kind : 'unknown', text: String(last.kind)};
 }
 
 async function copyJournal(id, button) {

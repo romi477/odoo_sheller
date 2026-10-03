@@ -187,7 +187,8 @@ control this:
   asks for confirmation naming the database when turned on.
 
 Closing or reclaiming a session you never owned yourself needs the daemon's
-admin key — printed at startup and kept in `~/.odoo-sheller/admin.key`. A
+admin key — kept in `~/.odoo-sheller/admin.key`, and printed at startup when
+the daemon runs in a terminal (never into a log file). A
 browser tab only asks for it when the daemon actually refuses something, never
 up front. The desktop app reads the file itself after the daemon is up, so
 Grant access / Grant commit / take back do not prompt there. A session that's
@@ -256,7 +257,11 @@ with its traceback, and how long it took.
   test running right now, and `started N · ✗ N fail · ! N error · ⏭ N
   skipped`. Fail and error turn red and bold once they are above zero. The
   card moves once per test, not per log line, stays visible with Logs open,
-  and goes away when the run's result arrives. Before the first test starts
+  and goes away when the run's result arrives — or when the session closes,
+  and not a moment before: closing a session mid-run used to report it
+  `ready` for an instant and take the card with it while the run went on. A
+  class that fails in `setUpClass` counts as an error here too. Before the
+  first test starts
   it reads `no test started yet — Odoo logs each one at INFO`: an Odoo
   configured above `INFO` never logs one, and then the card only shows the
   test asked for and the clock.
@@ -307,7 +312,9 @@ heading reads `117 sessions · 99,756 / 30,761 KB · last …`: the size is the
 sum of its rows.
 
 Each row: timestamp, owner (`human`, `agent`, or `human→agent` for a
-handover), session id, duration, command count, `committed` / `discarded`,
+handover), session id, duration, command count, `committed` / `discarded`
+(`committed` only for a commit that went through — a failed one wrote
+nothing),
 size — `772 / 243 KB`, records in the journal file and its size on disk,
 never `0 KB` for a file with anything in it — and the row's own controls:
 `.jsonl`, `.md`, a two-sheet copy glyph, and a trash icon. A

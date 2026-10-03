@@ -357,7 +357,8 @@ developer's machine is never in.
 | Docker not running | Probe's error is visible in the UI |
 | Docker installed in `~/.docker/bin` only | Containers still listed |
 | Quit with a live session | Confirmation naming sessions and pending commands |
-| Quit with a foreign daemon | The daemon survives |
+| Quit with a foreign daemon | The daemon survives; open terminal tabs are still asked about, since they die with the app |
+| Large paste into a terminal tab running a raw-mode program that is not reading | The app stays responsive; the paste is delivered once the program reads |
 | App restarts while an agent holds a session | Agent sees `session_gone`, not a hang |
 | Browser tab open on 8765 alongside the app | Both views stay in sync; the one without the key is a watcher |
 | Machine with no Python | Everything works |

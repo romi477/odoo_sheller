@@ -16,7 +16,10 @@ browser ──HTTP/WS──> daemon (host or container) ──pipe──> docker
 
 - **The daemon** is the only piece that knows about pipes, framing, and where
   a session runs. It runs as a plain process on the host and speaks HTTP and
-  WebSocket to whoever is driving it.
+  WebSocket to whoever is driving it. A socket that falls more than
+  `EVENT_BACKLOG` events behind is hung up on rather than buffered without
+  end, and closing a session hangs up its sockets; the UI reconnects and
+  resyncs from the API either way.
 - **The web UI** is one client of that API, served by the daemon itself at
   `/web`. An MCP server (`odoo_sheller/mcp.py`) is a second client, for an
   agent. Both see the same surface — there is deliberately only one API.
@@ -259,7 +262,15 @@ the lines are the same in 15 through 20: `Starting X ...` from `startTest`,
 All of them come from the test module's own logger, which always sits under
 an addon's `tests` package, so `parse_test_line` anchors on
 `odoo.addons.<…>.tests` and an unrelated `ERROR:` from elsewhere is not
-counted. While a `run_test` holds the session, each matching line updates
+counted. The one exception is a fixture that fails outside any test —
+`setUpClass`, `setUpModule` and their teardowns. unittest reports those
+through an `_ErrorHolder`, and the result logs under the holder's module, not
+the test's: `odoo.tests.suite` from 16, `unittest.suite` in 15. The parser
+reads those two loggers as well, pinned to the fixture shape
+(`setUpClass (dotted.path)`). Before it did, a class that failed to set up
+counted nowhere and was missing from `failed`: a module run answered
+`errors: 1, failed: []` — nothing to rerun. While a `run_test` holds the
+session, each matching line updates
 `test_progress`: `spec` (the `module.Class[.method]` asked for), `current`
 (the last test started), `started`, `failures`, `errors`, `skipped` and
 `started_at` (epoch seconds). `describe()` carries it, and the session
@@ -269,6 +280,25 @@ last event, when the session leaves `busy`; a run past its timeout is
 still running, so it keeps counting until the late result lands. Odoo set
 above `INFO` logs no `Starting` line, and then only `spec` and the clock
 move. Nothing here is journalled: the journal already has every line.
+
+The same lines give the result its `failed` list. Each `FAIL:` / `ERROR:`
+becomes `{"test": spec, "kind": "failure" | "error"}`, where the spec is the
+run's module plus Odoo's own `Class.method` (`rerun_spec`): a subtest is
+listed as its method, a class whose `setUpClass` failed as the class, a test
+file whose `setUpModule` failed as the whole module — a tag cannot name a
+file, and the file's name taken for a class would run nothing — and a
+description that fits none of these as Odoo wrote it. A one-line `ERROR:` carries
+perf_info after the name, so the patterns strip it. `failed` is part of the
+result frame the daemon journals, so a run recovered later through
+`os_test_result` has it too.
+
+A spec may also be a bare module. The bootstrap then tags it `/module`, not
+`*/module`: no tag means `standard` to Odoo's selector, the set
+`--test-tags /module` runs, while `*` would take tests tagged `-standard` or
+`external` too — the ones that call real third-party services. The run is
+the same `run_tests` call over both suites, at_install and post_install, so
+nothing is installed or upgraded and nothing outlives the test's own
+rollback.
 
 `exec` collects the same way, into a smaller window (`EXEC_STDERR_LIMIT`),
 and returns `stderr` and `stderr_truncated` beside `stdout`. It used to
@@ -322,11 +352,25 @@ in-container PID in the `hello` frame, and an interrupt is a separate call:
 `docker exec <container> kill -INT <pid>`. A kill is the same shape with
 `-KILL`.
 
-`KeyboardInterrupt` is handled in two places. Raised while a command is
-executing, it becomes an ordinary error frame and the session stays `ready` —
-this is what makes the UI's Interrupt button work. Raised while the loop is
-blocked reading the next frame, it means a signal arrived between commands; it
-is swallowed silently so the loop does not exit for no reason.
+The bootstrap replaces the handler Odoo's shell installs (`shell.py:77`,
+every `SIGINT` a `KeyboardInterrupt`) with one that raises only while a
+command runs: the code of an `exec` — including the `repr` of its value —
+a test run, a commit or a rollback. Raised there, it becomes an ordinary
+error frame and the session stays `ready`; this is what makes the UI's
+Interrupt button work. Anywhere else the signal means nothing: between
+commands, and while a result is being written. Writing is the case that
+mattered. Raised mid-write, an interrupt left half a frame on the pipe —
+a line the daemon cannot parse, so the result never arrived and the session
+stayed busy until it timed out — or escaped the loop altogether and ended
+the process, taking the namespace and the open transaction with it. That
+was reachable with one click: the `repr` of a large recordset takes seconds,
+reads as a hung command, and ran outside the old handler. A `repr` that is
+interrupted now renders as `<unrepresentable T: KeyboardInterrupt>`, with no
+error: the command itself had already run to the end.
+
+Delivering a signal is bounded too (`SIGNAL_TIMEOUT`): a wedged Engine or a
+dead SSH link used to hold Interrupt — and the timeout path that sends one —
+for as long as it stayed that way.
 
 ## Two kinds of place, one mechanism
 
@@ -417,7 +461,22 @@ starting ──(hello)──> ready ──(exec)──> busy ──(result)─�
 - Process death is a normal, expected outcome, not a special case: EOF on the
   pipe moves a session straight to `dead`, and anything still waiting on a
   result fails with the tail of stderr attached, so the cause is visible
-  without digging through logs.
+  without digging through logs. That includes a process that dies before
+  `hello`: `POST /api/sessions` answers `410 session_did_not_start` with the
+  last lines Odoo logged — a database that does not exist, a broken config.
+  It used to say only `process ended`, which left an agent, which does not
+  see the startup log the UI streams, with nothing to act on.
+- **The late result of an abandoned command is booked as if it had come in
+  time.** An `exec` that ran on past its ceiling counts as pending work: it
+  may have written. A commit that finally got its lock did commit: a
+  `commit` record (with `late: true`) follows the `abandoned_result`, the
+  pending count clears, and the journal stops reading "discarded" over a
+  write that happened.
+- **Closing a busy session never passes through `ready`.** The command a
+  close cuts short is still what the container is doing, so the session
+  stays `busy` — with its original `activity` — until it is `closed`. It used
+  to report `ready`, then `busy` with `close`, then `ready` again: free to
+  anyone watching, and a live test run's card gone while the run went on.
 - **A session opened to run one test closes itself.** `autoclose` is asked
   for at open time and is never set for a human's session. The session
   announces itself finished once the run has really settled *and* been
@@ -453,8 +512,34 @@ as giving away the session.
 The human is always the admin: they can watch any session, interrupt it,
 close or kill it, hand it to an agent, and grant or revoke `allow_commit` —
 but they never type into a session they don't currently own themselves.
-`allow_commit` only gates an *agent*; a human owner confirms each commit
-through the UI instead, so there's nothing to grant there.
+`allow_commit` only gates an *agent* locally; a human owner confirms each
+commit through the UI instead, so there's nothing to grant there. On a
+remote instance it gates everyone, and on production nothing lifts it.
+
+A handover never carries a grant: the new owner starts where anyone of their
+kind starts on that target (`_starts_with_commit`). That used to be "a human
+may", full stop — so a remote session handed to an agent and taken back came
+home able to commit without any grant, and on production claimed a right
+nothing would honour.
+
+**A grant is a human's act, and so is giving a session to a human.** Every
+key is remembered with the kind it was issued to. A grant
+(`POST /policy {"allow_commit": true}`) needs a key issued to a human —
+the owner's, or the one who handed the session over — or the admin key; so
+does a handover whose new owner is `human`, because the key that comes back
+types as a human, and a local human commits without asking. Both used to
+accept any key `held_by` accepts, the agent's own included. An agent's
+session cannot be opened with `allow_commit: true` either, without the admin
+key. All three refuse with `403 needs_a_human`. Revoking stays open to
+whoever holds the session. What this does not stop is a program that claims
+to be a human when it opens a session of its own: the browser opens sessions
+with no credential either, and the daemon cannot tell the two apart — the
+keys guard against accidents, not against a client set on lying.
+
+`GET /api/sessions/{id}` with a key reports what that key is worth there —
+`key_status`: `owner`, `former_owner` or `invalid` — and nothing about any
+other key. `os_attach_session` checks it once, so a wrong key is refused at
+the handover rather than on the first command.
 
 `odoo_sheller/mcp.py` is the agent's client over stdio. It holds no session
 state of its own beyond ids and keys — every actual operation is the same
@@ -470,7 +555,11 @@ list (read via `psycopg2`, which any Odoo container already has installed —
 nothing extra to add). The probe process exits the moment it has answered.
 A major outside `SUPPORTED_MAJORS` (15 through 20) is refused right here, with a
 specific message naming what would work, rather than accepted and left to
-fail on the first real command.
+fail on the first real command. Every discovery command is bounded
+(`DISCOVERY_TIMEOUT`, 30s): a paused container or a wedged Engine used to hang
+the request with no end. A launcher that is not installed where the daemon
+runs — no `docker` on a GUI's PATH, no `ssh` in the container image — is an
+answer naming it, not a 500.
 
 `POST /api/sessions` for a local container needs `container` and `database`
 — those are choices. `odoo_bin` is a fact about the container, so when a
@@ -519,7 +608,31 @@ The file outlives both the session and the daemon process. It is never
 rewritten, only appended to, and it can be exported as raw JSONL or rendered
 as a Markdown transcript; both forms carry the same session metadata (id,
 container, database, versions, in-container PID, timestamps, command count,
-whether anything was committed).
+whether anything was committed — a commit that failed does not count).
+
+Reading journals is built for a machine that has kept thousands of them, a
+few reaching a hundred megabytes:
+
+- A session's journal is found by its filename, which ends in the session
+  id. Finding one used to mean summarising every journal on disk — measured
+  at 4.5 seconds per closed session's history on 2,000 files and 1.4 GB.
+- Where a session ran (`target_of_past_session`) is read from the head of the
+  file and no further.
+- The journal list keeps each file's summary until the file's size or mtime
+  moves; a journal only grows, so only live and new ones are read again.
+  Summaries stream through `session_meta` in one pass, never holding a file
+  whole.
+- Everything that does read a whole file — the list, a history, an export —
+  runs off the event loop (`asyncio.to_thread`). On the loop, those seconds
+  were seconds in which no live session heard from its process.
+- A line that is not a record — the tail of a write cut short by a kill or a
+  full disk — is skipped with a warning, not raised. One such line used to
+  take down the journal list, every closed session's history and every
+  export at once.
+- `exec` with `read_only: true` is the caller's word that the code writes
+  nothing. It is journalled with that flag and kept out of
+  `pending_commands`; `os_source` reads that way, so a source read no longer
+  makes a handover warn or a test run report work discarded.
 
 The Markdown transcript renders those stderr records as an `Odoo log` block
 after the command they belong to, consecutive lines grouped into one fence.

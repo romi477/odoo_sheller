@@ -160,3 +160,17 @@ def test_signal_command_dispatches_on_the_kind_of_place():
     assert ssh[0] == "ssh"
     assert ssh[-3:] == ["kill", "-INT", "42"]
     assert "36887345@build-36887345.dev.odoo.com" in ssh
+
+
+async def test_a_signal_that_cannot_be_delivered_does_not_hang(monkeypatch):
+    """Interrupt — and the timeout path that sends one — waited for as long
+    as a wedged Engine or a dead link stayed that way."""
+    import time
+
+    from odoo_sheller import transport
+
+    monkeypatch.setattr(transport, "signal_command", lambda *args: ["sleep", "5"])
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        await transport.send_signal(Target(container="c"), 42, "INT", timeout=0.2)
+    assert time.monotonic() - started < 2

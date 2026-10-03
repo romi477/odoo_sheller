@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from odoo_sheller import discovery, journal
 from odoo_sheller.paths import web_dir
-from odoo_sheller.registry import Registry, load_admin_key
+from odoo_sheller.registry import EVENT_BACKLOG, Registry, load_admin_key
 from odoo_sheller.session import (
     CommitForbidden,
     CommitNotAllowed,
@@ -50,11 +50,17 @@ def _export_headers(path: Path, suffix: str) -> dict:
     return {"content-disposition": f'attachment; filename="{path.stem}.{suffix}"'}
 
 
-TEST_SPEC_RE = re.compile(r"^(\w+)\.(\w+)(?:\.(\w+))?$")
+# `module` alone runs that module's standard tests, the way `--test-tags
+# /module` does; a class or a method narrows it.
+TEST_SPEC_RE = re.compile(r"^(\w+)(?:\.(\w+)(?:\.(\w+))?)?$")
 
 
 class ExecBody(BaseModel):
     code: str
+    # The caller's word that this code writes nothing. It is journalled with
+    # the command and keeps it out of `pending_commands` — for reads such as
+    # os_source, which would otherwise read as work at risk in a handover.
+    read_only: bool = False
 
 
 class RunTestBody(BaseModel):
@@ -183,6 +189,41 @@ def daemon_version() -> str:
         return "unknown"
 
 
+async def _forward(websocket: WebSocket, queue: asyncio.Queue) -> None:
+    """Send what arrives until the client leaves or the registry hangs up.
+
+    `None` is the hang-up: the session closed, or this socket fell too far
+    behind to be worth catching up — a reconnect resyncs from the API.
+    """
+    try:
+        while True:
+            event = await queue.get()
+            if event is None:
+                await websocket.close()
+
+                return
+            await websocket.send_json(event)
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+
+
+def _markdown_export(path: Path, session_id: str) -> str:
+    records = journal.Journal(path).records()
+
+    return journal.to_markdown(records, journal.session_meta(records, session_id))
+
+
+def _jsonl_export(path: Path, session_id: str) -> str:
+    # The file on disk is untouched; the export gets one extra first line so
+    # the stream says what session it belongs to.
+    meta = journal.session_meta(journal.Journal(path).iter_records(), session_id)
+
+    return (
+        json.dumps({"kind": "export_meta", **meta}, ensure_ascii=False) + "\n"
+        + path.read_text(encoding="utf-8", errors="replace")
+    )
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     """Close the live sessions on the way down.
@@ -205,6 +246,10 @@ def create_app(registry: Registry | None = None) -> FastAPI:
     app.state.registry = (
         registry if registry is not None else Registry(admin_key=load_admin_key())
     )
+    # Read once, at start. An editable install answers `version()` from the
+    # metadata on disk, which a bump rewrites under a daemon still running the
+    # old code — and then /health names a version that is not the one running.
+    running_version = daemon_version()
 
     def gone(session_id: str, reason: str, records: list[dict] | None = None) -> dict:
         """What a caller needs to carry on after losing a session.
@@ -266,9 +311,35 @@ def create_app(registry: Registry | None = None) -> FastAPI:
                 status_code=403,
                 detail={
                     "error": "admin_only",
-                    "recovery": "this needs the admin key the daemon printed at startup",
+                    "recovery": (
+                        "this needs the admin key, which the daemon keeps in "
+                        "~/.odoo-sheller/admin.key"
+                    ),
                 },
             )
+
+    def require_human_or_admin(session, session_key, admin_key, act: str):
+        """Granting commit, or giving a session to a human, is a human's act.
+
+        A key `held_by` accepts is not enough for either: the agent a session
+        was handed to holds one too. With it, an agent refused a commit could
+        grant itself the right, or hand the session to "a human" and keep the
+        key that came back — and commit as one.
+        """
+        if is_admin(admin_key) or session.held_by_human(session_key):
+
+            return
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "needs_a_human",
+                "act": act,
+                "recovery": (
+                    "a human does this, from the UI or with the admin key; an "
+                    "agent says what it wants and why, and waits for it"
+                ),
+            },
+        )
 
     def translate(exc: Exception, session_id: str | None = None) -> HTTPException:
         if isinstance(exc, (SessionBusy, SessionNotReady)):
@@ -326,7 +397,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
 
         return {
             "ok": True,
-            "version": daemon_version(),
+            "version": running_version,
             "container": bool(os.environ.get(IN_CONTAINER_ENV)),
             "mcp": mcp_launch(),
         }
@@ -396,7 +467,26 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         }
 
     @app.post("/api/sessions")
-    async def open_session(body: OpenBody):
+    async def open_session(body: OpenBody, x_os_admin_key: str | None = Header(None)):
+        if (
+            body.allow_commit
+            and body.owner is not None
+            and body.owner.kind == "agent"
+            and not is_admin(x_os_admin_key)
+        ):
+            # The grant ritual, skipped at the door: an agent's session that
+            # opens with the right already in it was never granted anything.
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "needs_a_human",
+                    "act": "open an agent's session with commit already granted",
+                    "recovery": (
+                        "open it with allow_commit false; a human grants the "
+                        "right later, from the UI"
+                    ),
+                },
+            )
         try:
             session = await app.state.registry.open(
                 container=body.container,
@@ -415,6 +505,19 @@ def create_app(registry: Registry | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from None
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
+        except SessionDead as exc:
+            raise HTTPException(
+                status_code=410,
+                detail={
+                    "error": "session_did_not_start",
+                    "message": str(exc),
+                    "recovery": (
+                        "the message ends with what Odoo logged as it exited — "
+                        "a database that does not exist, a broken config, a "
+                        "module that fails to import; fix that and open again"
+                    ),
+                },
+            ) from None
         except Exception as exc:  # noqa: BLE001 - API boundary maps failures to HTTP.
             raise translate(exc) from None
 
@@ -427,9 +530,17 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         return [session.describe() for session in app.state.registry.sessions.values()]
 
     @app.get("/api/sessions/{session_id}")
-    async def get_session(session_id: str):
+    async def get_session(session_id: str, x_os_session_key: str | None = Header(None)):
+        session = session_or_404(session_id)
+        described = session.describe()
+        if x_os_session_key:
+            # What the key presented is worth here — `owner`, `former_owner`
+            # or `invalid` — and nothing about anyone else's. An agent handed
+            # a key checks it once, rather than learning from its first
+            # command that it was given the wrong one.
+            described["key_status"] = session.key_status(x_os_session_key)
 
-        return session_or_404(session_id).describe()
+        return described
 
     @app.get("/api/sessions/{session_id}/history")
     async def session_history(
@@ -475,16 +586,24 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         except KeyError:
             session = None
         if session is not None:
-            records = session.journal.records()
+            source = session.journal
         else:
-            past = app.state.registry.journal_file_for(session_id)
-            if past is None:
+            source = app.state.registry.journal_file_for(session_id)
+            if source is None:
                 raise HTTPException(
                     status_code=404, detail=gone(session_id, "not registered")
                 )
-            records = past.records()
-        feed = journal.feed_from_records(records, include_logs=logs, log_tail=log_tail)
-        meta = journal.session_meta(records, session_id)
+
+        def rebuild():
+            records = source.records()
+            feed = journal.feed_from_records(records, include_logs=logs, log_tail=log_tail)
+
+            return records, feed, journal.session_meta(records, session_id)
+
+        # Off the event loop: a long session's journal runs to a hundred
+        # megabytes, and parsing it here stopped every other session's
+        # frames for as long as that took.
+        records, feed, meta = await asyncio.to_thread(rebuild)
         if session is not None:
             meta.update({
                 key: value
@@ -506,9 +625,10 @@ def create_app(registry: Registry | None = None) -> FastAPI:
     ):
         session = session_or_404(session_id)
         require_owner(session, x_os_session_key)
+        kwargs = {"read_only": True} if body.read_only else {}
         try:
 
-            return await session.execute(body.code)
+            return await session.execute(body.code, **kwargs)
         except Exception as exc:  # noqa: BLE001 - API boundary maps failures to HTTP.
             raise translate(exc, session_id) from None
 
@@ -527,7 +647,10 @@ def create_app(registry: Registry | None = None) -> FastAPI:
                 detail={
                     "error": "invalid_test_spec",
                     "test": body.test,
-                    "recovery": "use 'module.TestClass' or 'module.TestClass.test_method'",
+                    "recovery": (
+                        "use 'module', 'module.TestClass' or "
+                        "'module.TestClass.test_method'"
+                    ),
                 },
             )
         module, test_class, test_method = match.groups()
@@ -606,9 +729,14 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         session = session_or_404(session_id)
         # Owning it, or having owned it, is authority enough: handing a session
         # over is giving up the right to type, not the session. Taking one from
-        # someone you never gave it to is the admin act.
+        # someone you never gave it to is the admin act. Giving it to a human
+        # is a human's: the key that comes back types as one.
         if not session.held_by(x_os_session_key):
             require_admin(x_os_admin_key)
+        elif body.owner.kind == "human":
+            require_human_or_admin(
+                session, x_os_session_key, x_os_admin_key, "hand the session to a human"
+            )
         pending = session.pending_commands
         write_key = session.transfer_owner(body.owner.model_dump())
 
@@ -630,9 +758,14 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         session = session_or_404(session_id)
         # Deciding whether a session may write is a decision about your own
         # session: whoever opened it, or handed it over, can make it. Only a
-        # session you never owned needs the admin key.
+        # session you never owned needs the admin key — and a grant needs a
+        # human, so the agent it would free cannot make it for itself.
         if not session.held_by(x_os_session_key):
             require_admin(x_os_admin_key)
+        elif body.allow_commit:
+            require_human_or_admin(
+                session, x_os_session_key, x_os_admin_key, "grant commit"
+            )
         # Locally the right only gates an agent: a human owner confirms each
         # commit in the UI and `Session._may_commit` lets them through
         # regardless, so storing a revocation would journal `policy_changed`
@@ -670,35 +803,32 @@ def create_app(registry: Registry | None = None) -> FastAPI:
 
     @app.get("/api/journals")
     async def journals():
+        # Off the event loop. The first listing after a start reads every file
+        # — seconds, on a machine that has kept a few thousand — and those were
+        # seconds in which no live session heard from its process.
 
-        return journal.list_journals(app.state.registry.journal_root)
+        return await asyncio.to_thread(
+            journal.list_journals, app.state.registry.journal_root
+        )
 
     @app.get("/api/journals/{session_id}")
     async def journal_export(session_id: str, fmt: str = "jsonl"):
-        for entry in journal.list_journals(app.state.registry.journal_root):
-            if entry["session_id"] != session_id:
-                continue
-            path = Path(entry["path"])
-            records = journal.Journal(path).records()
-            meta = journal.session_meta(records, session_id)
-            if fmt == "markdown":
-
-                return PlainTextResponse(
-                    journal.to_markdown(records, meta),
-                    media_type="text/markdown",
-                    headers=_export_headers(path, "md"),
-                )
-            # The file on disk is untouched; the export gets one extra first
-            # line so the stream says what session it belongs to.
-            body = json.dumps({"kind": "export_meta", **meta}, ensure_ascii=False) + "\n"
-            body += path.read_text(encoding="utf-8")
+        path = journal.find_journal(app.state.registry.journal_root, session_id)
+        if path is None:
+            raise HTTPException(status_code=404, detail=f"no journal for {session_id}")
+        if fmt == "markdown":
 
             return PlainTextResponse(
-                body,
-                media_type="application/x-ndjson",
-                headers=_export_headers(path, "jsonl"),
+                await asyncio.to_thread(_markdown_export, path, session_id),
+                media_type="text/markdown",
+                headers=_export_headers(path, "md"),
             )
-        raise HTTPException(status_code=404, detail=f"no journal for {session_id}")
+
+        return PlainTextResponse(
+            await asyncio.to_thread(_jsonl_export, path, session_id),
+            media_type="application/x-ndjson",
+            headers=_export_headers(path, "jsonl"),
+        )
 
     @app.delete("/api/journals/{session_id}")
     async def journal_delete(
@@ -733,20 +863,17 @@ def create_app(registry: Registry | None = None) -> FastAPI:
     async def registry_events(websocket: WebSocket):
         """Sessions coming and going, so a watcher never needs to reload."""
         await websocket.accept()
-        queue: asyncio.Queue = asyncio.Queue()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=EVENT_BACKLOG)
         app.state.registry.watch(queue)
         try:
-            while True:
-                await websocket.send_json(await queue.get())
-        except (WebSocketDisconnect, RuntimeError):
-            pass
+            await _forward(websocket, queue)
         finally:
             app.state.registry.unwatch(queue)
 
     @app.websocket("/ws/sessions/{session_id}")
     async def events(websocket: WebSocket, session_id: str):
         await websocket.accept()
-        queue: asyncio.Queue = asyncio.Queue()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=EVENT_BACKLOG)
         try:
             app.state.registry.subscribe(session_id, queue)
         except KeyError:
@@ -755,10 +882,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
 
             return
         try:
-            while True:
-                await websocket.send_json(await queue.get())
-        except (WebSocketDisconnect, RuntimeError):
-            pass
+            await _forward(websocket, queue)
         finally:
             app.state.registry.unsubscribe(session_id, queue)
 

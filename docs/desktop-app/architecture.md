@@ -266,10 +266,18 @@ surface that rather than showing an empty list.
 
 `portable-pty` on the Rust side: one PTY and one shell process per session, a
 reader thread forwarding output to a per-session event
-(`pty-output-{session_id}`), sessions in a `HashMap` under a `Mutex` in
-`tauri::State`, and four commands — create, write, resize, close. `xterm.js`
-with `@xterm/addon-fit` on the frontend; after every `fit()` call
-`resize_terminal`, or interactive programs draw incorrectly.
+(`pty-output-{session_id}`), a writer thread draining that session's input in
+order, sessions in a `HashMap` under a `Mutex` in `tauri::State`, and four
+commands — create, write, resize, close. `xterm.js` with `@xterm/addon-fit` on
+the frontend; after every `fit()` call `resize_terminal`, or interactive
+programs draw incorrectly.
+
+The writer thread is not a nicety. `pty_write` is a synchronous command, so it
+runs on the main thread, and it used to write into the PTY there while holding
+the hub's lock. A program in raw mode — vim, ssh, anything full-screen — that
+is not reading stdin makes that write wait from the first byte (in canonical
+mode macOS drops what does not fit instead), and a paste into one froze the
+whole app, its menu and Quit included. `pty_write` now only queues the bytes.
 
 Beyond the mechanics:
 

@@ -5,9 +5,14 @@ They stay local, out of git, and are reviewed before being shared.
 """
 
 import json
+import logging
 import re
+import threading
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 JOURNAL_ROOT = Path.home() / ".odoo-sheller" / "journals"
 
@@ -38,43 +43,96 @@ class Journal:
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(line)
 
-    def records(self) -> list[dict]:
+    def iter_records(self) -> Iterator[dict]:
+        """The records one at a time, skipping any line that is not one.
+
+        A daemon killed mid-write, or a full disk, leaves a last line cut in
+        half. One such line used to raise out of every reader: the journal
+        list, every closed session's history and every export answered 500
+        until the file was found and fixed by hand. The rest of the file is
+        still the record, so the broken line is passed over, not trusted.
+        """
         if not self.path.exists():
-            return []
+            return
+        with self.path.open(encoding="utf-8", errors="replace") as handle:
+            for number, line in enumerate(handle, 1):
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    logger.warning("%s:%d is not a journal record; skipped", self.path, number)
+                    continue
+                if isinstance(record, dict):
+                    yield record
 
-        with self.path.open(encoding="utf-8") as handle:
-            return [json.loads(line) for line in handle if line.strip()]
+    def records(self) -> list[dict]:
+
+        return list(self.iter_records())
+
+    def first(self, kind: str) -> dict | None:
+        """The first record of a kind, reading no further than it.
+
+        `session_open` sits in the first lines of a file that can reach a
+        hundred megabytes; where a session ran is a question for its head.
+        """
+        for record in self.iter_records():
+            if record.get("kind") == kind:
+
+                return record
+
+        return None
 
 
-def _duration_seconds(records: list[dict]) -> float | None:
-    if not records:
+def _duration_seconds(first_ts: str | None, last_ts: str | None) -> float | None:
+    if not first_ts or not last_ts:
         return None
     try:
-        first = datetime.fromisoformat(records[0]["ts"])
-        last = datetime.fromisoformat(records[-1]["ts"])
-    except (KeyError, ValueError):
+        first = datetime.fromisoformat(first_ts)
+        last = datetime.fromisoformat(last_ts)
+    except (TypeError, ValueError):
         return None
 
     return (last - first).total_seconds()
 
 
-def session_meta(records: list[dict], session_id: str | None = None) -> dict:
+def session_meta(records: Iterable[dict], session_id: str | None = None) -> dict:
     """Who and what this journal is about.
 
     Every way of getting a journal out — the API history, the JSONL export, the
     Markdown transcript — carries this, so a transcript is never an anonymous
     wall of commands.
-    """
-    opened = next((r for r in records if r.get("kind") == "session_open"), {})
-    closed = next(
-        (r for r in reversed(records) if r.get("kind") in ("session_close", "session_died")),
-        {},
-    )
 
-    owners = [dict(opened["owner"])] if opened.get("owner") else []
+    One pass over any iterable, so a listing can stream a file through it
+    rather than hold the whole of it in memory.
+    """
+    opened: dict = {}
+    closed: dict = {}
+    owners: list[dict] = []
+    first_ts = last_ts = None
+    seen_any = False
+    commands = 0
+    committed = False
     for record in records:
-        if record.get("kind") == "owner_changed" and record.get("to"):
+        if not seen_any:
+            first_ts = record.get("ts")
+            seen_any = True
+        last_ts = record.get("ts")
+        kind = record.get("kind")
+        if kind == "session_open" and not opened:
+            opened = record
+            if record.get("owner"):
+                owners.insert(0, dict(record["owner"]))
+        elif kind in ("session_close", "session_died"):
+            closed = record
+        elif kind == "owner_changed" and record.get("to"):
             owners.append(dict(record["to"]))
+        elif kind in ("exec", "run_test"):
+            commands += 1
+        elif kind == "commit" and not record.get("error"):
+            # A commit that failed wrote nothing; counting its record made the
+            # journal list say "committed" over a transaction that was not.
+            committed = True
 
     return {
         "session_id": session_id,
@@ -90,29 +148,88 @@ def session_meta(records: list[dict], session_id: str | None = None) -> dict:
         "opened_at": opened.get("ts"),
         "closed_at": closed.get("ts"),
         "ended_as": closed.get("kind"),
-        "duration": _duration_seconds(records),
-        "commands": sum(1 for r in records if r.get("kind") in ("exec", "run_test")),
-        "committed": any(r.get("kind") == "commit" for r in records),
+        "duration": _duration_seconds(first_ts, last_ts),
+        "commands": commands,
+        "committed": committed,
         "unmasked": True,
+    }
+
+
+def session_id_of(path: Path) -> str:
+    """The session id a journal's filename ends in — the one way it is read."""
+
+    return path.stem.rsplit("-", 1)[-1]
+
+
+def find_journal(root: Path, session_id: str) -> Path | None:
+    """The journal file of one session, by its name alone.
+
+    Opening every journal to find one is what made a closed session's history
+    cost seconds on a well-used machine: two thousand files, 1.4 GB, parsed
+    in full to answer a question the filename already answers.
+    """
+    for path in root.glob("*.jsonl"):
+        if session_id_of(path) == session_id:
+
+            return path
+
+    return None
+
+
+# path -> ((mtime_ns, size), entry). A journal is append-only, so a file whose
+# size and mtime have not moved summarises the same as last time; only the
+# live ones and the new ones are read again.
+_LISTING: dict[str, tuple[tuple[int, int], dict]] = {}
+_LISTING_LOCK = threading.Lock()
+
+
+def _summarise(path: Path, size: int) -> dict:
+    lines = 0
+
+    def counted(records):
+        nonlocal lines
+        for record in records:
+            lines += 1
+            yield record
+
+    meta = session_meta(counted(Journal(path).iter_records()), session_id_of(path))
+
+    return {
+        **meta,
+        "path": str(path),
+        "container": meta["container"] or "?",
+        "database": meta["database"] or "?",
+        "odoo": meta["odoo"] or "?",
+        # The file, not the session: what deleting it frees. Kept out of
+        # session_meta, which every export carries.
+        "lines": lines,
+        "bytes": size,
     }
 
 
 def list_journals(root: Path) -> list[dict]:
     entries = []
+    seen = set()
     for path in sorted(root.glob("*.jsonl"), reverse=True):
-        records = Journal(path).records()
-        meta = session_meta(records, path.stem.rsplit("-", 1)[-1])
-        entries.append({
-            **meta,
-            "path": str(path),
-            "container": meta["container"] or "?",
-            "database": meta["database"] or "?",
-            "odoo": meta["odoo"] or "?",
-            # The file, not the session: what deleting it frees. Kept out of
-            # session_meta, which every export carries.
-            "lines": len(records),
-            "bytes": path.stat().st_size,
-        })
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            continue  # deleted between the glob and here
+        key = str(path)
+        seen.add(key)
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        with _LISTING_LOCK:
+            cached = _LISTING.get(key)
+        if cached is not None and cached[0] == stamp:
+            entry = cached[1]
+        else:
+            entry = _summarise(path, stat.st_size)
+            with _LISTING_LOCK:
+                _LISTING[key] = (stamp, entry)
+        entries.append(dict(entry))
+    with _LISTING_LOCK:
+        for key in [key for key in _LISTING if Path(key).parent == root and key not in seen]:
+            del _LISTING[key]
 
     return entries
 
@@ -125,13 +242,14 @@ def delete_journal(root: Path, session_id: str) -> Path:
     derived from the filename exactly as `list_journals` derives it, so the row
     a caller saw and the file that goes away are the same file.
     """
-    for path in root.glob("*.jsonl"):
-        if path.stem.rsplit("-", 1)[-1] == session_id:
-            path.unlink()
+    path = find_journal(root, session_id)
+    if path is None:
+        raise FileNotFoundError(session_id)
+    path.unlink()
+    with _LISTING_LOCK:
+        _LISTING.pop(str(path), None)
 
-            return path
-
-    raise FileNotFoundError(session_id)
+    return path
 
 
 def _markdown_header(meta: dict) -> list[str]:
@@ -209,9 +327,11 @@ def to_markdown(records: list[dict], meta: dict | None = None) -> str:
             ordinals[record.get("id")] = next_ordinal
             actor = record.get("actor") or {}
             by = f" by {actor.get('kind')} ({_named(actor)})" if actor else ""
-            spec = f"{record.get('module', '')}.{record.get('test_class', '')}"
-            if record.get("test_method"):
-                spec += f".{record['test_method']}"
+            spec = ".".join(
+                part for part in (
+                    record.get("module"), record.get("test_class"), record.get("test_method"),
+                ) if part
+            )
             lines.append(f"## Test {next_ordinal}{by} — `{spec}` — {stamp}\n")
         elif kind in ("result", "abandoned_result"):
             if kind == "abandoned_result":
@@ -232,7 +352,19 @@ def to_markdown(records: list[dict], meta: dict | None = None) -> str:
                     f"{'PASS' if t.get('success') else 'FAIL'}\n"
                 )
             if record.get("error"):
-                lines.append(f"```\n{record['error'].get('traceback', '').rstrip()}\n```\n")
+                error = record["error"]
+                if not isinstance(error, dict):
+                    error = {"message": str(error)}
+                trace = (error.get("traceback") or "").rstrip()
+                if trace:
+                    lines.append(f"```\n{trace}\n```\n")
+                else:
+                    # A timeout, a refused test runner, a frame too large:
+                    # no traceback, so the message is the whole story — and
+                    # an empty block used to be all the transcript kept.
+                    lines.append(
+                        f"**{error.get('type') or 'Error'}**: {error.get('message') or ''}\n"
+                    )
             lines.append(f"_{record.get('duration', 0):.3f}s_\n")
         elif kind in ("commit", "rollback"):
             lines.append(f"**Transaction {kind}** — {stamp}\n")

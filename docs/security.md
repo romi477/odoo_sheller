@@ -38,6 +38,16 @@ another tab or an agent is using — it does not stop anyone who can already
 run code on your machine, because they could just as easily open their own
 session. Don't read more security into the key system than that.
 
+Within that limit the keys do close the doors an agent would find first.
+Every key is remembered with the kind of owner it was issued to, and the two
+acts that lift an agent's commit gate need one issued to a human (or the
+admin key): granting `allow_commit`, and handing a session to a human — whose
+returned key types as a human, and a local human commits without asking.
+Both used to accept the agent's own key. An agent's session cannot be opened
+with the right already granted, either. What stays open is a program that
+says it is a human when it opens a session of its own: the browser opens
+sessions with no credential, and nothing tells the two apart.
+
 **The admin key exists for the same reason, one level up.** It's needed to
 act on a session you never owned, or to delete a journal file — actions
 where "any local process can do this anyway" isn't quite true, because they
@@ -45,6 +55,11 @@ affect someone else's in-progress work. It is never served by any API
 endpoint: the daemon prints it once at startup and keeps it in
 `~/.odoo-sheller/admin.key`, because an endpoint that returned it would hand
 it to anything able to fetch a page from the same unauthenticated daemon.
+It prints the key only to a terminal. When stdout is a file — the desktop
+app's `daemon.log`, `docker logs`, a `nohup` redirect — it prints where the
+key is kept instead: a log outlives the moment and is read by more than the
+person at the keyboard. The file is created with mode `0600` in one step;
+it used to be written first and narrowed after.
 
 A browser tab is that kind of client. Read the file with
 `cat ~/.odoo-sheller/admin.key` and paste it into the UI once — it's only asked
@@ -230,7 +245,7 @@ the user. Guards that can be absent without anyone noticing are not guards.
 |---|---|---|
 | Anyone on `127.0.0.1` | Open sessions, run arbitrary code, read/write the database (after Commit) | Anything requiring network access to the daemon — there isn't any |
 | A browser tab that isn't a session's owner | Watch that session's output live | Type into it, commit, or grant itself commit rights |
-| An agent with a session of its own | Run code, rollback, read journals it can reach | Commit, without a human granting it first; act on a session it wasn't opened in or handed |
+| An agent with a session of its own | Run code, rollback, read journals it can reach | Commit, without a human granting it first — a grant, or a handover to a human, made with its own key is refused as `needs_a_human`; act on a session it wasn't opened in or handed |
 | An agent handed a remote session | Run code, run tests, rollback, read the instance | Open a remote target itself; commit until granted; commit at all on `production` |
 | Anyone holding the admin key | Act on any session or journal, including ones they don't own | Bypass Commit's requirement for a human confirmation on a human-owned session |
 | Anyone using the desktop terminal | Run anything `$SHELL -l` can run, as the user who launched the app | Nothing the same user couldn't run in Terminal.app |

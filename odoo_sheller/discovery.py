@@ -1,12 +1,13 @@
 """Live discovery of targets: containers, then one probe inside a chosen one."""
 
 import asyncio
+import contextlib
 import json
 import re
 
 from odoo_sheller.transport import SSH_OPTS, docker_bin
 
-# 15 through 19. Everything the bootstrap rests on is the same in all five:
+# 15 through 20. Everything the bootstrap rests on is the same in all six:
 # the non-tty branch of `console()`, the names `env` and `self`, the rollback
 # around it, SIGINT, the cursor that commits on a clean exit. What moved since
 # 15 — `flush_all`/`invalidate_all`, `odoo/tests/shell.py`, where the test
@@ -318,14 +319,43 @@ else:
 print(json.dumps(result))
 '''
 
-async def _docker(argv: list[str], stdin: str | None = None) -> tuple[int, str, str]:
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    out, err = await proc.communicate(stdin.encode("utf-8") if stdin is not None else None)
+# How long one discovery command may take. A probe is a handful of file reads
+# and a database list with its own 5s connect timeout; `docker ps` is less.
+# A paused container or a wedged Engine used to hang the request — and with it
+# the Connect screen, or an agent's whole tool call — with no end at all.
+DISCOVERY_TIMEOUT = 30.0
+
+
+async def _docker(
+    argv: list[str], stdin: str | None = None, timeout: float = DISCOVERY_TIMEOUT
+) -> tuple[int, str, str]:
+    """Run one discovery command: `docker …` locally, `ssh …` for odoo.sh.
+
+    A program that is not installed is an answer, not a crash: the image has
+    no `ssh`, and a GUI's PATH may have no `docker`. Both used to surface as
+    a bare 500.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+
+        return 127, "", f"{argv[0]}: not installed where this daemon runs"
+    try:
+        out, err = await asyncio.wait_for(
+            proc.communicate(stdin.encode("utf-8") if stdin is not None else None),
+            timeout,
+        )
+    except TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        await proc.wait()
+
+        return 124, "", f"{' '.join(argv[:2])} did not answer within {timeout:.0f}s"
 
     return proc.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
@@ -449,14 +479,7 @@ async def list_tests(container: str, module: str, runner=None) -> dict:
     runner = runner or _docker
     argv = [docker_bin(), "exec", "-i", container, "python3", "-", module]
     code, out, err = await runner(argv, LIST_TESTS_SOURCE)
-    payload = None
-    for line in reversed(out.splitlines()):
-        if line.strip().startswith("{"):
-            try:
-                payload = json.loads(line)
-                break
-            except ValueError:
-                continue
+    payload = _last_json_line(out)
     if payload is None:
 
         return {

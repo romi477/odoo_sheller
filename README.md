@@ -609,17 +609,17 @@ answers `409` until that command's result finally arrives. Use `interrupt`, or
 | `POST` | `/api/probe` | probe one container |
 | `POST` | `/api/probe/odoosh` | probe an odoo.sh build (`{"build", "host"}`); answers `stage`, `db_name`, version |
 | `GET` | `/api/containers/{container}/tests` | test classes/methods in one addon (`?module=`) |
-| `POST` | `/api/sessions` | open a session, wait for `hello`. A local container needs `container` and `database`; leave `odoo_bin` out and the daemon probes that container for it, refusing an unsupported one with a `422` before anything starts. `kind: "odoosh"` with `build`/`host` opens on an odoo.sh build instead of a container; the instance dictates the database, and its stage is read from the build itself, not from the request. Optional `client_token` is echoed back in the session description, so a client recognises its own `session_starting` among several |
+| `POST` | `/api/sessions` | open a session, wait for `hello`. A local container needs `container` and `database`; leave `odoo_bin` out and the daemon probes that container for it, refusing an unsupported one with a `422` before anything starts. `kind: "odoosh"` with `build`/`host` opens on an odoo.sh build instead of a container; the instance dictates the database, and its stage is read from the build itself, not from the request. Optional `client_token` is echoed back in the session description, so a client recognises its own `session_starting` among several. An `agent` owner with `allow_commit: true` is a `403 needs_a_human` without the admin key. A process that dies before `hello` is a `410 session_did_not_start` whose message ends with what Odoo logged |
 | `GET` | `/api/sessions` | live sessions |
-| `GET` | `/api/sessions/{id}` | one session |
-| `POST` | `/api/sessions/{id}/exec` | run code |
-| `POST` | `/api/sessions/{id}/run_test` | run one test method or a whole class (`{"test": "module.TestClass[.test_method]"}`, optional `timeout`); stdout and Odoo's log lines come back separated |
+| `GET` | `/api/sessions/{id}` | one session; sent with `X-OS-Session-Key`, it adds `key_status` — `owner`, `former_owner` or `invalid` — for that key |
+| `POST` | `/api/sessions/{id}/exec` | run code. `read_only: true` is the caller's word that it writes nothing: journalled with the flag, not counted in `pending_commands` |
+| `POST` | `/api/sessions/{id}/run_test` | run a whole module's standard tests, one class or one method (`{"test": "module[.TestClass[.test_method]]"}`, optional `timeout`); stdout and Odoo's log lines come back separated, and `failed` lists each failing test as a spec to run again |
 | `POST` | `/api/sessions/{id}/commit` | keep the transaction |
 | `POST` | `/api/sessions/{id}/rollback` | discard the transaction |
 | `POST` | `/api/sessions/{id}/interrupt` | `SIGINT` |
 | `DELETE` | `/api/sessions/{id}` | close; `?force=true` kills |
-| `POST` | `/api/sessions/{id}/owner` | hand the session over; rotates the write key (admin). Body `{"owner": {"kind": "human"\|"agent", "label": "…"}}` — any other `kind` is a `422`, and an absent `label` becomes the kind, so `{"kind": "agent"}` is named `agent` rather than nothing |
-| `POST` | `/api/sessions/{id}/policy` | grant or revoke `allow_commit` (admin). `409` on revoking from a human owner: the right only gates an agent |
+| `POST` | `/api/sessions/{id}/owner` | hand the session over; rotates the write key. A current or former owner's key, or the admin key; handing it to a `human` takes a key issued to a human, or the admin key (`403 needs_a_human`). Body `{"owner": {"kind": "human"\|"agent", "label": "…"}}` — any other `kind` is a `422`, and an absent `label` becomes the kind, so `{"kind": "agent"}` is named `agent` rather than nothing |
+| `POST` | `/api/sessions/{id}/policy` | grant or revoke `allow_commit`. A grant takes a key issued to a human, or the admin key (`403 needs_a_human`); revoking, any key that holds the session. `409` on revoking from a local human owner: the right only gates an agent there |
 | `GET` | `/api/sessions/{id}/logs` | stderr tail |
 | `GET` | `/api/sessions/{id}/history` | feed from the journal; a closed session answers `200` with `session.state: "gone"` and a `session.gone` object; `?logs=true` adds journalled stderr |
 | `GET` | `/api/journals` | past sessions; each carries `lines` and `bytes`, the journal file's record count and size on disk |

@@ -10,6 +10,7 @@ import importlib
 import io
 import json
 import os
+import signal
 import socket
 import sys
 import time
@@ -18,6 +19,19 @@ import traceback
 _PT_PROTOCOL = 1
 _OS_MAX_STDOUT = 1000000
 _OS_MAX_RESULT = 100000
+
+# Whether a SIGINT may raise right now: only while code the caller asked for
+# runs. Everywhere else — between commands, while a frame is being written —
+# an interrupt would escape the loop and end the process, and with it the
+# namespace and the open transaction: the opposite of what Interrupt
+# promises. A one-item list so the handler and the loop share it without a
+# `global`.
+_OS_LIVE = [False]
+
+
+def _os_on_sigint(signum, frame):
+    if _OS_LIVE[0]:
+        raise KeyboardInterrupt
 
 
 def _os_clip(text, limit):
@@ -45,9 +59,12 @@ def _os_safe_repr(value):
     try:
 
         return repr(value)
-    except Exception as exc:  # noqa: BLE001 - a broken __repr__ must not kill the session
+    # BaseException: a broken __repr__ must not kill the session, and neither
+    # may an interrupt that lands while a large value is being rendered — the
+    # command itself has already run to the end by then.
+    except BaseException as exc:  # noqa: BLE001
 
-        return f"<unrepresentable {type(value).__name__}: {exc}>"
+        return f"<unrepresentable {type(value).__name__}: {str(exc) or type(exc).__name__}>"
 
 
 def _os_run(namespace, code, cell):
@@ -56,8 +73,10 @@ def _os_run(namespace, code, cell):
     sys.stdout = captured
     started = time.time()
     error = None
-    value = None
+    result = None
+    result_truncated = False
     try:
+        _OS_LIVE[0] = True
         tree = ast.parse(code, filename=cell, mode="exec")
         tail = None
         if tree.body and isinstance(tree.body[-1], ast.Expr):
@@ -66,18 +85,22 @@ def _os_run(namespace, code, cell):
         exec(compile(tree, cell, "exec"), namespace)  # noqa: S102
         if tail is not None:
             value = eval(compile(tail, cell, "eval"), namespace)
+            if value is not None:
+                # Still interruptible: a repr is the value's own code, and one
+                # of a large recordset takes seconds — long enough to look
+                # stuck and be interrupted. It used to run outside this span,
+                # where the interrupt killed the session instead.
+                result, result_truncated = _os_clip(_os_safe_repr(value), _OS_MAX_RESULT)
+        _OS_LIVE[0] = False
     # BaseException on purpose: an interrupted command is an ordinary result
     # frame, not a reason to lose the session.
     except BaseException as exc:  # noqa: BLE001
+        _OS_LIVE[0] = False
         error = _os_error(exc, cell)
     finally:
         sys.stdout = saved_stdout
     duration = time.time() - started
     stdout, stdout_truncated = _os_clip(captured.getvalue(), _OS_MAX_STDOUT)
-    result = None
-    result_truncated = False
-    if value is not None:
-        result, result_truncated = _os_clip(_os_safe_repr(value), _OS_MAX_RESULT)
 
     return {
         "stdout": stdout,
@@ -90,6 +113,11 @@ def _os_run(namespace, code, cell):
 
 
 def _os_test_tags(module, test_class, test_method):
+    if not test_class:
+        # No tag means `standard` to Odoo's selector: what `--test-tags
+        # /module` runs. `*` would also take tests tagged `-standard` or
+        # `external`, which may call real third-party services.
+        return f"/{module}"
     spec = f"*/{module}:{test_class}"
     if test_method:
         spec += f".{test_method}"
@@ -241,6 +269,7 @@ def _os_run_test(env, module, test_class, test_method):
     error = None
     test = None
     try:
+        _OS_LIVE[0] = True
         try:
             shell = importlib.import_module("odoo.tests.shell")
         except ImportError:
@@ -323,9 +352,11 @@ def _os_run_test(env, module, test_class, test_method):
                 "skipped": skipped,
                 "success": report.wasSuccessful(),
             }
+        _OS_LIVE[0] = False
     # BaseException on purpose: an interrupted test run is an ordinary result
     # frame, not a reason to lose the session.
     except BaseException as exc:  # noqa: BLE001
+        _OS_LIVE[0] = False
         error = {
             "type": type(exc).__name__,
             "message": str(exc),
@@ -401,89 +432,133 @@ def _os_hello(namespace):
     }
 
 
+def _os_plain(request_id, error, duration):
+    """A result frame that carries nothing but its outcome."""
+
+    return {
+        "t": "result",
+        "id": request_id,
+        "stdout": "",
+        "stdout_truncated": False,
+        "result": None,
+        "result_truncated": False,
+        "error": error,
+        "duration": duration,
+    }
+
+
+def _os_boundary(env, kind, request_id):
+    started = time.time()
+    error = None
+    try:
+        # Interruptible: a commit waiting on a lock is exactly what someone
+        # reaches for Interrupt to stop.
+        _OS_LIVE[0] = True
+        if kind == "commit":
+            _os_commit(env)
+        else:
+            _os_rollback(env)
+        _OS_LIVE[0] = False
+    # BaseException on purpose: a failed transaction boundary must be
+    # reported, not fatal.
+    except BaseException as exc:  # noqa: BLE001
+        _OS_LIVE[0] = False
+        error = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+
+    return _os_plain(request_id, error, time.time() - started)
+
+
+def _os_answer(namespace, env, frame):
+    """The frame that answers one command. `bye` answers a close."""
+    kind = frame.get("t")
+    request_id = frame.get("id")
+    if kind == "exec":
+        answer = _os_run(namespace, frame.get("code", ""), f"<os-cell-{request_id}>")
+    elif kind == "run_test":
+        answer = _os_run_test(
+            env,
+            frame.get("module", ""),
+            frame.get("test_class", ""),
+            frame.get("test_method"),
+        )
+    elif kind in ("commit", "rollback"):
+
+        return _os_boundary(env, kind, request_id)
+    elif kind == "close":
+
+        return {"t": "bye", "id": request_id}
+    else:
+
+        return _os_plain(request_id, {
+            "type": "UnknownFrame",
+            "message": f"unknown frame type {kind!r}",
+            "traceback": "",
+        }, 0.0)
+    answer["t"] = "result"
+    answer["id"] = request_id
+
+    return answer
+
+
 def _os_main(namespace):
     frames = os.fdopen(os.dup(1), "w", encoding="utf-8")
     os.dup2(2, 1)  # anything else writing to fd 1 now lands in stderr
     commands = os.fdopen(int(os.environ.get("OS_CMD_FD", "3")), "r", encoding="utf-8")
     env = namespace["env"]
 
-    _os_send(frames, _os_hello(namespace))
+    # Odoo's shell makes every SIGINT a KeyboardInterrupt (shell.py:77). Ours
+    # raises only while a command runs — see `_OS_LIVE`. Signal handlers can
+    # only be set from the main thread, which is where odoo-bin shell runs
+    # its console; anywhere else the interrupt keeps the meaning Odoo gave it.
+    try:
+        previous = signal.signal(signal.SIGINT, _os_on_sigint)
+        installed = True
+    except ValueError:
+        previous = None
+        installed = False
 
-    while True:
-        try:
-            line = commands.readline()
-        except KeyboardInterrupt:
-            continue  # a signal between commands means nothing
-        if not line:
-            break
-        text = line.strip()
-        if not text:
-            continue
-        try:
-            frame = json.loads(text)
-        except ValueError:
-            continue
-        kind = frame.get("t")
-        request_id = frame.get("id")
-        if kind == "exec":
-            answer = _os_run(namespace, frame.get("code", ""), f"<os-cell-{request_id}>")
-            answer["t"] = "result"
-            answer["id"] = request_id
-            _os_send(frames, answer)
-        elif kind == "run_test":
-            answer = _os_run_test(
-                env,
-                frame.get("module", ""),
-                frame.get("test_class", ""),
-                frame.get("test_method"),
-            )
-            answer["t"] = "result"
-            answer["id"] = request_id
-            _os_send(frames, answer)
-        elif kind in ("commit", "rollback"):
-            started = time.time()
-            error = None
+    try:
+        _os_send(frames, _os_hello(namespace))
+        while True:
             try:
-                if kind == "commit":
-                    _os_commit(env)
-                else:
-                    _os_rollback(env)
-            # BaseException on purpose: a failed transaction boundary must be
-            # reported, not fatal.
-            except BaseException as exc:  # noqa: BLE001
-                error = {
-                    "type": type(exc).__name__,
-                    "message": str(exc),
-                    "traceback": traceback.format_exc(),
-                }
-            _os_send(frames, {
-                "t": "result",
-                "id": request_id,
-                "stdout": "",
-                "stdout_truncated": False,
-                "result": None,
-                "result_truncated": False,
-                "error": error,
-                "duration": time.time() - started,
-            })
-        elif kind == "close":
-            _os_send(frames, {"t": "bye", "id": request_id})
-            break
-        else:
-            _os_send(frames, {
-                "t": "result",
-                "id": request_id,
-                "stdout": "",
-                "stdout_truncated": False,
-                "result": None,
-                "result_truncated": False,
-                "error": {
-                    "type": "UnknownFrame",
-                    "message": f"unknown frame type {kind!r}",
+                line = commands.readline()
+            except KeyboardInterrupt:
+                continue  # a signal between commands means nothing
+            if not line:
+                break
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                frame = json.loads(text)
+            except ValueError:
+                continue
+            if not isinstance(frame, dict):
+                continue
+            try:
+                answer = _os_answer(namespace, env, frame)
+            except KeyboardInterrupt:
+                # Every command catches its own interrupt. This is the sliver
+                # between a command's last line and the flag that closes its
+                # span: still an interrupted command, never a lost session.
+                _OS_LIVE[0] = False
+                answer = _os_plain(frame.get("id"), {
+                    "type": "KeyboardInterrupt",
+                    "message": "",
                     "traceback": "",
-                },
-                "duration": 0.0,
-            })
+                }, 0.0)
+            # Never interruptible: half a frame on the pipe is a line the
+            # daemon cannot read, and a session busy forever.
+            _os_send(frames, answer)
+            if answer.get("t") == "bye":
+                break
+    finally:
+        if installed and previous is not None:
+            signal.signal(signal.SIGINT, previous)
 
 
 _os_main(globals())

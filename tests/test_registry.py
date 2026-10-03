@@ -585,3 +585,73 @@ async def test_replacing_a_remote_session_says_it_is_not_yours_to_open(tmp_path,
     assert "remote" in message
     assert "build.dev.odoo.com" in message, "and which instance it was"
     assert "handover" in message, "and it has to say what to do instead"
+
+
+def test_a_new_admin_key_is_never_readable_by_anyone_else(tmp_path):
+    """Written first and narrowed after, the key sat in a world-readable file
+    for as long as the gap between the two calls."""
+    path = tmp_path / "admin.key"
+    load_admin_key(path)
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+async def test_closing_a_session_hangs_up_its_sockets(tmp_path):
+    """They used to wait on a session that would never speak again, and the
+    entry stayed in `subscribers` for the life of the daemon."""
+    import asyncio
+
+    registry = Registry(journal_root=tmp_path)
+    session = MagicMock()
+    session.close = AsyncMock()
+    registry.sessions["s1"] = session
+    queue = asyncio.Queue(maxsize=10)
+    registry.subscribe("s1", queue)
+    queue.put_nowait({"kind": "stderr", "line": "unread"})
+
+    await registry.close("s1")
+
+    assert "s1" not in registry.subscribers
+    assert queue.get_nowait() is None, "the hang-up, with nothing stale before it"
+
+
+async def test_a_socket_that_falls_behind_is_cut_off_not_buffered(tmp_path):
+    """A tab that stopped reading would have held every log line of every run
+    in memory; raising instead would have stopped the session's log reader,
+    because publishing runs inside it."""
+    import asyncio
+
+    registry = Registry(journal_root=tmp_path)
+    registry.sessions["s1"] = MagicMock()
+    slow = asyncio.Queue(maxsize=2)
+    fast = asyncio.Queue(maxsize=100)
+    registry.subscribe("s1", slow)
+    registry.subscribe("s1", fast)
+    for n in range(5):
+        registry._publish("s1", {"kind": "stderr", "line": str(n)})
+
+    assert registry.subscribers["s1"] == [fast]
+    assert slow.get_nowait() is None
+    assert fast.qsize() == 5
+
+
+async def test_a_watcher_that_falls_behind_is_cut_off_too(tmp_path):
+    import asyncio
+
+    registry = Registry(journal_root=tmp_path)
+    slow = asyncio.Queue(maxsize=1)
+    registry.watch(slow)
+    registry._broadcast({"kind": "session_closed", "session": "a"})
+    registry._broadcast({"kind": "session_closed", "session": "b"})
+    assert slow not in registry.watchers
+    assert slow.get_nowait() is None
+
+
+async def test_a_launcher_that_is_not_installed_is_a_refusal(tmp_path, monkeypatch):
+    async def missing(argv):
+        raise FileNotFoundError(2, "No such file or directory", "docker")
+
+    monkeypatch.setattr("odoo_sheller.registry.spawn", missing)
+    monkeypatch.setattr("odoo_sheller.registry.bootstrap_source", lambda: "bootstrap")
+    registry = Registry(journal_root=tmp_path)
+    with pytest.raises(ValueError, match="docker is not installed"):
+        await registry.open("integra19", "acme", "/odoo-bin")

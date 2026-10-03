@@ -35,3 +35,14 @@ def test_the_container_note_does_not_depend_on_the_bind_address():
 
 def test_the_env_var_name_is_the_one_the_image_sets():
     assert IN_CONTAINER_ENV == "ODOO_SHELLER_IN_CONTAINER"
+
+
+def test_the_admin_key_reaches_a_terminal_but_never_a_log():
+    """daemon.log and `docker logs` outlive the moment and are read by more
+    than the person at the keyboard; the key file is the other way to it."""
+    from odoo_sheller.__main__ import admin_key_line
+
+    assert admin_key_line("s3cret", to_terminal=True) == "admin key: s3cret"
+    logged = admin_key_line("s3cret", to_terminal=False)
+    assert "s3cret" not in logged
+    assert "admin.key" in logged

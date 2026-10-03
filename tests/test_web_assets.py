@@ -2738,3 +2738,12 @@ def test_journal_copy_glyph_swaps_like_the_target_copy():
     assert ".journal-copy .copy-done" in css
     assert ".journal-copy[data-flash='copied'] .copy-idle" in css
     assert ".journal-copy[data-flash='failed']" in css
+
+
+def test_an_owner_kind_from_disk_never_reaches_a_class_attribute_raw(app_js):
+    """A journal written before the daemon closed the set of kinds could carry
+    any string a caller sent, and `journal-owner ${owner.kind}` put it into
+    markup unescaped. Only the kinds the stylesheet knows get through."""
+    assert "const OWNER_KINDS = new Set(['human', 'agent'])" in app_js
+    body = re.search(r"function journalOwner\(.*?\n\}", app_js, re.DOTALL).group(0)
+    assert "OWNER_KINDS.has(last.kind) ? last.kind : 'unknown'" in body

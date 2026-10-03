@@ -15,6 +15,7 @@ from odoo_sheller.session import (
     SessionNotReady,
     SessionState,
     parse_test_line,
+    rerun_spec,
 )
 from odoo_sheller.transport import Target
 
@@ -1149,6 +1150,34 @@ LOGGER = "odoo.addons.sale.tests.test_sale_order"
          ("failure", "Subtest TestSaleOrder.test_x (n=2)")),
         (f"2026-10-01 10:00:00,123 42 INFO db {LOGGER}: skipped TestSaleOrder.test_z : no stock",
          ("skip", "TestSaleOrder.test_z")),
+        # perf_info trails a one-line message in every shape Odoo writes it.
+        (f"2026-10-01 10:00:00,123 42 ERROR db {LOGGER}: ERROR: TestSaleOrder.test_y - - -",
+         ("error", "TestSaleOrder.test_y")),
+        (f"2026-10-01 10:00:00,123 42 ERROR db {LOGGER}: FAIL: TestSaleOrder.test_x - - - -",
+         ("failure", "TestSaleOrder.test_x")),
+        (f"2026-10-01 10:00:00,123 42 ERROR db {LOGGER}: FAIL: TestSaleOrder.test_x 12 0.034 1.207",
+         ("failure", "TestSaleOrder.test_x")),
+        (f"2026-10-01 10:00:00,123 42 ERROR db {LOGGER}: FAIL: TestSaleOrder.test_x 12 0.034 1.207 ro->rw",
+         ("failure", "TestSaleOrder.test_x")),
+        (f"2026-10-01 10:00:00,123 42 INFO db {LOGGER}: Starting TestSaleOrder.test_x ... 3 0.001 0.020",
+         ("start", "TestSaleOrder.test_x")),
+        # A fixture that failed outside any test is logged by the suite's
+        # error holder: odoo.tests.suite from 16, unittest.suite in 15.
+        (("2026-10-01 10:00:00,123 42 ERROR db odoo.tests.suite: ERROR: setUpClass "
+          "(odoo.addons.sale.tests.test_sale_order.TestBroken)"),
+         ("error", "setUpClass (odoo.addons.sale.tests.test_sale_order.TestBroken)")),
+        (("2026-10-01 10:00:00,123 42 ERROR db unittest.suite: ERROR: setUpModule "
+          "(odoo.addons.sale.tests.test_sale_flow)"),
+         ("error", "setUpModule (odoo.addons.sale.tests.test_sale_flow)")),
+        (("2026-10-01 10:00:00,123 42 ERROR db odoo.tests.suite: FAIL: tearDownClass "
+          "(odoo.addons.sale.tests.test_sale_order.TestBroken) - - -"),
+         ("failure", "tearDownClass (odoo.addons.sale.tests.test_sale_order.TestBroken)")),
+        (("2026-10-01 10:00:00,123 42 INFO db odoo.tests.suite: skipped setUpClass "
+          "(odoo.addons.sale.tests.test_sale_order.TestOff) : no printer"),
+         ("skip", "setUpClass (odoo.addons.sale.tests.test_sale_order.TestOff)")),
+        # The suite logger names nothing else; anything off the fixture shape
+        # stays out of the counts.
+        ("2026-10-01 10:00:00,123 42 ERROR db odoo.tests.suite: ERROR: something else", None),
         # A traceback line under a FAIL, an unrelated logger, plain noise.
         ('  File "/opt/odoo/addons/sale/tests/test_sale_order.py", line 12, in test_x', None),
         ("2026-10-01 10:00:00,123 42 ERROR db odoo.sql_db: ERROR: relation does not exist", None),
@@ -1246,3 +1275,310 @@ async def test_exec_does_not_count_test_lines(tmp_path):
     assert not [event for event in seen if event["kind"] == "test_progress"]
     assert session.describe()["test_progress"] is None
     await session.close()
+
+
+FAILED_FAKE = r"""
+import json, sys, time
+L = "2026-10-01 10:00:00,123 42 %s db odoo.addons.sale.tests.test_sale_order: %s\n"
+# A fixture that fails outside any test is logged under the suite, not the
+# test: odoo.tests.suite from 16, unittest.suite in 15.
+S = "2026-10-01 10:00:00,123 42 %s db odoo.tests.suite: %s\n"
+U = "2026-10-01 10:00:00,123 42 %s db unittest.suite: %s\n"
+sys.stdout.write(json.dumps({"t":"hello","protocol":1,"odoo":"19.0","python":"3.12.0",
+                             "db":"db","uid":1,"pid":4242}) + "\n")
+sys.stdout.flush()
+for line in sys.stdin:
+    frame = json.loads(line)
+    if frame["t"] == "close":
+        sys.stdout.write(json.dumps({"t":"bye","id":frame["id"]}) + "\n")
+        sys.stdout.flush()
+        break
+    for template, message in (
+            (L, ("ERROR", "FAIL: TestSaleOrder.test_b")),
+            (L, ("ERROR", "ERROR: TestSaleOrder.test_c")),
+            (L, ("ERROR", "FAIL: Subtest TestSaleOrder.test_e (n=2)")),
+            (L, ("ERROR", "FAIL: Subtest TestSaleOrder.test_e (n=3)")),
+            (S, ("ERROR", "ERROR: setUpClass (odoo.addons.sale.tests.test_sale_order.TestBroken)")),
+            (U, ("ERROR", "ERROR: setUpModule (odoo.addons.sale.tests.test_sale_flow)")),
+            (L, ("ERROR", "ERROR: something Odoo calls a test"))):
+        sys.stderr.write(template % message)
+        sys.stderr.flush()
+    time.sleep(0.3)
+    sys.stdout.write(json.dumps({"t":"result","id":frame["id"],"stdout":"",
+                                 "stdout_truncated":False,"result":None,
+                                 "result_truncated":False,"error":None,"duration":0.01}) + "\n")
+    sys.stdout.flush()
+"""
+
+
+async def test_a_run_names_what_failed_as_specs_to_rerun(tmp_path):
+    """A whole module's log is thousands of lines; this is what the agent needs
+    from it — each failure as something os_run_test takes back."""
+    session = await make_session(tmp_path, script=FAILED_FAKE)
+    await session.start()
+    result = await session.run_test("sale")
+    assert result["failed"] == [
+        {"test": "sale.TestSaleOrder.test_b", "kind": "failure"},
+        {"test": "sale.TestSaleOrder.test_c", "kind": "error"},
+        # Both subtests are one method: rerunning it reruns both.
+        {"test": "sale.TestSaleOrder.test_e", "kind": "failure"},
+        # A class that could not even set up is rerun as the class — and
+        # Odoo logs that one under the suite, not under the test.
+        {"test": "sale.TestBroken", "kind": "error"},
+        # A test file that could not set up: no tag names a file, so the
+        # narrowest rerun that still holds it is the module.
+        {"test": "sale", "kind": "error"},
+        # Nothing to derive a spec from: say what Odoo said.
+        {"test": "something Odoo calls a test", "kind": "error"},
+    ]
+    await session.close()
+
+
+async def test_the_failed_list_is_journalled_with_the_result(tmp_path):
+    session = await make_session(tmp_path, script=FAILED_FAKE)
+    await session.start()
+    await session.run_test("sale", "TestSaleOrder")
+    results = [r for r in session.journal.records() if r["kind"] == "result"]
+    assert results[-1]["failed"][0] == {"test": "sale.TestSaleOrder.test_b", "kind": "failure"}
+    await session.close()
+
+
+async def test_a_clean_run_reports_an_empty_failed_list(tmp_path):
+    session = await make_session(tmp_path, script=PROGRESS_FAKE)
+    await session.start()
+    result = await session.run_test("sale", "TestSaleOrder")
+    # PROGRESS_FAKE does log one FAIL, so use the plain fake for the clean case.
+    assert result["failed"] == [{"test": "sale.TestSaleOrder.test_b", "kind": "failure"}]
+    await session.close()
+    clean = await make_session(tmp_path, script=FAKE)
+    await clean.start()
+    assert (await clean.run_test("sale"))["failed"] == []
+    await clean.close()
+
+
+async def test_a_module_run_describes_its_spec_as_the_module(tmp_path):
+    session = await make_session(tmp_path, script=PROGRESS_FAKE)
+    await session.start()
+    running = asyncio.create_task(session.run_test("sale"))
+    await asyncio.sleep(0.25)
+    assert session.describe()["test_progress"]["spec"] == "sale"
+    await running
+    await session.close()
+
+
+@pytest.mark.parametrize(
+    ("description", "spec"),
+    [
+        ("TestSaleOrder.test_x", "sale.TestSaleOrder.test_x"),
+        ("Subtest TestSaleOrder.test_x (n=2)", "sale.TestSaleOrder.test_x"),
+        ("setUpClass (odoo.addons.sale.tests.test_sale_order.TestBroken)", "sale.TestBroken"),
+        ("tearDownClass (odoo.addons.sale.tests.test_sale_order.TestBroken)", "sale.TestBroken"),
+        # The last part of a module fixture is a file, which no tag can name:
+        # `sale.test_sale_flow` would select a class that does not exist and
+        # run nothing at all.
+        ("setUpModule (odoo.addons.sale.tests.test_sale_flow)", "sale"),
+        ("tearDownModule (odoo.addons.sale.tests.test_sale_flow)", "sale"),
+        ("something Odoo calls a test", "something Odoo calls a test"),
+    ],
+)
+def test_rerun_spec_names_what_a_tag_can_select(description, spec):
+    assert rerun_spec("sale", description) == spec
+
+
+async def test_a_remote_handover_round_trip_brings_back_no_grant(tmp_path):
+    """Taking a remote session back used to come home able to commit: the
+    handover set the right from the owner's kind alone, so human meant yes —
+    on someone else's instance, where a human has to be granted it too."""
+    for stage in ("staging", "production"):
+        session = await make_session(tmp_path, target=oosh_target(stage))
+        await session.start()
+        try:
+            assert session.allow_commit is False
+            session.transfer_owner({"kind": "agent", "label": "claude"})
+            assert session.allow_commit is False
+            session.transfer_owner({"kind": "human", "label": "browser"})
+            assert session.allow_commit is False, stage
+            assert session.describe()["allow_commit"] is False, stage
+            if stage == "staging":
+                assert session._may_commit() is False
+            else:
+                with pytest.raises(CommitForbidden):
+                    session._may_commit()
+        finally:
+            await session.kill()
+
+
+async def test_a_local_handover_still_gives_a_human_their_commit_back(tmp_path):
+    session = await make_session(tmp_path)
+    await session.start()
+    try:
+        session.transfer_owner({"kind": "agent", "label": "claude"})
+        assert session.allow_commit is False
+        session.transfer_owner({"kind": "human", "label": "browser"})
+        assert session.allow_commit is True
+    finally:
+        await session.kill()
+
+
+async def test_keys_remember_who_they_were_issued_to(tmp_path):
+    """Granting commit is a human's act. An agent holds a key `held_by`
+    accepts too — its own — so that alone cannot be what decides."""
+    session = await make_session(tmp_path)
+    await session.start()
+    try:
+        human_key = session.write_key
+        assert session.held_by_human(human_key)
+        agent_key = session.transfer_owner({"kind": "agent", "label": "claude"})
+        assert session.held_by(agent_key)
+        assert not session.held_by_human(agent_key)
+        assert session.held_by_human(human_key), "the one who handed it over"
+        back = session.transfer_owner({"kind": "human", "label": "browser"})
+        assert session.held_by_human(back)
+        assert not session.held_by_human(agent_key)
+        assert not session.held_by_human("a-key-from-nowhere")
+        assert not session.held_by_human(None)
+        assert session.key_status(back) == "owner"
+        assert session.key_status(agent_key) == "former_owner"
+        assert session.key_status("a-key-from-nowhere") == "invalid"
+        assert session.key_status(None) == "invalid"
+    finally:
+        await session.kill()
+
+
+async def test_a_session_that_dies_before_hello_says_why(tmp_path):
+    """The cause is in what Odoo logged on the way out. "process ended" alone
+    left an agent with nothing to act on."""
+    script = (
+        "import sys\n"
+        "sys.stderr.write('psycopg2.OperationalError: database \"nope\" does not exist\\n')\n"
+        "sys.stderr.flush()\n"
+        "sys.exit(1)\n"
+    )
+    session = await make_session(tmp_path, script=script)
+    with pytest.raises(SessionDead) as excinfo:
+        await session.start()
+    message = str(excinfo.value)
+    assert "before the session started" in message
+    assert 'database "nope" does not exist' in message
+
+
+async def test_closing_a_busy_session_never_passes_through_ready(tmp_path):
+    """A close cut the running command short and briefly reported the session
+    free: ready, then busy with `close`, then ready again, then closed — and
+    the ready in between cleared a live test run's card."""
+    seen = []
+    session = await make_session(
+        tmp_path,
+        on_event=lambda event: seen.append(event) if event["kind"] == "state" else None,
+    )
+    await session.start()
+    running = asyncio.create_task(session.execute("SLEEP"))
+    await wait_for_state(session, SessionState.BUSY)
+    await session.close()
+    with pytest.raises(SessionDead):
+        await running
+    states = [(event["state"], event["activity"]) for event in seen]
+    after_busy = states[states.index(("busy", "exec")) + 1:]
+    assert after_busy == [("closed", None)], states
+    assert session.state is SessionState.CLOSED
+
+
+async def test_closing_an_idle_session_goes_straight_to_closed(tmp_path):
+    seen = []
+    session = await make_session(
+        tmp_path,
+        on_event=lambda event: seen.append(event) if event["kind"] == "state" else None,
+    )
+    await session.start()
+    await session.close()
+    states = [event["state"] for event in seen]
+    assert states == ["ready", "busy", "closed"], states
+
+
+async def test_an_exec_that_lands_after_its_timeout_still_counts_as_pending(
+    tmp_path, monkeypatch
+):
+    """It ran to the end in the container and may have written: the next
+    handover or test run has to know there is work in the transaction."""
+
+    async def fake_signal(container, pid, name):
+        pass
+
+    monkeypatch.setattr("odoo_sheller.session.send_signal", fake_signal)
+    session = await make_session(tmp_path, script=LATE_RESULT_FAKE)
+    await session.start()
+    try:
+        with pytest.raises(TimeoutError):
+            await session.execute("FIRST", timeout=0.05)
+        assert session.pending_commands == 0
+        await wait_for_state(session, SessionState.READY)
+        assert session.pending_commands == 1
+    finally:
+        await session.kill()
+
+
+SLOW_BOUNDARY_FAKE = r"""
+import json, sys, time
+sys.stdout.write(json.dumps({"t":"hello","protocol":1,"odoo":"19.0","python":"3.12.0",
+                             "db":"db","uid":1,"pid":4242}) + "\n")
+sys.stdout.flush()
+for line in sys.stdin:
+    frame = json.loads(line)
+    if frame["t"] == "close":
+        sys.stdout.write(json.dumps({"t":"bye","id":frame["id"]}) + "\n")
+        sys.stdout.flush()
+        break
+    if frame["t"] in ("commit", "rollback"):
+        time.sleep(0.2)
+    sys.stdout.write(json.dumps({"t":"result","id":frame["id"],"stdout":"",
+                                 "stdout_truncated":False,"result":None,
+                                 "result_truncated":False,"error":None,
+                                 "duration":0.01}) + "\n")
+    sys.stdout.flush()
+"""
+
+
+async def test_a_commit_that_lands_after_its_timeout_is_journalled_as_one(
+    tmp_path, monkeypatch
+):
+    """A commit that finally got its lock did commit. Without the record the
+    journal read "discarded" over a write that happened, and the work it
+    wrote still counted as pending."""
+
+    async def fake_signal(container, pid, name):
+        pass
+
+    monkeypatch.setattr("odoo_sheller.session.send_signal", fake_signal)
+    session = await make_session(tmp_path, script=SLOW_BOUNDARY_FAKE)
+    await session.start()
+    try:
+        await session.execute("1")
+        assert session.pending_commands == 1
+        with pytest.raises(TimeoutError):
+            await session.commit(timeout=0.05)
+        await wait_for_state(session, SessionState.READY)
+        assert session.pending_commands == 0
+    finally:
+        await session.kill()
+
+    commits = [r for r in session.journal.records() if r["kind"] == "commit"]
+    assert len(commits) == 1
+    assert commits[0]["late"] is True
+    assert commits[0]["error"] is None
+
+
+async def test_a_read_only_exec_is_journalled_but_not_pending(tmp_path):
+    """os_source reads through exec. Counting it as work made a handover warn
+    about, and a test run report as discarded, a transaction holding nothing."""
+    session = await make_session(tmp_path)
+    await session.start()
+    try:
+        await session.execute("1", read_only=True)
+        assert session.pending_commands == 0
+        await session.execute("2")
+        assert session.pending_commands == 1
+    finally:
+        await session.close()
+    execs = [r for r in session.journal.records() if r["kind"] == "exec"]
+    assert execs[0]["read_only"] is True
+    assert "read_only" not in execs[1]

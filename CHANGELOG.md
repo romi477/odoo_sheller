@@ -5,7 +5,149 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.8.3] — 2026-10-03
+
+### A whole module, and only what failed
+
+`os_run_test` took a class or a method, so testing a module meant one call
+per class — or a log of thousands of lines nobody wanted to read. It now
+also takes a bare module, `os_run_test("integration_prestashop")`, and runs
+that module's standard tests, at_install and post_install, through the same
+`run_tests` call in the same throwaway session: nothing is installed or
+upgraded, and a database counted before and after reads the same. Standard
+means the set `--test-tags /module` runs — the bootstrap tags `/module`, not
+`*/module`, so tests tagged `-standard` or `external`, the ones that call
+real third-party services, still need their class named.
+
+Every run now answers with `failed`: each failing test as a spec to pass
+straight back to `os_run_test`, read off Odoo's own `FAIL:` and `ERROR:`
+lines as they happen. A failed subtest is listed as its method, a class
+whose `setUpClass` failed as the class, and a test file whose `setUpModule`
+failed as the whole module, since no tag can name a file. Odoo logs those
+fixture failures under the suite — `odoo.tests.suite`, `unittest.suite` in 15
+— rather than under the test, and the parser reads both; reading only the
+test's own logger, a class that could not set up was counted nowhere and a
+module run answered `errors: 1, failed: []`. A module run sends its log as a
+count, `stderr_lines`, and leaves the lines in the journal; a class or a
+method still sends its log tail, since that is where the reason is. The
+list is journalled with the result, so `os_test_result` returns it too, and
+the MCP instructions describe all three forms.
+
+Without a `timeout`, `os_run_test`'s ceiling now follows the spec: 30 seconds
+for a method, 300 for a class, 1800 for a module. One default of 30 stopped a
+whole module unless the agent remembered to say otherwise — the first module
+tried took 28.9 seconds.
+
+Reading those lines turned up a bug in the test-progress parser from 1.8.2:
+a one-line `ERROR:` carries Odoo's perf_info after the test name, and the
+name was taken with it. The patterns strip it now.
+
+`/health` read the version from package metadata on every request. On an
+editable install a version bump rewrites that metadata under a daemon still
+running the old code, so one started on 1.8.1 code answered `1.8.3` — while
+refusing a request without `odoo_bin` that 1.8.2 accepts. The version is now
+read once, when the daemon starts.
+
+### An interrupt costs the command, never the session
+
+Interrupt reached the bootstrap through the handler Odoo's shell installs,
+which raises `KeyboardInterrupt` wherever the process happens to be. While a
+command runs that is the point; anywhere else it was a crash. The `repr` of a
+command's value ran outside every handler — a large recordset's takes seconds
+and looks hung, which is exactly when someone presses Interrupt — and the
+interrupt ended the process, its namespace and its open transaction. Landing
+while a result frame was being written, it cut the frame in half: the daemon
+could not read the line, and the session sat busy until its timeout. The
+bootstrap now raises on `SIGINT` only while a command runs — its code, the
+`repr` of its value, a test run, a commit or a rollback — and ignores it
+everywhere else. An interrupted `repr` reads `<unrepresentable T:
+KeyboardInterrupt>`, with no error: the command itself had finished.
+
+### A grant is a human's act
+
+Granting commit, and handing a session to a human, both accepted any key that
+held the session — the agent's own included. An agent refused a commit could
+grant itself the right, or hand the session to "a human", keep the key that
+came back and commit as one. Keys are now remembered with the kind of owner
+they were issued to, and both acts take a human's key or the admin key; so
+does opening an agent's session with `allow_commit: true`. The refusal is
+`403 needs_a_human`. `docs/security.md` says what this still does not stop: a
+program that claims to be a human when it opens a session of its own.
+
+A remote session handed to an agent and taken back came home able to commit,
+with no grant ever made, and on production claimed a right nothing would
+honour. A handover never carries a grant now, in either direction: the new
+owner starts where anyone of their kind starts on that target.
+
+### Journals: one file to find one, and no line can take them all down
+
+A closed session's history, `os_test_result` after a run closed itself, a
+`replace`, an export: each summarised every journal on disk to find one
+file whose name already said which it was. On a machine with 2,000 journals
+and 1.4 GB that was 4.5 seconds a call — on the event loop, where no live
+session heard from its process meanwhile. A journal is found by its filename
+now, where a session ran is read from the file's head, the journal list
+keeps each file's summary until its size or mtime moves, and whatever does
+read a whole file runs off the loop.
+
+One cut line — a daemon killed mid-write, a full disk — made every reader
+raise: the journal list, every closed session's history and every export
+answered 500 until someone found the file. A line that is not a record is
+skipped with a warning now.
+
+### Elsewhere
+
+- `os_exec` stops waiting after about 40 seconds and says so honestly: the
+  command is still running, the session stays busy until it ends or the
+  daemon interrupts it at five minutes, do not run it again. The guidance
+  promised a 30-second ceiling that never existed on the daemon's side.
+- `os_journal` answers a page at a time — the end by default, any stretch
+  with `first=`/`last=`, and `total_lines` — instead of the whole transcript:
+  a module run's is near a megabyte. The guidance's `fmt="json"` is
+  `fmt="jsonl"`; the other only worked because anything but `markdown` was
+  read as JSONL.
+- `os_attach_session` checks the key it is given: `GET /api/sessions/{id}`
+  with a key reports `key_status` for it. A wrong one used to attach without
+  complaint and fail on the first command.
+- `os_list_tests` on a remote build answers `not_a_container` and points at
+  `os_source`, instead of sending a build id to `docker exec`.
+- A session whose process dies before `hello` says why: `410
+  session_did_not_start` with the last lines Odoo logged. It said `process
+  ended`, which left an agent — which does not see the startup log — with
+  nothing to act on.
+- Closing a busy session no longer reports it `ready` on the way to `closed`,
+  which also took a live test run's card away while the run went on.
+- The late result of an abandoned command is booked as if it had come in
+  time: an `exec` that ran past its ceiling counts as pending work, and a
+  commit that finally got its lock is journalled as a commit, `late: true`.
+- `exec` takes `read_only: true`, the caller's word that the code writes
+  nothing; `os_source` uses it, so a source read no longer makes a handover
+  warn or a test run report work discarded. A failed commit no longer marks a
+  journal `committed`, and the Markdown transcript keeps an error's message
+  when there is no traceback — a timeout, a refused test runner — instead of
+  an empty block.
+- A WebSocket that falls 10,000 events behind is hung up on rather than
+  buffered for as long as it stays connected, and closing a session hangs up
+  its sockets.
+- Discovery commands and signal delivery are bounded: a paused container, a
+  wedged Engine or a dead SSH link used to hang the Connect screen, an
+  agent's call or Interrupt with no end. A `docker` or `ssh` that is not
+  installed where the daemon runs is an answer naming it, not a 500 — the
+  container image has no `ssh`, and `docs/container.md` now says it cannot
+  reach odoo.sh builds.
+- The admin key is printed only to a terminal. Into the desktop app's
+  `daemon.log`, `docker logs` or a `nohup` redirect the daemon writes where
+  the key is kept instead. The key file is created `0600` in one step rather
+  than written first and narrowed after.
+- The journal list puts only the owner kinds it knows into a class
+  attribute; a journal from before the kinds were closed could carry any
+  string there, unescaped.
+- In the desktop app, a paste into a terminal tab running a raw-mode program
+  that is not reading — vim, ssh — froze the whole app, Quit included:
+  `pty_write` wrote on the main thread, holding the hub's lock, and such a
+  write waits from the first byte. Input goes to a writer thread per tab
+  now. Quitting beside a daemon the app did not start still asks about open
+  terminal tabs, which die with the app either way.
 
 ## [1.8.2] — 2026-10-01
 
@@ -1217,7 +1359,7 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
-[Unreleased]: https://github.com/romi477/odoo_sheller/compare/v1.8.2...HEAD
+[1.8.3]: https://github.com/romi477/odoo_sheller/compare/v1.8.2...v1.8.3
 [1.8.2]: https://github.com/romi477/odoo_sheller/compare/v1.8.1...v1.8.2
 [1.8.1]: https://github.com/romi477/odoo_sheller/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/romi477/odoo_sheller/compare/v1.7.0...v1.8.0

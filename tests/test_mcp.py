@@ -53,8 +53,13 @@ class FakeSession:
 
         return []
 
-    async def execute(self, code, timeout=300.0):
+    def key_status(self, key):
+
+        return "owner" if key == self.write_key else "invalid"
+
+    async def execute(self, code, timeout=300.0, read_only=False):
         self.calls.append(("execute", code))
+        self.read_only = read_only
         if getattr(self, "source_payload", None) is not None and "_os_read" in code:
             import json
 
@@ -218,9 +223,20 @@ async def test_run_test_never_returns_the_write_key(wired):
     assert "write_key" not in result
 
 
-async def test_run_test_defaults_to_a_short_timeout(wired):
-    await server.os_run_test("sale.TestSaleOrder")
-    assert wired.session.calls[-1] == ("run_test", "sale", "TestSaleOrder", None, 30.0)
+@pytest.mark.parametrize(
+    ("spec", "ceiling"),
+    [("sale.TestSaleOrder.test_x", 30.0), ("sale.TestSaleOrder", 300.0), ("sale", 1800.0)],
+)
+async def test_run_test_defaults_its_ceiling_by_what_the_spec_names(wired, spec, ceiling):
+    """One default for every form killed a whole module at 30 seconds unless
+    the agent remembered to say otherwise — one module took 28.9s."""
+    await server.os_run_test(spec)
+    assert wired.session.calls[-1][-1] == ceiling
+
+
+async def test_a_timeout_passed_still_wins_over_the_default(wired):
+    await server.os_run_test("sale", timeout=90)
+    assert wired.session.calls[-1][-1] == 90
 
 
 async def test_run_test_keeps_the_session_open_inside_the_budget(monkeypatch):
@@ -1832,3 +1848,217 @@ def test_an_actor_without_a_label_is_named_not_crashed():
     assert server._actor({"kind": "agent"}) == "agent:agent"
     assert server._actor({"kind": "agent", "label": "migrator"}) == "agent:migrator"
     assert server._actor(None) is None
+
+
+# --- a whole module, and what failed ---------------------------------------
+
+FAILED = [{"test": "sale.TestSaleOrder.test_b", "kind": "failure"}]
+
+
+def _module_run(stderr_lines):
+    async def run_test(self, module, test_class, test_method=None, timeout=300.0):
+        self.calls.append(("run_test", module, test_class, test_method, timeout))
+
+        return {
+            "stdout": "", "error": None, "duration": 29.2,
+            "test": {"module": module, "test_class": test_class, "test_method": test_method,
+                     "tests_run": 36, "failures": 1, "errors": 0, "skipped": 0,
+                     "success": False},
+            "stderr": [f"line {n}" for n in range(stderr_lines)],
+            "stderr_truncated": False, "discarded_pending": False, "failed": FAILED,
+        }
+
+    return run_test
+
+
+async def test_a_module_run_answers_with_the_summary_not_the_log(wired, monkeypatch):
+    """A module's log is thousands of lines. What failed is the answer, each
+    one a spec os_run_test takes back; the log stays in the journal."""
+    monkeypatch.setattr(FakeSession, "run_test", _module_run(3194))
+    result = await server.os_run_test("sale", container="c", database="db", timeout=600)
+    assert wired.session.calls[-1][1:4] == ("sale", None, None)
+    assert result["tests_run"] == 36
+    assert result["failed"] == FAILED
+    assert "stderr" not in result
+    assert result["stderr_lines"] == 3194
+    assert result["journal"] == "/api/journals/s1"
+
+
+async def test_a_class_run_still_returns_its_log_and_what_failed(wired, monkeypatch):
+    monkeypatch.setattr(FakeSession, "run_test", _module_run(3))
+    result = await server.os_run_test("sale.TestSaleOrder", container="c", database="db")
+    assert result["stderr"] == "line 0\nline 1\nline 2"
+    assert result["failed"] == FAILED
+
+
+async def test_a_module_run_recovered_later_has_the_same_shape(monkeypatch):
+    feed = {
+        "session": {"session_id": "ab12", "state": "gone"},
+        "entries": [{
+            "kind": "run_test", "id": 1, "ordinal": 1,
+            "module": "sale", "test_class": None, "test_method": None, "status": "done",
+            "result": {
+                "stdout": "", "stderr": ["x"] * 500, "stderr_truncated": False,
+                "error": None, "duration": 29.2, "failed": FAILED,
+                "test": {"tests_run": 36, "failures": 1, "errors": 0,
+                          "skipped": 0, "success": False},
+            },
+        }],
+    }
+
+    async def fake_call(method, path, session_id=None, **kwargs):
+
+        return feed
+
+    monkeypatch.setattr(server, "_call", fake_call)
+    answer = await server.os_test_result("ab12")
+    assert answer["test"] == "sale"
+    assert answer["failed"] == FAILED
+    assert "stderr" not in answer
+    assert answer["stderr_lines"] == 500
+
+
+def test_the_instructions_offer_a_whole_module():
+    text = guidance()
+    assert "os_run_test(\"module\")" in text or "`module`" in text
+    assert "failed" in text
+    assert "standard" in text, "say which tests a module run includes"
+    # The tool's own description is what a host shows beside the call.
+    assert "'module'" in server.RUN_TEST_DESCRIPTION
+
+
+# --- what the answers promise ------------------------------------------------
+
+
+async def test_an_exec_that_outlasts_the_wait_is_said_to_be_still_running(monkeypatch):
+    """The guidance used to promise a 30-second ceiling that never existed:
+    the daemon gave the command five minutes, and the agent was left to think
+    it had been stopped."""
+    async def slow(method, path, session_id=None, **kwargs):
+
+        return {"error": "request_timed_out", "recovery": "generic"}
+
+    monkeypatch.setattr(server, "_call", slow)
+    monkeypatch.setattr(server, "_keys", {"s1": "key-s1"})
+    answer = await server.os_exec("import time; time.sleep(600)")
+    assert answer["error"] == "request_timed_out"
+    assert answer["session_id"] == "s1"
+    for words in ("still running", "five minutes", "os_history", "os_interrupt"):
+        assert words in answer["recovery"], words
+    text = guidance()
+    assert "30-second ceiling" not in text
+    assert "five minutes" in text
+
+
+async def test_a_lent_session_is_never_said_to_close_itself(monkeypatch):
+    """`ours` was passed and never read: a run in the human's session promised
+    that the session would close itself when it ended."""
+    async def slow(method, path, session_id=None, **kwargs):
+        if path.endswith("/run_test"):
+
+            return {"error": "request_timed_out"}
+
+        return {}
+
+    monkeypatch.setattr(server, "_call", slow)
+    monkeypatch.setattr(server, "_keys", {"lent": "k"})
+    lent = await server.os_run_test("sale.TestSaleOrder", session_id="lent")
+    assert lent["status"] == "running"
+    assert "closes itself" not in lent["recovery"]
+    assert "the human's" in lent["recovery"]
+
+    async def opened_then_slow(method, path, session_id=None, **kwargs):
+        if path == "/api/sessions":
+
+            return {"id": "ours", "write_key": "k2"}
+
+        return {"error": "request_timed_out"}
+
+    monkeypatch.setattr(server, "_call", opened_then_slow)
+    ours = await server.os_run_test("sale.TestSaleOrder", container="c", database="db")
+    assert "closes itself" in ours["recovery"]
+
+
+async def test_a_source_read_is_not_counted_as_work(wired):
+    wired.session.source_payload = {"path": "sale/__manifest__.py", "total_lines": 3,
+                                    "first": 1, "last": 3, "text": "{}"}
+    await server.os_source(path="sale/__manifest__.py")
+    assert wired.session.read_only is True
+    await server.os_exec("1")
+    assert wired.session.read_only is False
+
+
+async def test_attaching_with_the_wrong_key_is_refused_at_once(wired, monkeypatch):
+    """It used to attach without complaint and fail on the first command."""
+    monkeypatch.setattr(server, "_keys", {})
+    refusal = await server.os_attach_session("s1", "not-the-key")
+    assert refusal["error"] == "not_owner"
+    assert refusal["key_status"] == "invalid"
+    assert "s1" not in server._keys
+
+    described = await server.os_attach_session("s1", "key-s1")
+    assert described["id"] == "s1"
+    assert "key_status" not in described
+    assert server._keys["s1"] == "key-s1"
+
+
+async def test_listing_tests_on_a_remote_build_is_refused_plainly(wired):
+    """The catalogue reads a local container's disk; a build id in that slot
+    went to `docker exec` and failed obscurely."""
+    wired.session.described = {"kind": "odoosh", "container": "36887345"}
+    refusal = await server.os_list_tests("sale")
+    assert refusal["error"] == "not_a_container"
+    assert "os_source(path='sale/tests')" in refusal["recovery"]
+
+
+def test_a_short_journal_comes_back_whole():
+    page = server._journal_page("s1", "markdown", "a\nb\nc", None, None)
+    assert page["text"] == "a\nb\nc"
+    assert (page["first"], page["last"], page["total_lines"]) == (1, 3, 3)
+    assert page["truncated"] is False
+    assert "recovery" not in page
+
+
+def test_a_long_journal_comes_back_as_its_end(monkeypatch):
+    """A module run's journal is near a megabyte; whole, it was context
+    nothing else could use."""
+    monkeypatch.setattr(server, "MAX_JOURNAL", 50)
+    text = "\n".join(f"line {n:03d}" for n in range(1, 101))
+    page = server._journal_page("s1", "markdown", text, None, None)
+    assert page["last"] == 100
+    assert page["text"].endswith("line 100")
+    assert len(page["text"]) <= 50
+    assert page["truncated"] is True
+    assert "first=" in page["recovery"]
+
+
+def test_a_journal_range_is_read_like_a_file(monkeypatch):
+    monkeypatch.setattr(server, "MAX_JOURNAL", 1000)
+    text = "\n".join(f"line {n}" for n in range(1, 101))
+    page = server._journal_page("s1", "markdown", text, 10, 12)
+    assert page["text"] == "line 10\nline 11\nline 12"
+    assert (page["first"], page["last"]) == (10, 12)
+
+    monkeypatch.setattr(server, "MAX_JOURNAL", 20)
+    capped = server._journal_page("s1", "markdown", text, 10, 90)
+    assert capped["first"] == 10
+    assert capped["last"] < 90, "cut where the budget runs out, from the start asked for"
+    assert len(capped["text"]) <= 20
+
+
+def test_a_single_huge_journal_line_is_clipped_not_refused(monkeypatch):
+    monkeypatch.setattr(server, "MAX_JOURNAL", 10)
+    page = server._journal_page("s1", "jsonl", "x" * 100, None, None)
+    assert len(page["text"]) == 10
+    assert page["truncated"] is True
+    ranged = server._journal_page("s1", "jsonl", "y" * 100, 1, 1)
+    assert ranged["text"] == "y" * 10
+
+
+def test_the_log_guidance_matches_what_the_tools_now_do():
+    log = server.HELP["log"]
+    assert 'fmt="json"' not in log, "the export is jsonl; json only worked by accident"
+    assert "first=" in log
+    assert "stderr_lines" in log and "module" in log
+    assert "setUpModule" in server.HELP["tests"]
+    assert "1800" in server.HELP["tests"]

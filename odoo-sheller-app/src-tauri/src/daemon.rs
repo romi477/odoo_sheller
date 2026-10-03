@@ -182,6 +182,15 @@ pub fn quit_message(session_count: usize, pending: u32, terminals: usize) -> Str
     message
 }
 
+/// The quit question when the daemon is not this app's to stop. Its sessions
+/// outlive the window; only the terminal tabs go with it.
+pub fn terminals_quit_message(terminals: usize) -> String {
+    format!(
+        "{terminals} terminal tab(s) will be closed and their processes killed. \
+         The daemon was not started by this app and keeps running, with its sessions."
+    )
+}
+
 pub fn occupied_message() -> String {
     format!(
         "Port {PORT} is in use, but it is not odoo-sheller. \
@@ -487,6 +496,14 @@ mod tests {
     fn quit_copy_names_the_terminal_tabs_it_is_about_to_kill() {
         let text = quit_message(0, 0, 2);
         assert!(text.contains("2 terminal tab"));
+    }
+
+    #[test]
+    fn quitting_beside_a_foreign_daemon_still_names_the_terminal_tabs() {
+        let text = terminals_quit_message(2);
+        assert!(text.contains("2 terminal tab"));
+        assert!(text.contains("keeps running"), "its sessions are not ours to end");
+        assert!(!text.contains("discarded"));
     }
 
     #[test]

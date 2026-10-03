@@ -523,3 +523,28 @@ async def test_probe_odoosh_survives_unparsable_output():
     assert result["ok"] is False
     assert result["supported"] is False
     assert "kex_exchange" in result["error"]
+
+
+async def test_a_launcher_that_is_not_installed_is_an_answer():
+    """The image has no ssh, a GUI's PATH may have no docker: both used to
+    surface as a bare 500 instead of a sentence."""
+    code, out, err = await discovery._docker(["definitely-not-a-real-binary-xyz", "ps"])
+    assert code == 127
+    assert out == ""
+    assert "not installed" in err
+
+
+async def test_a_command_that_never_answers_is_cut_off():
+    """A paused container or a wedged Engine held the request — and an agent's
+    whole tool call — with no end at all."""
+    code, _out, err = await discovery._docker(["sleep", "5"], timeout=0.2)
+    assert code == 124
+    assert "did not answer" in err
+
+
+async def test_an_odoosh_probe_without_ssh_says_what_is_missing(monkeypatch):
+    monkeypatch.setenv("PATH", "/nonexistent")
+    probe = await discovery.probe_odoosh("36887345", "build.dev.odoo.com")
+    assert probe["supported"] is False
+    assert "ssh" in probe["error"]
+    assert "not installed" in probe["error"]

@@ -14,6 +14,7 @@ SSH unchanged.
 """
 
 import asyncio
+import contextlib
 import os
 import shlex
 from dataclasses import dataclass
@@ -169,10 +170,27 @@ async def spawn(argv: list[str]) -> asyncio.subprocess.Process:
     )
 
 
-async def send_signal(target: Target, pid: int, signal_name: str) -> None:
+# How long delivering one signal may take. `docker exec … kill` answers in a
+# fraction of a second, a multiplexed ssh in about one; a wedged Engine or a
+# dead link used to hold Interrupt — and the timeout path that sends one —
+# for as long as it stayed wedged.
+SIGNAL_TIMEOUT = 15.0
+
+
+async def send_signal(
+    target: Target, pid: int, signal_name: str, timeout: float = SIGNAL_TIMEOUT
+) -> None:
     proc = await asyncio.create_subprocess_exec(
         *signal_command(target, pid, signal_name),
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
     )
-    await proc.wait()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout)
+    except TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        await proc.wait()
+        raise TimeoutError(
+            f"{signal_name} to pid {pid} was not delivered within {timeout:.0f}s"
+        ) from None

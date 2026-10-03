@@ -10,7 +10,7 @@ use std::process::Child;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use daemon::{PortState, occupied_message, quit_message};
+use daemon::{PortState, occupied_message, quit_message, terminals_quit_message};
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{
@@ -222,18 +222,33 @@ fn should_allow_exit(app: &AppHandle) -> bool {
     let Some(state) = app.try_state::<Supervisor>() else {
         return true;
     };
-    if !state.ours() {
-        return true;
-    }
     let terminals = app
         .try_state::<PtyHub>()
         .map(|hub| hub.count())
         .unwrap_or(0);
-    if let Ok(sessions) = daemon::list_sessions() {
-        if !sessions.is_empty() || terminals > 0 {
-            let pending = sessions.iter().map(|session| session.pending_commands).sum();
-            let message = quit_message(sessions.len(), pending, terminals);
-            if !confirm_quit(app, &message) {
+    // The terminal tabs are this app's whoever's daemon it is, and they die
+    // with it. Attached to somebody else's daemon this asked nothing at all,
+    // and a build running in a tab went without a word.
+    let tabs_only = |app: &AppHandle| {
+        terminals == 0 || confirm_quit(app, &terminals_quit_message(terminals))
+    };
+    if !state.ours() {
+        return tabs_only(app);
+    }
+    match daemon::list_sessions() {
+        Ok(sessions) => {
+            if !sessions.is_empty() || terminals > 0 {
+                let pending = sessions.iter().map(|session| session.pending_commands).sum();
+                let message = quit_message(sessions.len(), pending, terminals);
+                if !confirm_quit(app, &message) {
+                    return false;
+                }
+            }
+        }
+        // A daemon that does not answer has nothing to say about sessions;
+        // the tabs are still ours to ask about.
+        Err(_) => {
+            if !tabs_only(app) {
                 return false;
             }
         }

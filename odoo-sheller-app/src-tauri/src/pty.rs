@@ -89,7 +89,12 @@ pub type OnOutput = Arc<dyn Fn(&str, &[u8]) + Send + Sync>;
 pub type OnExit = Arc<dyn Fn(&str) + Send + Sync>;
 
 struct Session {
-    writer: Mutex<Box<dyn Write + Send>>,
+    /// Keystrokes and pastes, in order, for the tab's writer thread. A write
+    /// into a pty blocks once its input queue is full — a large paste into a
+    /// program that is not reading stdin — and `pty_write` runs on the main
+    /// thread while holding the hub's lock: it used to freeze the whole app,
+    /// Quit included. Queued here, the caller never waits.
+    input: mpsc::Sender<Vec<u8>>,
     master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
     child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
 }
@@ -139,13 +144,15 @@ impl PtyHub {
             .master
             .take_writer()
             .map_err(|err| err.to_string())?;
+        let (input, queued) = mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || drain_input(writer, queued));
         let id = format!("t{}", self.next.fetch_add(1, Ordering::Relaxed) + 1);
         {
             let mut sessions = self.sessions.lock().expect("pty lock");
             sessions.insert(
                 id.clone(),
                 Session {
-                    writer: Mutex::new(writer),
+                    input,
                     master: Mutex::new(pair.master),
                     child: Mutex::new(child),
                 },
@@ -214,14 +221,16 @@ impl PtyHub {
         });
     }
 
+    /// Queue input for a tab. Never blocks: the tab's own thread does the
+    /// writing, in the order the input arrived.
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
         let sessions = self.sessions.lock().expect("pty lock");
         let session = sessions.get(id).ok_or_else(|| format!("no terminal {id}"))?;
-        let mut writer = session.writer.lock().expect("pty writer");
-        writer.write_all(data).map_err(|err| err.to_string())?;
-        writer.flush().map_err(|err| err.to_string())?;
 
-        Ok(())
+        session
+            .input
+            .send(data.to_vec())
+            .map_err(|_| format!("terminal {id} is closed"))
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -258,6 +267,16 @@ impl PtyHub {
 
     pub fn count(&self) -> usize {
         self.sessions.lock().expect("pty lock").len()
+    }
+}
+
+/// One tab's writer: everything queued for it, in order, until the tab is
+/// closed (the sender is dropped) or the pty goes away (a write fails).
+fn drain_input(mut writer: Box<dyn Write + Send>, queued: mpsc::Receiver<Vec<u8>>) {
+    for chunk in queued {
+        if writer.write_all(&chunk).and_then(|()| writer.flush()).is_err() {
+            break;
+        }
     }
 }
 
@@ -347,6 +366,48 @@ mod tests {
         assert!(text.contains("pt-pty-marker"), "got: {text:?}");
         hub.close(&id);
         assert_eq!(hub.count(), 0);
+    }
+
+    #[test]
+    fn a_paste_into_a_program_that_is_not_reading_never_blocks_the_caller() {
+        // `pty_write` runs on the main thread. A write that waited on a full
+        // pty input queue froze the whole app, menu and Quit included. In
+        // canonical mode macOS drops what does not fit; in raw mode — vim,
+        // ssh, any full-screen program — the write waits, from the first byte.
+        let hub = PtyHub::default();
+        let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let captured = output.clone();
+        let id = hub
+            .create_with(
+                Path::new("/bin/sh"),
+                &["-c".into(), "stty raw -echo; printf raw-now; sleep 5".into()],
+                PtySize {
+                    rows: 24,
+                    cols: 80,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+                Arc::new(move |_id, bytes| captured.lock().unwrap().extend_from_slice(bytes)),
+                Arc::new(|_| {}),
+            )
+            .expect("spawn sh");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !String::from_utf8_lossy(&output.lock().unwrap()).contains("raw-now") {
+            assert!(Instant::now() < deadline, "the program never went raw");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let paste = vec![b'x'; 512 * 1024];
+        let started = Instant::now();
+        for _ in 0..4 {
+            hub.write(&id, &paste).expect("queued");
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "writing waited {:?} on a program that does not read",
+            started.elapsed()
+        );
+        hub.close(&id);
+        assert!(hub.write(&id, b"x").is_err(), "a closed tab takes no input");
     }
 
     #[test]

@@ -506,3 +506,128 @@ def test_a_transcript_names_an_actor_that_carries_no_label(tmp_path):
     assert "(None)" not in text
     assert "to agent (agent)" in text
     assert "by agent (agent)" in text
+
+
+def test_a_whole_module_run_reads_as_the_module_in_the_transcript(tmp_path):
+    log = journal.Journal(tmp_path / "s.jsonl")
+    log.write("session_open", container="c", database="db", odoo="19.0")
+    log.write("run_test", id=1, module="sale", test_class=None, test_method=None)
+    text = journal.to_markdown(log.records(), journal.session_meta(log.records(), "s"))
+    assert "`sale`" in text
+    assert "sale.None" not in text and "sale." + "`" not in text
+
+
+def test_the_failed_list_survives_into_history(tmp_path):
+    log = journal.Journal(tmp_path / "s.jsonl")
+    log.write("session_open", container="c", database="db", odoo="19.0")
+    log.write("run_test", id=1, module="sale", test_class=None, test_method=None)
+    failed = [{"test": "sale.TestX.test_y", "kind": "failure"}]
+    log.write("result", id=1, error=None, failed=failed,
+              test={"tests_run": 3, "failures": 1, "errors": 0, "skipped": 0, "success": False})
+    entry = journal.feed_from_records(log.records())["entries"][0]
+    assert entry["result"]["failed"] == failed
+
+
+def test_a_failed_commit_is_not_a_commit(tmp_path):
+    """The journal list said "committed" over a transaction that was not."""
+    meta = journal.session_meta([
+        {"ts": "2026-08-18T09:00:00+00:00", "kind": "session_open", "container": "c"},
+        {"ts": "2026-08-18T09:00:01+00:00", "kind": "commit", "id": 1,
+         "error": {"type": "SerializationFailure", "message": "could not serialize"}},
+    ])
+    assert meta["committed"] is False
+    meta = journal.session_meta([
+        {"ts": "2026-08-18T09:00:00+00:00", "kind": "session_open", "container": "c"},
+        {"ts": "2026-08-18T09:00:01+00:00", "kind": "commit", "id": 1, "error": None},
+    ])
+    assert meta["committed"] is True
+
+
+def test_session_meta_streams_in_one_pass():
+    """A listing feeds it a generator so a 100 MB journal is never held whole."""
+    records = iter([
+        {"ts": "2026-08-18T09:00:00+00:00", "kind": "stderr", "line": "boot"},
+        {"ts": "2026-08-18T09:00:01+00:00", "kind": "session_open", "container": "c",
+         "database": "db", "owner": {"kind": "human", "label": "browser"}},
+        {"ts": "2026-08-18T09:00:02+00:00", "kind": "exec", "id": 1},
+        {"ts": "2026-08-18T09:00:03+00:00", "kind": "owner_changed",
+         "to": {"kind": "agent", "label": "claude"}},
+        {"ts": "2026-08-18T09:00:04+00:00", "kind": "run_test", "id": 2},
+        {"ts": "2026-08-18T09:00:10+00:00", "kind": "session_close"},
+    ])
+    meta = journal.session_meta(records, "abc")
+    assert meta["container"] == "c"
+    assert meta["owner"] == {"kind": "agent", "label": "claude"}
+    assert [owner["kind"] for owner in meta["owners_seen"]] == ["human", "agent"]
+    assert meta["commands"] == 2
+    assert meta["duration"] == 10.0
+    assert meta["ended_as"] == "session_close"
+
+
+def test_a_cut_last_line_is_passed_over(tmp_path):
+    path = tmp_path / "s.jsonl"
+    log = journal.Journal(path)
+    log.write("exec", id=1, code="a")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write('{"ts": "2026-08-18T09:00:00+00:00", "kind": "res')
+    assert [record["kind"] for record in log.records()] == ["exec"]
+
+
+def test_the_first_record_of_a_kind_reads_only_the_head(tmp_path):
+    log = journal.Journal(tmp_path / "s.jsonl")
+    log.write("stderr", line="boot")
+    log.write("session_open", container="c", database="db")
+    log.write("exec", id=1, code="a")
+    assert log.first("session_open")["container"] == "c"
+    assert log.first("commit") is None
+
+
+def test_the_listing_rereads_only_what_changed(tmp_path, monkeypatch):
+    """Every file was parsed on every listing: seconds, on a machine with a
+    few thousand of them. A journal only ever grows, so an unchanged size and
+    mtime is an unchanged summary."""
+    stamp = datetime(2026, 8, 15, 14, 30, 5, tzinfo=UTC)
+    quiet = journal.Journal(journal.journal_path(tmp_path, "aaa111", "c", "db", stamp))
+    quiet.write("session_open", container="c", database="db")
+    live = journal.Journal(journal.journal_path(tmp_path, "bbb222", "c", "db", stamp))
+    live.write("session_open", container="c", database="db")
+    assert len(journal.list_journals(tmp_path)) == 2
+
+    read = []
+    original = journal.Journal.iter_records
+
+    def tracking(self):
+        read.append(self.path.name)
+
+        return original(self)
+
+    monkeypatch.setattr(journal.Journal, "iter_records", tracking)
+    live.write("exec", id=1, code="a")
+    entries = {entry["session_id"]: entry for entry in journal.list_journals(tmp_path)}
+    assert read == [live.path.name]
+    assert entries["bbb222"]["commands"] == 1
+    assert entries["aaa111"]["commands"] == 0
+
+
+def test_a_deleted_journal_leaves_the_listing(tmp_path):
+    stamp = datetime(2026, 8, 15, 14, 30, 5, tzinfo=UTC)
+    log = journal.Journal(journal.journal_path(tmp_path, "aaa111", "c", "db", stamp))
+    log.write("session_open", container="c", database="db")
+    assert len(journal.list_journals(tmp_path)) == 1
+    journal.delete_journal(tmp_path, "aaa111")
+    assert journal.list_journals(tmp_path) == []
+
+
+def test_markdown_keeps_an_error_that_has_no_traceback():
+    """A timeout, a refused test runner, a frame too large: the message is the
+    whole story, and the transcript kept only an empty code block."""
+    text = journal.to_markdown([
+        {"ts": "t", "kind": "run_test", "id": 1, "module": "sale"},
+        {"ts": "t", "kind": "result", "id": 1, "duration": 0.1, "error": {
+            "type": "TestRunnerRefused",
+            "message": "the container's Odoo config must have workers=0",
+            "traceback": "",
+        }},
+    ])
+    assert "**TestRunnerRefused**: the container's Odoo config must have workers=0" in text
+    assert "```\n\n```" not in text

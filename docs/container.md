@@ -86,7 +86,7 @@ no session on its own, so `healthy` means ready.
 ```json
 {
   "ok": true,
-  "version": "1.8.2",
+  "version": "1.8.3",
   "container": true,
   "mcp": {
     "command": "docker",
@@ -184,7 +184,18 @@ like isolation and provides none of it in this direction.
 Journals are unmasked, as everywhere else, and arrive in the host's
 `~/.odoo-sheller` through the bind mount. Review one before sharing it.
 
+The admin key stays out of `docker logs`: with no terminal on stdout the
+daemon prints where the key is kept, not the key. Read it on the host, from
+the same bind mount — `cat ~/.odoo-sheller/admin.key`.
+
 The full model is [security.md](security.md).
+
+## What it cannot reach
+
+**odoo.sh builds.** The image has no `ssh` client and none of your keys, so a
+containerized daemon cannot open a session on a build: the probe answers that
+`ssh` is not installed where the daemon runs, and nothing is spawned. Open
+those from a natively installed daemon, or the desktop app.
 
 ## Reaching it with an agent
 

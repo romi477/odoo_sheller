@@ -43,7 +43,14 @@ def daemon_url() -> str:
 
 DAEMON_URL = daemon_url()
 AGENT_LABEL = "mcp-agent"
-EXEC_TIMEOUT = 30.0  # MCP clients give up long before the API's five minutes
+# How long a call waits for the daemon to answer. MCP hosts cut a tool call off
+# at around a minute. This is our patience only: the daemon's own ceiling for
+# a command stays five minutes, and a command that outlasts this wait keeps
+# running — see `os_exec`.
+CALL_WAIT = 40.0
+# os_run_test's ceiling when none is passed, by what the spec names: one test
+# is usually seconds, a class minutes, a module tens of minutes.
+DEFAULT_TEST_TIMEOUTS = {"method": 30.0, "class": 300.0, "module": 1800.0}
 # `Session.start` waits this long for the bootstrap's hello. Giving up on the
 # open call any earlier strands a session the daemon then goes on to register,
 # whose write key was only ever in the response we stopped waiting for.
@@ -73,6 +80,9 @@ MAX_SOURCE = 8000
 # path that leads nowhere.
 MAX_LISTING = 400
 MAX_RESULT = 2000
+# A transcript page. A module run's journal is near a megabyte and the largest
+# reach a hundred; a whole one in an answer is context nothing else can use.
+MAX_JOURNAL = 20000
 
 INSTRUCTIONS = """\
 odoo-sheller runs Python in a live Odoo shell. `env` and `self` are Odoo's
@@ -93,7 +103,7 @@ os_help(topic), one cheap call:
   records        reading a record whole
   modules        installing, upgrading, migrations
   jobs           with_delay, run inline
-  tests          running one, reading the outcome
+  tests          a test, a class or a whole module
   watching       the human watches
 
 Read the topic before working around something. These rules survive
@@ -128,8 +138,14 @@ you to run code there. This server keeps your keys; you never pass them again.
 
 One command runs at a time in a session. A second one is refused with
 `session_busy` rather than queued — wait for the first to finish, or stop it with
-os_interrupt. A command that exceeds the 30-second ceiling keeps the session busy
-until it really ends: it is still holding the container.
+os_interrupt.
+
+os_exec waits about 40 seconds for an answer, because the host cuts a call off
+not long after. A command still running then comes back as
+`request_timed_out`, and it has not been stopped: it runs on, and the session
+stays busy, until it ends or the daemon interrupts it at five minutes. Do not
+run it again. os_history says when it finished and what it returned;
+os_interrupt stops it now.
 
 If a session is gone (`session_gone`), its process, namespace and variables died
 with it. Nothing is restored by reopening. The refusal carries the target and a
@@ -412,13 +428,19 @@ characters.
 If `stderr_lines` was non-zero and you decide afterwards that you need the
 lines, do **not** run the command again — it may have written to the
 database, and a second run is a second write. Read them from the journal:
-`os_journal(session_id, fmt="json")` has every line, interleaved with the
-commands by time, including whatever a response clipped and including a
-traceback Odoo logged rather than raised. Never install a logging handler of
-your own to capture the log; it is collected for you either way.
+`os_journal(session_id)` has every line, interleaved with the commands by
+time, including whatever a response clipped and including a traceback Odoo
+logged rather than raised. `fmt="jsonl"` gives the raw records instead of
+the transcript. A long journal comes back a page at a time — the end of it
+by default, any other stretch with `first=` and `last=` (1-based line
+numbers, as in os_source) — and says how many lines it has in all. Never
+install a logging handler of your own to capture the log; it is collected
+for you either way.
 
-`os_run_test` returns its `stderr` without being asked, because with a test
-run the log *is* the answer — which test failed and why.
+`os_run_test` on a class or a method returns its `stderr` without being
+asked, because there the log *is* the answer — which test failed and why. A
+whole module answers with `stderr_lines` instead and leaves its log in the
+journal: os_help('tests').
 """,
     "records": """\
 ## Reading a record
@@ -500,18 +522,38 @@ A recordset you already hold still has the old context: call
     "tests": """\
 ## Running a test
 
-os_run_test runs one Odoo test method or a whole test class:
-`module.TestClass` or `module.TestClass.test_method`. Unlike os_exec, it always
+os_run_test takes three forms:
+
+- `module` — every standard test in that module, at_install and
+  post_install, the set `--test-tags /module` runs. Tests tagged `-standard`
+  or `external` are left out: name their class to run one of those.
+- `module.TestClass` — one class.
+- `module.TestClass.test_method` — one method.
+
+Every answer carries `failed`: one entry per failing test, `{"test": spec,
+"kind": "failure" | "error"}`, where `test` is ready to pass straight back to
+os_run_test. A failed subtest is listed as its method, a class whose
+setUpClass failed as the class, and a test file whose setUpModule failed as
+the whole module — no tag can name a file. To find out why one failed, run
+that spec on its own: a class or a method answers with its log tail in
+`stderr`.
+
+A whole module answers with counts and `failed` only. Its log is thousands
+of lines, so it comes back as `stderr_lines`, a count, and stays in the
+journal — os_journal(session_id) has every line if you really need it. Do
+not rerun a module to see its log; rerun the failed specs.
+
+Unlike os_exec, it always
 opens its own brand-new session first — it never reuses a session you already
 have — so there is nothing of yours it can discard. That session closes itself
 the moment the run settles: do not call os_close_session on it, and do not
-count it against yourself in os_list_sessions. Run several classes by calling
-os_run_test once per class, in turn.
+count it against yourself in os_list_sessions. To run everything a module
+has, pass the module rather than calling os_run_test once per class.
 
 When the class name is unknown, call os_list_tests(module) rather than inventing
-names. Prefer running module.TestClass (one class, one os_run_test, one close).
-Do not open a session per method unless a single method is the point. Do not
-fire the whole list as parallel os_run_test calls.
+names. Do not open a session per method unless a single method is the point.
+Do not fire a list of classes as parallel os_run_test calls: one module run
+covers them in one session.
 
 Odoo's own test runner rolls back whatever transaction a session's cursor is
 holding before it runs tests. This only matters if you call os_run_test's
@@ -519,10 +561,12 @@ underlying session a second time after using os_exec in it — the response's
 `discarded_pending` field says whether that happened, so watch it rather than
 assume nothing was lost.
 
-The default timeout is short (30s) because a single test usually is. Pass a
-larger `timeout` yourself when you deliberately run a whole class, which can
-take minutes — pad your estimate: Odoo's own test framework can add up to 10
-extra seconds per test class if one leaves a subprocess running.
+Without a `timeout`, the ceiling follows the spec: 30 seconds for a method,
+300 for a class, 1800 for a module. Pass one only to go past that — the most
+is 3600 — and pad your estimate: Odoo's own test framework can add up to 10
+extra seconds per test class if one leaves a subprocess running. It is the
+ceiling for the run, not for the call: a run that is still going when the
+call has to answer comes back as `status: "running"`, below.
 
 A run longer than about a minute cannot be answered in one call: the host
 cuts a tool call off well before that, whatever timeout you passed. So
@@ -623,7 +667,7 @@ async def _call(
         headers["X-OS-Session-Key"] = _keys[session_id]
     try:
         async with httpx.AsyncClient(
-            base_url=DAEMON_URL, timeout=client_timeout or (EXEC_TIMEOUT + 10)
+            base_url=DAEMON_URL, timeout=client_timeout or CALL_WAIT
         ) as client:
             response = await client.request(method, path, headers=headers, **kwargs)
     except httpx.TimeoutException:
@@ -769,6 +813,27 @@ async def os_attach_session(session_id: str, write_key: str) -> Any:
     if described.get("error"):
         _keys.pop(session_id, None)
 
+        return described
+    # The daemon says what the key is worth here. A wrong one used to attach
+    # without complaint and fail on the first command instead.
+    status = described.pop("key_status", "owner")
+    if status != "owner":
+        _keys.pop(session_id, None)
+
+        return {
+            "error": "not_owner",
+            "session_id": session_id,
+            "key_status": status,
+            "owner": described.get("owner"),
+            "recovery": (
+                "that key no longer types here — ownership moved since it was "
+                "issued; ask the human for the current one"
+                if status == "former_owner" else
+                "that key does not open this session; ask the human to hand it "
+                "over again — a key is shown once, at the handover"
+            ),
+        }
+
     return described
 
 
@@ -792,6 +857,19 @@ async def os_exec(
 
         return target
     result = await _call("POST", f"/api/sessions/{target}/exec", target, json={"code": code})
+    if result.get("error") == "request_timed_out":
+        # Our wait ran out, not the command: it runs on in the container.
+
+        return {
+            **result,
+            "session_id": target,
+            "recovery": (
+                "the command is still running and the session stays busy until "
+                "it ends, or until the daemon interrupts it at five minutes; do "
+                "not run it again — os_history shows when it finished and what "
+                "it returned, os_interrupt stops it now"
+            ),
+        }
     if result.get("error") and "stdout" not in result:
 
         return result
@@ -886,7 +964,13 @@ async def os_source(
         return target
 
     code = _source_snippet(path, model, method, first, last, module)
-    result = await _call("POST", f"/api/sessions/{target}/exec", target, json={"code": code})
+    # A read: journalled like any command, but not counted as work in the
+    # transaction — or a handover would warn about it, and a test run report
+    # it as discarded.
+    result = await _call(
+        "POST", f"/api/sessions/{target}/exec", target,
+        json={"code": code, "read_only": True},
+    )
     if result.get("error") and "stdout" not in result:
 
         return result
@@ -1125,6 +1209,19 @@ async def os_list_tests(module: str, container: str | None = None) -> Any:
         if described.get("error"):
 
             return described
+        if described.get("kind") == "odoosh":
+            # The catalogue is read from a local container's disk; a build id
+            # in that slot would go to `docker exec` and fail obscurely.
+
+            return {
+                "error": "not_a_container",
+                "session_id": session_id,
+                "recovery": (
+                    "os_list_tests reads a local container's files; on a remote "
+                    f"build, list the module's tests with os_source(path='{module}/tests') "
+                    "and read the file that holds the class"
+                ),
+            }
         target = described["container"]
 
     return await _call(
@@ -1134,33 +1231,39 @@ async def os_list_tests(module: str, container: str | None = None) -> Any:
     )
 
 
-@mcp.tool(
-    description=(
-        "Run one Odoo test method or a whole test class by name: "
-        "'module.TestClass' or 'module.TestClass.test_method'. Always opens its "
-        "own brand-new session (owner agent, allow_commit false) rather than "
-        "reusing one you already have, so there is never anything pending to "
-        "lose, and that session closes itself once the run settles — there is "
-        "nothing to clean up. Pass session_id instead to run in a session a "
-        "human handed you — the only way onto a remote instance — and then it "
-        "is theirs, closed neither by you nor by itself. "
-        "stdout and the Odoo log lines produced during "
-        "the run come back separated. A run too long to answer in one call "
-        "comes back as {\"status\": \"running\", \"session_id\": ...}, which is "
-        "not a failure: call os_test_result(session_id) to wait for it, and "
-        "never call this tool again for the same run. The default timeout is "
-        "short (a single test is usually fast) — pass a larger one for a whole "
-        "class; it is the ceiling for the run itself, not for this call."
-    ),
+RUN_TEST_DESCRIPTION = (
+    "Run Odoo tests by name: 'module' for every standard test in that module, "
+    "'module.TestClass' for one class, 'module.TestClass.test_method' for one "
+    "method. A whole module answers with counts and `failed` — each failure as "
+    "a spec to pass back here — and leaves its log in the journal; a class or "
+    "a method also returns its log. Always opens its "
+    "own brand-new session (owner agent, allow_commit false) rather than "
+    "reusing one you already have, so there is never anything pending to "
+    "lose, and that session closes itself once the run settles — there is "
+    "nothing to clean up. Pass session_id instead to run in a session a "
+    "human handed you — the only way onto a remote instance — and then it "
+    "is theirs, closed neither by you nor by itself. "
+    "A run too long to answer in one call "
+    "comes back as {\"status\": \"running\", \"session_id\": ...}, which is "
+    "not a failure: call os_test_result(session_id) to wait for it, and "
+    "never call this tool again for the same run. Without a timeout the "
+    "ceiling follows the spec — 30s for a method, 300s for a class, 1800s "
+    "for a module, at most 3600 — and it is the ceiling for the run itself, "
+    "not for this call."
 )
+
+
+@mcp.tool(description=RUN_TEST_DESCRIPTION)
 async def os_run_test(
     test: str,
     container: str | None = None,
     database: str | None = None,
     odoo_bin: str | None = None,
-    timeout: float = 30.0,
+    timeout: float | None = None,
     session_id: str | None = None,
 ) -> Any:
+    if timeout is None:
+        timeout = DEFAULT_TEST_TIMEOUTS[_spec_form(test)]
     if session_id and (container or database or odoo_bin):
         # One says where to run, the other says where to open, and the two can
         # name different places. Refuse rather than silently pick.
@@ -1239,6 +1342,12 @@ async def os_run_test(
     return await _run_test_in(session_id, test, timeout, deadline, ours=True)
 
 
+def _spec_form(test: str) -> str:
+    """What a test spec names: a module, a class in it, or one method."""
+
+    return ("module", "class", "method")[min(test.count("."), 2)]
+
+
 async def _run_test_in(
     session_id: str, test: str, timeout: float, deadline: float, ours: bool
 ) -> Any:
@@ -1261,6 +1370,13 @@ async def _run_test_in(
         json={"test": test, "timeout": timeout},
     )
     if result.get("error") == "request_timed_out":
+        afterwards = (
+            "that session closes itself when the run ends, so there is "
+            "nothing to clean up"
+            if ours else
+            "that session is the human's: it stays open after the run, and "
+            "you do not close it"
+        )
 
         return {
             "status": "running",
@@ -1268,8 +1384,7 @@ async def _run_test_in(
             "test": test,
             "recovery": (
                 "the run is still going in the container — call "
-                f'os_test_result("{session_id}") to wait for it; that session '
-                "closes itself when the run ends, so there is nothing to clean up"
+                f'os_test_result("{session_id}") to wait for it; {afterwards}'
             ),
         }
     if result.get("error") and "stdout" not in result:
@@ -1278,7 +1393,7 @@ async def _run_test_in(
 
     test_info = result.get("test") or {}
     stdout, stdout_clipped = _clip(result.get("stdout"), MAX_STDOUT)
-    stderr, stderr_clipped = _clip_tail("\n".join(result.get("stderr") or []), MAX_STDOUT)
+    log, stderr_clipped = _test_log(test, result)
     truncated = stdout_clipped or stderr_clipped
 
     return {
@@ -1288,8 +1403,9 @@ async def _run_test_in(
         "errors": test_info.get("errors"),
         "skipped": test_info.get("skipped"),
         "success": test_info.get("success"),
+        "failed": result.get("failed", []),
         "stdout": stdout,
-        "stderr": stderr,
+        **log,
         "error": result.get("error"),
         "duration": result.get("duration"),
         "discarded_pending": result.get("discarded_pending"),
@@ -1297,8 +1413,30 @@ async def _run_test_in(
         # ceiling, and this server clipping characters to spare your context.
         "stderr_truncated": bool(result.get("stderr_truncated")),
         "truncated": truncated,
-        "journal": f"/api/journals/{session_id}" if truncated else None,
+        "journal": (
+            f"/api/journals/{session_id}"
+            if truncated or "stderr_lines" in log else None
+        ),
     }
+
+
+def _test_log(test: str, result: dict) -> tuple[dict, bool]:
+    """The log of a run as an agent should get it, and whether it was clipped.
+
+    For a class or a method the log is the answer — which test failed and
+    why — so its tail comes back. A whole module logs thousands of lines that
+    `failed` already distils, so it comes back as a count and stays in the
+    journal; os_journal has every line.
+    """
+    lines = result.get("stderr") or []
+    if "." not in test:
+
+        return {"stderr_lines": len(lines)}, False
+    # The tail: on a long run the last line is the summary, and clipping from
+    # the front would drop it.
+    stderr, clipped = _clip_tail("\n".join(lines), MAX_STDOUT)
+
+    return {"stderr": stderr}, clipped
 
 
 @mcp.tool(
@@ -1482,13 +1620,14 @@ def _history_run_test_entry(entry: dict) -> dict:
     """
     result = entry.get("result") or {}
     test = result.get("test") or {}
-    spec = f"{entry.get('module')}.{entry.get('test_class')}"
-    if entry.get("test_method"):
-        spec += f".{entry['test_method']}"
+    spec = ".".join(
+        part for part in (entry.get("module"), entry.get("test_class"), entry.get("test_method"))
+        if part
+    )
     stdout, out_clipped = _clip(result.get("stdout"), MAX_STDOUT)
-    # The same tail rule os_run_test uses: on a long run the last line is the
-    # summary, and clipping from the front would drop it.
-    stderr, stderr_clipped = _clip_tail("\n".join(result.get("stderr") or []), MAX_STDOUT)
+    # The same rule os_run_test answers by, so a run recovered later reads
+    # the same as one answered at once.
+    log, stderr_clipped = _test_log(spec, result)
     shaped = {
         "n": entry.get("ordinal"),
         "test": spec,
@@ -1498,8 +1637,10 @@ def _history_run_test_entry(entry: dict) -> dict:
         "errors": test.get("errors"),
         "skipped": test.get("skipped"),
         "success": test.get("success"),
+        "failed": result.get("failed"),
         "stdout": stdout or None,
-        "stderr": stderr or None,
+        "stderr": log.get("stderr") or None,
+        "stderr_lines": log.get("stderr_lines"),
         # Whole lines the daemon dropped, as opposed to the characters clipped
         # just above. Absent from journals written before it existed.
         "stderr_truncated": result.get("stderr_truncated"),
@@ -1583,12 +1724,78 @@ async def os_history(session_id: str, limit: int = 20) -> Any:
 
 
 @mcp.tool(
-    description="The full transcript of a session, live or long finished.",
+    description=(
+        "The transcript of a session, live or long finished — every command, "
+        "result and line Odoo logged, in order. fmt='markdown' (default) or "
+        "'jsonl' for the raw records. A long one comes back a page at a time: "
+        "the end by default, any other stretch with first= and last= (1-based "
+        "line numbers, inclusive), with total_lines to say how much there is."
+    ),
     annotations=ToolAnnotations(read_only_hint=True),
 )
-async def os_journal(session_id: str, fmt: str = "markdown") -> Any:
+async def os_journal(
+    session_id: str,
+    fmt: str = "markdown",
+    first: int | None = None,
+    last: int | None = None,
+) -> Any:
+    exported = await _call("GET", f"/api/journals/{session_id}", params={"fmt": fmt})
+    if "text" not in exported:
 
-    return await _call("GET", f"/api/journals/{session_id}", params={"fmt": fmt})
+        return exported
+
+    return _journal_page(session_id, fmt, exported["text"], first, last)
+
+
+def _journal_page(
+    session_id: str, fmt: str, text: str, first: int | None, last: int | None
+) -> dict:
+    """One stretch of a transcript, within `MAX_JOURNAL` characters.
+
+    The whole of it when it fits. Otherwise the end, which is where a run
+    says how it went — or the range asked for, cut short where the budget
+    runs out. A single line longer than the budget (a record carrying a
+    megabyte of stdout) is clipped rather than refused.
+    """
+    lines = text.splitlines()
+    total = len(lines)
+    if first is None and last is None:
+        if len(text) <= MAX_JOURNAL:
+            start, stop = 0, total
+        else:
+            start, stop, size = total, total, 0
+            while start > 0 and size + len(lines[start - 1]) + 1 <= MAX_JOURNAL:
+                start -= 1
+                size += len(lines[start]) + 1
+            start = min(start, max(total - 1, 0))
+    else:
+        start = max((first or 1) - 1, 0)
+        wanted = min(last or total, total)
+        stop, size = start, 0
+        while stop < wanted and size + len(lines[stop]) + 1 <= MAX_JOURNAL:
+            size += len(lines[stop]) + 1
+            stop += 1
+        stop = max(stop, min(start + 1, wanted))
+    page = "\n".join(lines[start:stop])
+    clipped = len(page) > MAX_JOURNAL
+    if clipped:
+        page = page[:MAX_JOURNAL] if first is not None or last is not None else page[-MAX_JOURNAL:]
+    answer = {
+        "session_id": session_id,
+        "fmt": fmt,
+        "total_lines": total,
+        "first": start + 1 if stop > start else None,
+        "last": stop if stop > start else None,
+        "text": page,
+        "truncated": clipped or start > 0 or stop < total,
+    }
+    if answer["truncated"]:
+        answer["recovery"] = (
+            f"{total} lines in all; pass first= and last= (1-based, inclusive) "
+            "to read another stretch"
+        )
+
+    return answer
 
 
 def main() -> None:

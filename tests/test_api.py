@@ -33,6 +33,7 @@ class FakeSession:
         self.former_keys = set()
         self.owner = {"kind": "human", "label": "browser"}
         self.allow_commit = True
+        self.key_kinds = {OWNER_KEY: "human"}
 
     def describe(self):
 
@@ -53,11 +54,23 @@ class FakeSession:
 
         return bool(key) and (key == self.write_key or key in self.former_keys)
 
+    def held_by_human(self, key):
+
+        return self.held_by(key) and self.key_kinds.get(key) == "human"
+
+    def key_status(self, key):
+        if key and key == self.write_key:
+
+            return "owner"
+
+        return "former_owner" if key in self.former_keys else "invalid"
+
     def transfer_owner(self, owner):
         self.calls.append(("transfer_owner", owner))
         self.former_keys.add(self.write_key)
         self.owner = dict(owner)
-        self.write_key = "rotated-key"
+        self.write_key = "rotated-key" if len(self.former_keys) == 1 else f"rotated-key-{len(self.former_keys)}"
+        self.key_kinds[self.write_key] = self.owner.get("kind")
         self.allow_commit = self.owner.get("kind") == "human"
 
         return self.write_key
@@ -70,8 +83,8 @@ class FakeSession:
 
         return ["WARNING something"]
 
-    async def execute(self, code, timeout=300.0):
-        self.calls.append(("execute", code))
+    async def execute(self, code, timeout=300.0, read_only=False):
+        self.calls.append(("execute", code, read_only) if read_only else ("execute", code))
         if self.raises:
             raise self.raises
 
@@ -209,6 +222,18 @@ def test_health_survives_a_build_without_metadata(monkeypatch):
         response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["version"] == "unknown"
+
+
+def test_health_reports_the_version_it_started_as(monkeypatch):
+    """An editable install reads its version from metadata on every call, so a
+    daemon left running across a bump claimed the new number on code it never
+    loaded. It said 1.8.3 while refusing a request 1.8.2 accepts."""
+    monkeypatch.setattr("odoo_sheller.api.version", lambda _name: "1.0.0")
+    app = create_app(registry=Registry(admin_key=ADMIN_KEY))
+    monkeypatch.setattr("odoo_sheller.api.version", lambda _name: "9.9.9")
+    with TestClient(app) as client:
+        response = client.get("/health")
+    assert response.json()["version"] == "1.0.0"
 
 
 def test_shutdown_closes_live_sessions(client):
@@ -1189,3 +1214,197 @@ def test_opening_a_session_without_a_label_is_named_the_same_way(client):
     )
     assert response.status_code == 200, response.text
     assert client.registry.open_kwargs["owner"] == {"kind": "agent", "label": "agent"}
+
+
+def test_run_test_takes_a_bare_module_for_the_whole_module(client):
+    response = client.post("/api/sessions/s1/run_test", json={"test": "integration_prestashop"})
+    assert response.status_code == 200
+    assert client.registry.session.calls[-1] == ("run_test", "integration_prestashop", None, None)
+
+
+def test_a_malformed_spec_names_all_three_forms(client):
+    response = client.post("/api/sessions/s1/run_test", json={"test": "sale."})
+    assert response.status_code == 400
+    recovery = response.json()["detail"]["recovery"]
+    assert "'module'" in recovery
+    assert "'module.TestClass'" in recovery
+    assert "'module.TestClass.test_method'" in recovery
+
+
+# --- a grant is a human's act ---------------------------------------------
+
+
+def _handed_to_an_agent(client):
+    """The fake session after a human handed it over: the agent holds the
+    current key, the browser still holds its own as a former one."""
+    session = client.registry.session
+    agent_key = session.transfer_owner({"kind": "agent", "label": "claude"})
+    session.allow_commit = False
+
+    return session, agent_key
+
+
+def test_an_agent_cannot_grant_itself_commit_with_its_own_key(client):
+    """Its key opens the session, which `held_by` accepted as authority enough
+    to decide whether the session may write — the very gate it is behind."""
+    session, agent_key = _handed_to_an_agent(client)
+    response = client.post(
+        "/api/sessions/s1/policy",
+        json={"allow_commit": True},
+        headers={"X-OS-Session-Key": agent_key},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "needs_a_human"
+    assert ("set_allow_commit", True) not in session.calls
+
+
+def test_an_agent_may_still_give_up_a_right_it_holds(client):
+    session, agent_key = _handed_to_an_agent(client)
+    response = client.post(
+        "/api/sessions/s1/policy",
+        json={"allow_commit": False},
+        headers={"X-OS-Session-Key": agent_key},
+    )
+    assert response.status_code == 200
+    assert ("set_allow_commit", False) in session.calls
+
+
+def test_the_human_who_handed_it_over_still_grants(client):
+    session, _agent_key = _handed_to_an_agent(client)
+    response = client.post(
+        "/api/sessions/s1/policy",
+        json={"allow_commit": True},
+        headers={"X-OS-Session-Key": OWNER_KEY},
+    )
+    assert response.status_code == 200
+    assert ("set_allow_commit", True) in session.calls
+
+
+def test_the_admin_grants_whoever_holds_the_session(client):
+    _session, agent_key = _handed_to_an_agent(client)
+    response = client.post(
+        "/api/sessions/s1/policy",
+        json={"allow_commit": True},
+        headers={"X-OS-Session-Key": agent_key, "X-OS-Admin-Key": ADMIN_KEY},
+    )
+    assert response.status_code == 200
+
+
+def test_an_agent_cannot_hand_its_session_to_a_human(client):
+    """The key that comes back types as a human, and a local human commits
+    without asking anyone: the round trip was a grant by another name."""
+    session, agent_key = _handed_to_an_agent(client)
+    response = client.post(
+        "/api/sessions/s1/owner",
+        json={"owner": {"kind": "human", "label": "browser"}},
+        headers={"X-OS-Session-Key": agent_key},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "needs_a_human"
+    assert session.owner["kind"] == "agent"
+
+
+def test_an_agent_may_hand_its_session_to_another_agent(client):
+    _session, agent_key = _handed_to_an_agent(client)
+    response = client.post(
+        "/api/sessions/s1/owner",
+        json={"owner": {"kind": "agent", "label": "reviewer"}},
+        headers={"X-OS-Session-Key": agent_key},
+    )
+    assert response.status_code == 200
+
+
+def test_an_agent_session_cannot_open_with_commit_already_granted(client):
+    response = client.post(
+        "/api/sessions",
+        json={"container": "c", "database": "db", "owner": {"kind": "agent"},
+              "allow_commit": True},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "needs_a_human"
+    assert not hasattr(client.registry, "open_kwargs"), "nothing may be opened"
+
+    allowed = client.post(
+        "/api/sessions",
+        json={"container": "c", "database": "db", "owner": {"kind": "agent"},
+              "allow_commit": True},
+        headers={"X-OS-Admin-Key": ADMIN_KEY},
+    )
+    assert allowed.status_code == 200
+
+
+def test_a_presented_key_is_told_what_it_is_worth(client):
+    """An agent handed a key checks it once, instead of learning from its
+    first command that it was given the wrong one."""
+    _session, agent_key = _handed_to_an_agent(client)
+    for key, status in ((agent_key, "owner"), (OWNER_KEY, "former_owner"),
+                        ("a-key-from-nowhere", "invalid")):
+        response = client.get("/api/sessions/s1", headers={"X-OS-Session-Key": key})
+        assert response.json()["key_status"] == status, key
+    plain = client.get("/api/sessions/s1", headers={"X-OS-Session-Key": ""})
+    assert "key_status" not in plain.json()
+
+
+def test_a_read_only_exec_says_so_to_the_session(client):
+    client.post("/api/sessions/s1/exec", json={"code": "1", "read_only": True})
+    assert client.registry.session.calls[-1] == ("execute", "1", True)
+    client.post("/api/sessions/s1/exec", json={"code": "2"})
+    assert client.registry.session.calls[-1] == ("execute", "2")
+
+
+def test_a_session_that_never_started_says_why(client):
+    async def dies(**kwargs):
+        raise SessionDead('process ended before the session started: database "nope" does not exist')
+
+    client.registry.open = dies
+    response = client.post("/api/sessions", json={"container": "c", "database": "nope"})
+    assert response.status_code == 410
+    detail = response.json()["detail"]
+    assert detail["error"] == "session_did_not_start"
+    assert 'database "nope" does not exist' in detail["message"]
+    assert detail["recovery"]
+
+
+# --- journals cost one file, and survive a broken one ------------------------
+
+
+def _truncate_last_line(path):
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text + '{"ts": "2026-08-18T09:05:00+00:00", "kind": "res', encoding="utf-8")
+
+
+def test_a_cut_line_does_not_take_the_journals_down_with_it(tmp_path):
+    """A daemon killed mid-write leaves half a line. That used to answer 500
+    for the whole list, every closed session's history and every export."""
+    _journal_with_records(tmp_path, session_id="abc123")
+    broken = _journal_with_records(tmp_path, session_id="def456")
+    _truncate_last_line(broken)
+    with TestClient(create_app(registry=Registry(journal_root=tmp_path))) as client:
+        listing = client.get("/api/journals")
+        assert listing.status_code == 200
+        assert {entry["session_id"] for entry in listing.json()} == {"abc123", "def456"}
+        history = client.get("/api/sessions/def456/history")
+        assert history.status_code == 200
+        assert history.json()["history"] == ["env['res.partner'].search_count([])"]
+        for fmt in ("markdown", "jsonl"):
+            assert client.get("/api/journals/def456", params={"fmt": fmt}).status_code == 200
+
+
+def test_a_closed_session_is_found_without_reading_the_others(tmp_path, monkeypatch):
+    """Two thousand journals were parsed to answer for one; the filename
+    already says which file it is."""
+    _journal_with_records(tmp_path, session_id="abc123")
+    _journal_with_records(tmp_path, session_id="def456")
+    opened = []
+    original = journal.Journal.iter_records
+
+    def tracking(self):
+        opened.append(self.path.name)
+
+        return original(self)
+
+    monkeypatch.setattr(journal.Journal, "iter_records", tracking)
+    with TestClient(create_app(registry=Registry(journal_root=tmp_path))) as client:
+        assert client.get("/api/sessions/def456/history").status_code == 200
+        assert client.get("/api/journals/def456", params={"fmt": "markdown"}).status_code == 200
+    assert opened and all("def456" in name for name in opened), opened

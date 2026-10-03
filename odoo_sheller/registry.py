@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import os
 import secrets
 import uuid
 from datetime import UTC, datetime
@@ -11,8 +12,8 @@ from odoo_sheller.discovery import probe, probe_odoosh
 from odoo_sheller.journal import (
     JOURNAL_ROOT,
     Journal,
+    find_journal,
     journal_path,
-    list_journals,
     target_from_records,
 )
 from odoo_sheller.session import Session
@@ -27,6 +28,11 @@ from odoo_sheller.transport import (
 
 ADMIN_KEY_PATH = JOURNAL_ROOT.parent / "admin.key"
 
+# How far a socket may fall behind before it is cut off. A tab that stopped
+# reading would otherwise keep every stderr line of every test run in memory
+# for as long as it stayed connected. A closed socket reconnects and resyncs.
+EVENT_BACKLOG = 10_000
+
 
 def load_admin_key(path: Path = ADMIN_KEY_PATH) -> str:
     """Read the admin key, creating it on first run.
@@ -40,10 +46,29 @@ def load_admin_key(path: Path = ADMIN_KEY_PATH) -> str:
         return path.read_text(encoding="utf-8").strip()
     path.parent.mkdir(parents=True, exist_ok=True)
     key = secrets.token_urlsafe(24)
-    path.write_text(key + "\n", encoding="utf-8")
-    path.chmod(0o600)
+    # Created with its final mode. Writing first and narrowing it after left
+    # the key in a file anyone on the machine could read until the chmod.
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        # Another daemon started in the same instant; its key is the one.
+
+        return path.read_text(encoding="utf-8").strip()
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(key + "\n")
 
     return key
+
+
+def _hang_up(queue: asyncio.Queue) -> None:
+    """Tell a socket's reader it has heard the last event.
+
+    `None` is the signal. Whatever it had not read yet is dropped first: the
+    queue may be full, which is one of the two reasons to hang up.
+    """
+    while not queue.empty():
+        queue.get_nowait()
+    queue.put_nowait(None)
 
 
 class Registry:
@@ -56,24 +81,31 @@ class Registry:
         self.watchers: list[asyncio.Queue] = []
         self.journal_root = journal_root
         self.admin_key = admin_key or secrets.token_urlsafe(24)
+        # Tasks started from a callback. The loop holds them only weakly, and
+        # a task nobody references can be collected before it has finished.
+        self._tasks: set[asyncio.Task] = set()
 
     def journal_file_for(self, session_id: str) -> Journal | None:
-        """The on-disk journal for an id, whether or not a live session holds it."""
-        for entry in list_journals(self.journal_root):
-            if entry["session_id"] == session_id:
+        """The on-disk journal for an id, whether or not a live session holds it.
 
-                return Journal(Path(entry["path"]))
+        Found by filename: summarising every journal to find one cost seconds
+        per call on a machine that has kept a few thousand of them.
+        """
+        path = find_journal(self.journal_root, session_id)
 
-        return None
+        return Journal(path) if path is not None else None
 
     def target_of_past_session(self, session_id: str) -> dict | None:
-        """Where a session that is no longer registered used to run."""
+        """Where a session that is no longer registered used to run.
+
+        `session_open` is in the head of the file, so the read stops there.
+        """
         past = self.journal_file_for(session_id)
         if past is None:
 
             return None
 
-        return target_from_records(past.records())
+        return target_from_records(past.iter_records())
 
     async def _docker_target(
         self, container: str | None, database: str | None, odoo_bin: str | None
@@ -171,7 +203,15 @@ class Registry:
         else:
             target = await self._docker_target(container, database, odoo_bin)
         session_id = uuid.uuid4().hex[:12]
-        process = await spawn(build_command(target, bootstrap_source()))
+        try:
+            process = await spawn(build_command(target, bootstrap_source()))
+        except FileNotFoundError as exc:
+            # `docker` off a GUI's PATH, or `ssh` in an image that has none:
+            # a fact about this host to say plainly, not a crash to report.
+            raise ValueError(
+                f"{exc.filename or 'the launcher'} is not installed where this "
+                "daemon runs"
+            ) from None
         session = None
         announced = False
         try:
@@ -242,6 +282,10 @@ class Registry:
         else:
             await session.close(timeout)
         self.sessions.pop(session_id, None)
+        # Its sockets would otherwise wait on a session that will never say
+        # anything again, and the entry here would outlive it for good.
+        for queue in self.subscribers.pop(session_id, []):
+            _hang_up(queue)
         self._broadcast({"kind": "session_closed", "session": session_id})
 
     def watch(self, queue: asyncio.Queue) -> None:
@@ -252,8 +296,12 @@ class Registry:
             self.watchers.remove(queue)
 
     def _broadcast(self, event: dict) -> None:
-        for queue in self.watchers:
-            queue.put_nowait(event)
+        for queue in list(self.watchers):
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                self.unwatch(queue)
+                _hang_up(queue)
 
     def subscribe(self, session_id: str, queue: asyncio.Queue) -> None:
         if session_id not in self.sessions:
@@ -266,13 +314,21 @@ class Registry:
             queues.remove(queue)
 
     def _publish(self, session_id: str, event: dict) -> None:
-        for queue in self.subscribers.get(session_id, []):
-            queue.put_nowait(event)
+        for queue in list(self.subscribers.get(session_id, [])):
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                # Raising here would land in the session's stderr reader —
+                # this runs inside it — and stop the log for everyone.
+                self.unsubscribe(session_id, queue)
+                _hang_up(queue)
         if event.get("kind") == "autoclose":
             # A session opened to run one test says here that the run has
             # settled and been journalled. Closing is scheduled rather than
             # awaited: this runs inside the session's own event callback.
-            asyncio.create_task(self._autoclose(session_id))
+            task = asyncio.create_task(self._autoclose(session_id))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
 
             return
         if event.get("kind") in ("state", "owner", "policy"):

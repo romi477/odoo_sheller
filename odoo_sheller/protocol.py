@@ -62,7 +62,10 @@ def close_frame(request_id: int) -> dict:
 
 
 def run_test_frame(
-    request_id: int, module: str, test_class: str, test_method: str | None = None
+    request_id: int,
+    module: str,
+    test_class: str | None = None,
+    test_method: str | None = None,
 ) -> dict:
 
     return {
