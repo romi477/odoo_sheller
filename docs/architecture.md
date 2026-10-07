@@ -455,6 +455,8 @@ against a whitelist, and every token is quoted again on the way out; the spawn i
 `-o` with `Port IdentityFile User ProxyJump ConnectTimeout IdentitiesOnly`, in
 any of ssh's spellings, before or after the host, and normalises them (`-l
 ubuntu` becomes `ubuntu@host`, `~` is expanded here, a named key has to exist).
+`-T` and `-o BatchMode=yes` are accepted and dropped: the daemon says both on
+every connection, and a command copied from a terminal that worked has them.
 It refuses what would make ssh act on *this* machine — `ProxyCommand`,
 `LocalCommand`, forwarding, `-F`, a pty — and anything that would weaken host key
 checking, each with a message that says why. Launch is an absolute path, a

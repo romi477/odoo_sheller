@@ -58,6 +58,9 @@ ALLOWED_OPTIONS = {
     "proxyjump": "ProxyJump",
     "connecttimeout": "ConnectTimeout",
     "identitiesonly": "IdentitiesOnly",
+    # Said by the daemon itself on every connection, so a card that says it too
+    # changes nothing — but a card copied from a terminal that worked has it.
+    "batchmode": "BatchMode",
 }
 _ALLOWED_LIST = ", ".join(ALLOWED_OPTIONS.values())
 
@@ -297,6 +300,11 @@ def _apply_named(collected: _Collected, name: str, value: str, is_file) -> None:
         if value.lower() not in ("yes", "no"):
             raise RecipeError(f"IdentitiesOnly must be yes or no, not {value!r}")
         collected.identities_only = value.lower()
+    elif key == "batchmode" and value.lower() not in ("yes", "true"):
+        raise RecipeError(
+            f"BatchMode must stay yes, not {value!r}: the daemon has no terminal "
+            "to answer a password prompt on, and would wait for one forever"
+        )
 
 
 def _parse_dash_o(collected: _Collected, setting: str, is_file) -> None:
@@ -312,6 +320,11 @@ def _parse_dash_o(collected: _Collected, setting: str, is_file) -> None:
 def _parse_option(rest: list[str], index: int, collected: _Collected, is_file) -> int:
     token = rest[index]
     flag = token[1]
+    if token == "-T":
+        # No pty: the daemon already says so on every connection (`SSH_OPTS`),
+        # and a card copied from a terminal that worked has it.
+
+        return index + 1
     if flag in SHORT_WHY_NOT:
         raise RecipeError(f"{token}: {SHORT_WHY_NOT[flag]}")
     if flag == "o":

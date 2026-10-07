@@ -155,7 +155,7 @@ def test_what_is_not_one_ssh_command(text, match):
         ("-F /tmp/config", "config"),
         ("-t", "pty|tty"),
         ("-tt", "pty|tty"),
-        ("-T", "not allowed"),
+        ("-Tq", "not allowed"),
         ("-A", "agent"),
         ("-X", "X11"),
         ("-Y", "X11"),
@@ -496,6 +496,33 @@ def test_no_become_and_a_config_the_login_user_may_not_read_is_not_ours_to_guess
     """The probe finds that out; the grammar has no opinion on the server."""
     launch = parse_launch(LAUNCH + " --no-http")
     assert describe(parse_access(f"ssh -i {key} ubuntu@h"), launch)["warnings"] == []
+
+
+# --- what the daemon always says itself ----------------------------------------
+
+
+def test_the_two_options_the_daemon_always_adds_are_accepted_and_not_doubled(key):
+    """`-T` and `-o BatchMode=yes` are in every command the daemon builds, and a
+    card copied from a terminal session that worked has them. Refusing a flag
+    that is already true was a rule with no reason behind it."""
+    access = parse_access(f"ssh -T -o BatchMode=yes -i {key} ubuntu@h sudo -n -u odoo -H")
+    assert access.keys == (key,)
+    argv = access.ssh_argv(["true"], base=("-T", "-o", "BatchMode=yes"))
+    assert argv.count("-T") == 1
+    assert argv.count("BatchMode=yes") == 1
+
+
+@pytest.mark.parametrize("value", ["yes", "YES", "true"])
+def test_batchmode_may_be_written_as_yes(key, value):
+    parse_access(f"ssh -o BatchMode={value} -i {key} ubuntu@h")
+
+
+@pytest.mark.parametrize("value", ["no", "false", "ask"])
+def test_batchmode_may_not_be_turned_off(key, value):
+    """The daemon has no terminal to answer a password prompt on: it would wait
+    forever for one."""
+    with pytest.raises(RecipeError, match="BatchMode"):
+        parse_access(f"ssh -o BatchMode={value} -i {key} ubuntu@h")
 
 
 # --- assembly: data, not code ----------------------------------------------

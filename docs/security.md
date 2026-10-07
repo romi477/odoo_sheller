@@ -181,7 +181,8 @@ layer below is independent of the others:
    it is meant not to stop.
 2. **A grammar, not a blacklist** (`recipe.py`). Access is `ssh`, a short list of
    options (`-i -p -l -J`, and `-o` with `Port IdentityFile User ProxyJump
-   ConnectTimeout IdentitiesOnly`), a destination of letters, digits, `.`, `_` and
+   ConnectTimeout IdentitiesOnly`, plus `-T` and `-o BatchMode=yes`, which the daemon
+   says itself and are dropped), a destination of letters, digits, `.`, `_` and
    `-` that cannot start with `-`, and optionally `sudo -n [-u USER] [-H]`.
    Everything else is refused with a message that says why, including `ProxyCommand`,
    `LocalCommand`, forwarding, `-F`, a pty, and anything that weakens host key
