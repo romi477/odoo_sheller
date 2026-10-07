@@ -39,6 +39,11 @@ the browser had kept to the daemon, once, when the odoo.sh list is first
 opened. A card that has not been probed since the page loaded can still be
 opened: the daemon asks the instance on the way in and refuses there if it must.
 
+A session opened from a card describes itself with that card's `target_id`
+(`null` for a container), and the page matches sessions to cards by it: a
+server's name is free text, so it can equal a container's, and it can be
+changed while a session is live.
+
 ### Only a human opens a remote target — and the daemon says so
 
 Until now this held by omission: no MCP tool takes a host, a build or a card. That

@@ -24,10 +24,8 @@ def package_dir() -> Path:
 
 
 def web_dir() -> Path:
-
     return package_dir() / "web"
 
 
 def bootstrap_path() -> Path:
-
     return package_dir() / "bootstrap.py"
