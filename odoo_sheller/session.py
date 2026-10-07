@@ -631,6 +631,10 @@ class Session:
                 if self.target.stage == PRODUCTION
                 else "this session may not commit; a human has to grant the right first"
             )
+        # Before an id is spent or a grant can be: a request this session cannot
+        # take right now — busy, not ready, closed — is not an attempt, and a
+        # journal that said otherwise over a grant that burned would be lying.
+        self._ensure_acceptable(kind)
         request_id = self._take_id()
         try:
             result = await self._request(builder(request_id), timeout)

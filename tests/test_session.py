@@ -1728,3 +1728,40 @@ async def test_describe_names_the_card_a_remote_session_was_opened_from(tmp_path
         assert local.describe()["target_id"] is None
     finally:
         await local.kill()
+
+
+async def test_a_grant_survives_a_boundary_request_that_was_never_sent(tmp_path):
+    """A commit refused because the session is busy never reached the pipe:
+    nothing was attempted, so nothing is spent — and the journal must not say
+    a commit was attempted."""
+    session = await make_session(tmp_path, target=oosh_target("production"))
+    await session.start()
+    try:
+        session.set_allow_commit(True, confirm="36887345")
+        running = asyncio.create_task(session.execute("SLEEP"))
+        await asyncio.sleep(0.2)
+        assert session.state is SessionState.BUSY
+        for boundary in (session.commit, session.rollback):
+            with pytest.raises(SessionBusy):
+                await boundary()
+            assert session.allow_commit is True, boundary.__name__
+        assert not any(
+            r["kind"] == "policy_changed" and r["allow_commit"] is False
+            for r in session.journal.records()
+        ), "no spending was journalled for a commit that was never attempted"
+        assert not any(r["kind"] in ("commit", "rollback") for r in session.journal.records())
+        await running
+        assert session.allow_commit is True, "and it is still there once the command is done"
+    finally:
+        await session.kill()
+
+
+async def test_a_grant_survives_a_commit_asked_of_a_session_that_is_not_ready(tmp_path):
+    session = await make_session(tmp_path, target=oosh_target("production"))
+    session.set_allow_commit(True, confirm="36887345")
+    with pytest.raises(SessionNotReady):
+        await session.commit()
+    assert session.allow_commit is True
+    spent = [r for r in session.journal.records() if r["kind"] == "policy_changed" and r["allow_commit"] is False]
+    assert not spent
+    await session.kill()
