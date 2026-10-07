@@ -22,6 +22,16 @@ from odoo_sheller.transport import SSH_OPTS, docker_bin, ssh_destination
 # because 20 dropped `httpd` from ThreadedServer while `odoo/tests/shell.py`
 # still reads it. See `_os_run_test` in bootstrap.py.
 SUPPORTED_MAJORS = (15, 16, 17, 18, 19, 20)
+
+# 13 and 14 are let through, with a warning, and are not claimed. Nothing has
+# run on either here; what there is is a reading of their source
+# (`odoo/cli/shell.py` is the same file as in 15, `Environment.clear` and
+# `BaseModel.flush` are there for the boundaries, and 14's `odoo/tests/loader.py`
+# and `runner.py` have the shapes the fallback expects) and one server running
+# 13. The reading says a session, exec, commit, rollback and interrupt should
+# work, and 14's `run_test` too. 13 has no loader to build a suite from, so its
+# `run_test` says so instead of failing. No document calls either supported.
+UNTESTED_MAJORS = (13, 14)
 MODULE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 PROBE_SOURCE = r'''
@@ -412,11 +422,18 @@ def _unreadable(code: int, out: str, err: str) -> dict:
     return {
         "ok": False, "odoo_bin": None, "odoo_version": None, "odoo_major": None,
         "python": None, "config": None, "db_name": None, "databases": [],
-        "stage": None, "supported": False,
+        "stage": None, "supported": False, "untested": False, "warning": None,
         "error_code": "no_python" if no_python else None,
         "error": "no python3 in this container" if no_python else raw,
         "error_detail": raw if no_python else None,
     }
+
+
+def _allowed_list() -> str:
+    tested = ", ".join(str(major) for major in SUPPORTED_MAJORS)
+    untested = " and ".join(str(major) for major in UNTESTED_MAJORS)
+
+    return f"{tested} ({untested}: not fully tested)"
 
 
 def version_refusal(version: str | None) -> str | None:
@@ -427,27 +444,39 @@ def version_refusal(version: str | None) -> str | None:
     all is not a reason to refuse: nothing says it is wrong.
     """
     match = re.match(r"\D*(\d+)\.", version or "")
-    if match is None or int(match.group(1)) in SUPPORTED_MAJORS:
+    if match is None or int(match.group(1)) in (*SUPPORTED_MAJORS, *UNTESTED_MAJORS):
 
         return None
-    supported = ", ".join(str(major) for major in SUPPORTED_MAJORS)
 
-    return f"Odoo {version} found; supported: {supported}"
+    return f"Odoo {version} found; supported: {_allowed_list()}"
+
+
+def _untested_warning(version: str | None, major: int) -> str:
+    warning = (
+        f"Odoo {version} is not fully tested: nothing has run on it here. Sessions, "
+        "exec, commit, rollback and interrupt should work, going by its source"
+    )
+    if major == 13:
+        warning += "; run_test does not — Odoo 13 has no loader to build a test suite from"
+
+    return warning + "."
 
 
 def _gate_on_version(payload: dict) -> dict:
     """Refuse an unsupported major here, not on the first command."""
-    payload["supported"] = payload.get("odoo_major") in SUPPORTED_MAJORS
+    major = payload.get("odoo_major")
+    payload["untested"] = major in UNTESTED_MAJORS
+    payload["supported"] = major in SUPPORTED_MAJORS or payload["untested"]
+    payload["warning"] = (
+        _untested_warning(payload.get("odoo_version"), major) if payload["untested"] else None
+    )
     payload.setdefault("error_detail", None)
     if payload.get("error") == "odoo-bin not found":
         payload["error_code"] = "no_odoo_bin"
         payload["error"] = "no odoo-bin in this container"
     payload.setdefault("error_code", None)
     if payload.get("ok") and not payload["supported"]:
-        supported = ", ".join(str(major) for major in SUPPORTED_MAJORS)
-        payload["error"] = (
-            f"Odoo {payload.get('odoo_version')} found; supported: {supported}"
-        )
+        payload["error"] = f"Odoo {payload.get('odoo_version')} found; supported: {_allowed_list()}"
     payload.setdefault("db_name", None)
     payload.setdefault("stage", None)
 
@@ -580,6 +609,7 @@ def _ssh_failure(code: int, out: str, err: str) -> dict:
 
     return {
         "ok": False, "supported": False, "version_known": False,
+        "untested": False, "warning": None,
         "odoo_bin": None, "odoo_version": None, "odoo_major": None,
         "python": None, "config": None, "db_name": None, "databases": [],
         "stage": None, "error_code": error_code, "error": error, "error_detail": raw,
@@ -670,7 +700,7 @@ async def probe_ssh(access: Access, launch: Launch, runner=None) -> dict:
             ),
         )
     if major is None:
-        payload["supported"] = payload["ok"]
+        payload.update(supported=payload["ok"], untested=False, warning=None)
 
         return payload
 

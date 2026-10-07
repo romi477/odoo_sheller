@@ -259,9 +259,10 @@ guard needs to be built *before* the fact, not discovered missing after.
 
 **Which Odoo versions are supported?**
 
-15 through 20. Anything outside that is refused by the probe immediately, with
-a message naming what would work, rather than letting you hit a confusing
-failure on the first real command.
+15 through 20. 13 and 14 open too, with a warning badge, and are not claimed:
+nothing has run on them here, and tests cannot run on 13 at all. Anything outside
+that is refused by the probe immediately, with a message naming what would work,
+rather than letting you hit a confusing failure on the first real command.
 
 20 is checked on a master container, which still calls itself 19.5 and so
 already passes as a 19. The sources alone were not enough: everything the

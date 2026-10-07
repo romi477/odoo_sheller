@@ -53,6 +53,12 @@ def test_bootstrap_imports_stdlib_only():
     assert names <= ALLOWED_IMPORTS, f"unexpected imports: {names - ALLOWED_IMPORTS}"
 
 
+def test_bootstrap_parses_as_python_3_6():
+    """13 declares python_requires >= 3.6, and a server running it was walked at
+    3.6.9. The bootstrap runs in whatever interpreter Odoo does."""
+    ast.parse(BOOTSTRAP.read_text(encoding="utf-8"), feature_version=(3, 6))
+
+
 def test_hello_comes_first():
     out, _, _ = run_bootstrap([{"t": "close", "id": 1}])
     assert out[0]["t"] == "hello"
@@ -386,3 +392,47 @@ def test_an_interrupt_while_a_frame_is_written_never_cuts_it(live):
     assert len(answer["stdout"]) == 900_001
     live.send({"t": "exec", "id": 2, "code": "'alive'"})
     assert live.answer()["result"] == "'alive'"
+
+
+# --- Odoo 13 and 14: not fully tested, and honest about what is not there ------
+
+
+@pytest.mark.parametrize("flavour", ["13", "14"])
+def test_the_boundaries_of_thirteen_and_fourteen_are_fifteens(flavour):
+    """Neither has flush_all or invalidate_all; both have `env['base'].flush()`
+    and `Environment.clear()`, which drops the cache and discards `tocompute` and
+    `towrite` — so a rollback discards rather than flushes."""
+    _, _, calls = run_bootstrap([
+        {"t": "exec", "id": 1, "code": "1"},
+        {"t": "commit", "id": 2},
+        {"t": "rollback", "id": 3},
+    ], fake_odoo=flavour)
+    assert calls == ["base.flush", "cr.commit", "env.clear", "env.clear", "cr.rollback"], calls
+
+
+def test_run_test_on_fourteen_is_fifteens():
+    """14 has odoo/tests/loader.py and runner.py with the same shapes as 15."""
+    out, _, calls = run_bootstrap([
+        {"t": "run_test", "id": 1, "module": "sale", "test_class": "TestSaleOrder",
+         "test_method": None},
+    ], fake_odoo="14")
+    assert out[1]["error"] is None, out[1]["error"]
+    assert out[1]["test"]["tests_run"] == 2
+    assert "make_suite(sale,at_install)" in calls
+
+
+def test_run_test_on_thirteen_says_it_is_not_there_and_starts_nothing():
+    """13 keeps its test runner in odoo.modules.module, and there is no loader to
+    build a suite from. Say so, rather than an ImportError out of a fallback —
+    and before an HTTP daemon is spawned for a run that cannot happen."""
+    out, _, calls = run_bootstrap([
+        {"t": "run_test", "id": 1, "module": "sale", "test_class": "TestSaleOrder",
+         "test_method": None},
+        {"t": "exec", "id": 2, "code": "'alive'"},
+    ], fake_odoo="13")
+    result = out[1]
+    assert result["test"] is None
+    assert result["error"]["type"] == "TestRunnerUnsupported"
+    assert "13" in result["error"]["message"]
+    assert not [call for call in calls if call.startswith("http_spawn")], calls
+    assert out[2]["result"] == "'alive'", "the session is still usable"

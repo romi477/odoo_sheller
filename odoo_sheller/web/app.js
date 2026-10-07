@@ -761,6 +761,10 @@ function renderBuilds() {
       stage.classList.toggle('production', probe.stage === 'production');
     }
 
+    const untested = card.querySelector('.untested');
+    untested.hidden = !probe.untested;
+    untested.title = probe.warning || '';
+
     const note = card.querySelector('.probe-note');
     const facts = [entry.host];
     if (probe.ok) {
@@ -928,6 +932,11 @@ function renderContainers() {
     card.classList.toggle('probing', Boolean(container.probing));
     setText(card.querySelector('.meta'), `${container.image || 'unknown image'} · ${container.status || ''}`);
     card.querySelector('.open').disabled = !container.probe?.ok || !container.probe?.supported;
+    // A version nothing has run on here is let through, so it is not an error:
+    // a badge, and the whole sentence on hover.
+    const untested = card.querySelector('.untested');
+    untested.hidden = !container.probe?.untested;
+    untested.title = container.probe?.warning || '';
 
     const note = card.querySelector('.probe-note');
     note.classList.remove('error');

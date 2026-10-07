@@ -553,9 +553,17 @@ containers; a one-shot probe inside a chosen container reports the `odoo-bin`
 path, Odoo and Python versions, the config file location, and the database
 list (read via `psycopg2`, which any Odoo container already has installed —
 nothing extra to add). The probe process exits the moment it has answered.
-A major outside `SUPPORTED_MAJORS` (15 through 20) is refused right here, with a
-specific message naming what would work, rather than accepted and left to
-fail on the first real command. Every discovery command is bounded
+A major outside `SUPPORTED_MAJORS` (15 through 20) and `UNTESTED_MAJORS` (13 and
+14) is refused right here, with a specific message naming what would work,
+rather than accepted and left to fail on the first real command. 13 and 14 are
+let through with `untested: true` and a `warning`, and are not claimed: nothing
+has run on either here. A reading of their source says a session, exec, commit,
+rollback and interrupt should work (`odoo/cli/shell.py` is the same file as in 15,
+and `Environment.clear` and `BaseModel.flush` are there for the boundaries),
+that 14's `run_test` is 15's (its `odoo/tests/loader.py` and `runner.py` have the
+shapes the fallback expects), and that 13's cannot work — it keeps its runner in
+`odoo.modules.module` and has no loader to build a suite from — so the
+bootstrap answers `TestRunnerUnsupported` there, before spawning anything. Every discovery command is bounded
 (`DISCOVERY_TIMEOUT`, 30s): a paused container or a wedged Engine used to hang
 the request with no end. A launcher that is not installed where the daemon
 runs — no `docker` on a GUI's PATH, no `ssh` in the container image — is an
@@ -736,8 +744,8 @@ deleted rather than moved.
 
 Outgoing HTTP call tracing, record-level "what changed" diffs, synchronous
 execution of `with_delay` jobs, live streaming of output while a command runs,
-generic self-hosted Odoo over SSH (odoo.sh is supported; a plain Ubuntu box
-would need sudo, path discovery and a database list, which is a separate
-job), and Odoo 14 or older. None
+Odoo in Docker on a remote server (an ssh card could carry a `docker exec -i`
+Launch line; nothing verifies it), and Odoo 12 or older (13 and 14 are let
+through, untested). None
 of these are technically precluded by the protocol or the API — they're just
 not built, and the UI doesn't pretend they exist.

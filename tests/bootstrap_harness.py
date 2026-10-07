@@ -38,9 +38,9 @@ class FakeEnv:
     def __init__(self, flavour=None):
         self.cr = FakeCursor()
         self.uid = 1
-        if flavour == "15":
-            # 15 has neither flush_all nor invalidate_all: the boundary is
-            # env['base'].flush() and env.clear().
+        if flavour in ("13", "14", "15"):
+            # 13 through 15 have neither flush_all nor invalidate_all: the
+            # boundary is env['base'].flush() and env.clear().
             del FakeEnv.flush_all
             del FakeEnv.invalidate_all
 
@@ -164,7 +164,7 @@ def _install_fake_odoo(flavour):
 
         return FakeSuite(2 if position == "at_install" else 0)
 
-    if flavour == "15":
+    if flavour in ("14", "15"):
         def run_suite(suite, module_name=None):
             CALLS.append(
                 f"run_suite(tags={config['test_tags']},enable={config['test_enable']})"
@@ -191,12 +191,17 @@ def _install_fake_odoo(flavour):
     module("odoo.modules")
     module("odoo.modules.registry", Registry=FakeRegistry)
     module("odoo.tests")
-    module("odoo.tests.loader", make_suite=make_suite, run_suite=run_suite)
-    if flavour == "15":
-        # 15 keeps the result object in odoo/tests/runner.py; there is no
+    if flavour == "13":
+        # 13 has no odoo/tests/loader.py and no runner of its own: its tests are
+        # run by odoo.modules.module.run_unit_tests, which this does not model.
+        pass
+    else:
+        module("odoo.tests.loader", make_suite=make_suite, run_suite=run_suite)
+    if flavour in ("14", "15"):
+        # 14 and 15 keep the result object in odoo/tests/runner.py; there is no
         # odoo/tests/result.py at all.
         module("odoo.tests.runner", OdooTestResult=FakeResult15)
-    else:
+    elif flavour != "13":
         module("odoo.tests.result", OdooTestResult=FakeResult)
     module("psycopg2")
     module("psycopg2.extensions", STATUS_READY=1)

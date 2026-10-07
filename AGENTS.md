@@ -128,7 +128,7 @@ as a heredoc — nothing is copied into the container, nothing to clean up.
   interrupt, and a real `run_test`. 20 is verified on a master container —
   which still calls itself 19.5, so it already passes the gate as a 19 —
   everything above except the committed record, which was not written to
-  someone's migration database. `SUPPORTED_MAJORS` in `discovery.py` is the
+  someone's migration database. `SUPPORTED_MAJORS` (and `UNTESTED_MAJORS`, 13 and 14, let through with a warning and never claimed) in `discovery.py` is the
   whole gate, and the probe refuses anything outside it at connect time
   rather than failing later.
 - **What moved between versions is feature-detected, never keyed to a number.**

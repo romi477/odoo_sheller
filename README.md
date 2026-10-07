@@ -80,7 +80,7 @@ The reasoning behind each of these, and what they don't cover, is in
 | OS | macOS for the native daemon; Linux or macOS for the containerized one |
 | Python | 3.12 or newer |
 | Package manager | [uv](https://docs.astral.sh/uv/) (preferred) or pip + venv |
-| Docker | Docker CLI; a running Odoo **15 through 20** container |
+| Docker | Docker CLI; a running Odoo **15 through 20** container (13 and 14 open too, with a warning: not fully tested) |
 | odoo.sh (optional) | SSH access to a build; nothing else — no key files to configure here, an alias from your own `~/.ssh/config` works |
 
 Nothing is installed on the far side, container or build. The bootstrap needs

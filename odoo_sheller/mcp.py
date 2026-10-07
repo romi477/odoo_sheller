@@ -95,7 +95,7 @@ os_help(topic), one cheap call:
   sessions       opening, closing, death, one at a time
   ownership      handover, whose session it is
   commit         the grant ritual
-  remote_server  an odoo.sh build, and production
+  remote_server  a remote Odoo, and production
   limits         what never to attempt
   orm            idioms instead of Python loops
   code           which override actually runs
@@ -251,10 +251,10 @@ os_commit remains the only thing in this tool that writes.
 ## Connecting to a remote Odoo server
 
 A human may hand you a session that runs on a remote instance rather than a
-local container — an odoo.sh build, say. You cannot open one yourself: no tool
-here takes a host or a build, on purpose. You only ever receive one. That
+local container — an odoo.sh build or a server reached by ssh, say. You cannot
+open one yourself: no tool here takes a host, a build or a card, on purpose. You only ever receive one. That
 includes reopening a dead one: os_open_session(replace=...) on a session that
-ran remotely is refused and says so, because a journal records which build it
+ran remotely is refused and says so, because a journal records which instance it
 was but not how to reach it. Ask for a handover rather than a way around.
 
 Two things differ there, and os_session shows both as `kind` and `stage`:
@@ -275,6 +275,9 @@ Two things differ there, and os_session shows both as `kind` and `stage`:
 - Grant yourself commit rights, or call the daemon's admin endpoints.
 - Take a session you were not handed, or use a key you were not given.
 - Read or write ~/.odoo-sheller/ directly. Everything you need is in these tools.
+- Count on Odoo 13 or 14. They open, with a warning, but are not fully tested:
+  sessions, exec, commit, rollback and interrupt should work; os_run_test does
+  not on 13 and says so.
 
 These are not enforced by the keys you hold — they are the terms of using this
 tool at all.

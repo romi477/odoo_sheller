@@ -261,6 +261,10 @@ def _os_run_tests_fallback(env, test_tags, modules):
     return report
 
 
+class TestRunnerUnsupported(Exception):
+    """This Odoo's test runner is not one the bootstrap knows how to drive."""
+
+
 def _os_run_test(env, module, test_class, test_method):
     captured = io.StringIO()
     saved_stdout = sys.stdout
@@ -276,6 +280,24 @@ def _os_run_test(env, module, test_class, test_method):
             # Odoo 16 and older: no shell runner to call, only the primitives
             # it was built from.
             shell = None
+        if shell is None:
+            try:
+                importlib.import_module("odoo.tests.loader")
+            except ImportError as exc:
+                if getattr(exc, "name", None) != "odoo.tests.loader":
+                    # No Odoo at all, or a module of it that is broken: that is
+                    # a failure to report as it is, not a version to name.
+                    raise
+                # Odoo 13 keeps its runner in odoo.modules.module
+                # (`run_unit_tests`) and has nothing to build a suite from.
+                # Said here, before an HTTP daemon is spawned for a run that
+                # cannot happen, rather than as an ImportError out of the
+                # fallback.
+                raise TestRunnerUnsupported(
+                    "running tests is not supported on this Odoo: it has no "
+                    "odoo.tests.loader (Odoo 13 keeps its test runner in "
+                    "odoo.modules.module)"
+                ) from None
         server = importlib.import_module("odoo.service.server").server
         # `getattr`, not `server.httpd`: 20 moved that attribute to
         # GeventServer only, and in shell mode this is a ThreadedServer.

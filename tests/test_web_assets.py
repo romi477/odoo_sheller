@@ -2783,3 +2783,37 @@ def test_an_owner_kind_from_disk_never_reaches_a_class_attribute_raw(app_js):
     assert "const OWNER_KINDS = new Set(['human', 'agent'])" in app_js
     body = re.search(r"function journalOwner\(.*?\n\}", app_js, re.DOTALL).group(0)
     assert "OWNER_KINDS.has(last.kind) ? last.kind : 'unknown'" in body
+
+
+# --- Odoo 13 and 14: let through, and said to be untested ---------------------
+
+
+def test_an_untested_version_has_a_badge_on_both_kinds_of_card(markup):
+    assert "untested" in markup.classes
+    page = (WEB / "index.html").read_text(encoding="utf-8")
+    for template in ("container-card", "odoosh-card"):
+        block = re.search(rf'<template id="{template}">.*?</template>', page, re.DOTALL)
+        assert block is not None, template
+        assert 'class="badge untested"' in block.group(0), template
+
+
+def test_the_untested_badge_says_why_on_hover_and_is_not_an_error(app_js):
+    container = re.search(r"function renderContainers\(.*?\n\}", app_js, re.DOTALL)
+    builds = re.search(r"function renderBuilds\(.*?\n\}", app_js, re.DOTALL)
+    for render in (container, builds):
+        assert render is not None
+        body = render.group(0)
+        assert ".untested" in body
+        assert "probe?.untested" in body or "probe.untested" in body
+        assert "warning" in body, "the title carries the whole sentence"
+    # Not an error: the card opens, so the start button is not gated on it.
+    assert "untested" not in re.search(
+        r"card\.querySelector\('\.open'\)\.disabled = [^\n]*", app_js
+    ).group(0)
+
+
+def test_the_untested_badge_is_amber_like_a_warning_not_red_like_a_failure():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    rule = re.search(r"\.badge\.untested\s*\{([^}]*)\}", css)
+    assert rule is not None
+    assert "--amber" in rule.group(1)

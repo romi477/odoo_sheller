@@ -134,17 +134,69 @@ async def test_probe_accepts_every_supported_major(major):
     assert result["error"] is None
 
 
-async def test_probe_refuses_a_major_below_the_supported_ones():
+@pytest.mark.parametrize("major", discovery.SUPPORTED_MAJORS)
+async def test_a_supported_major_is_not_marked_untested(major):
     payload = json.dumps({
-        "ok": True, "odoo_bin": "/opt/odoo/odoo-bin", "odoo_version": "14.0",
-        "odoo_major": 14, "python": "3.10.0", "config": None, "databases": [], "error": None,
+        "ok": True, "odoo_bin": "/opt/odoo/odoo-bin", "odoo_version": f"{major}.0",
+        "odoo_major": major, "python": "3.10.0", "config": None, "databases": [],
+        "error": None,
+    })
+    result = await discovery.probe("box", runner=fake_runner([(0, payload, "")]))
+    assert result["untested"] is False
+    assert result["warning"] is None
+
+
+@pytest.mark.parametrize("major", discovery.UNTESTED_MAJORS)
+async def test_an_untested_major_opens_and_says_what_is_not_known(major):
+    """13 and 14 were never run here. The source says a session, exec, commit,
+    rollback and interrupt should work, and nothing says more than that — so the
+    probe lets them through, with a warning, and no document says "supported"."""
+    payload = json.dumps({
+        "ok": True, "odoo_bin": "/opt/odoo/odoo-bin", "odoo_version": f"{major}.0",
+        "odoo_major": major, "python": "3.8.0", "config": None, "databases": [], "error": None,
+    })
+    result = await discovery.probe("old", runner=fake_runner([(0, payload, "")]))
+    assert result["supported"] is True
+    assert result["untested"] is True
+    assert result["error"] is None
+    assert f"{major}.0" in result["warning"]
+    assert "not fully tested" in result["warning"]
+
+
+async def test_the_warning_for_thirteen_says_tests_do_not_run_there():
+    payload = json.dumps({
+        "ok": True, "odoo_bin": "/x", "odoo_version": "13.0", "odoo_major": 13,
+        "python": "3.6.9", "config": None, "databases": [], "error": None,
+    })
+    result = await discovery.probe("old", runner=fake_runner([(0, payload, "")]))
+    assert "run_test" in result["warning"]
+    payload = payload.replace("13", "14")
+    result = await discovery.probe("old", runner=fake_runner([(0, payload, "")]))
+    assert "run_test" not in result["warning"]
+
+
+async def test_probe_refuses_a_major_below_the_untested_ones():
+    payload = json.dumps({
+        "ok": True, "odoo_bin": "/opt/odoo/odoo-bin", "odoo_version": "12.0",
+        "odoo_major": 12, "python": "3.10.0", "config": None, "databases": [], "error": None,
     })
     result = await discovery.probe("old", runner=fake_runner([(0, payload, "")]))
     assert result["supported"] is False
+    assert result["untested"] is False
     # The refusal has to say what would work, not only what will not.
-    assert "14.0" in result["error"]
-    for major in discovery.SUPPORTED_MAJORS:
+    assert "12.0" in result["error"]
+    for major in (*discovery.SUPPORTED_MAJORS, *discovery.UNTESTED_MAJORS):
         assert str(major) in result["error"]
+
+
+def test_the_hello_gate_lets_untested_majors_through_and_refuses_the_rest():
+    assert discovery.version_refusal("13.0") is None
+    assert discovery.version_refusal("14.0") is None
+    assert discovery.version_refusal("19.0") is None
+    assert discovery.version_refusal("saas~18.2") is None
+    assert "12.0" in discovery.version_refusal("12.0")
+    assert discovery.version_refusal(None) is None, "nothing says it is wrong"
+    assert discovery.version_refusal("unknown") is None
 
 
 def test_a_container_without_python_is_named_not_blamed():
@@ -524,13 +576,13 @@ async def test_probe_odoosh_refuses_a_build_or_host_that_is_not_a_name(build, ho
 
 async def test_probe_odoosh_refuses_another_major_the_way_docker_does():
     runner = fake_runner([(0, json.dumps({
-        "ok": True, "odoo_version": "14.0", "odoo_major": 14, "stage": "staging",
+        "ok": True, "odoo_version": "12.0", "odoo_major": 12, "stage": "staging",
         "db_name": "db", "databases": ["db"], "python": "3.10.0",
         "odoo_bin": "/x/odoo-bin", "config": None, "error": None,
     }), "")])
     result = await discovery.probe_odoosh("1", "h", runner=runner)
     assert result["supported"] is False
-    assert "14.0" in result["error"]
+    assert "12.0" in result["error"]
 
 
 async def test_probe_odoosh_carries_a_production_stage_through():
@@ -750,3 +802,13 @@ def test_the_probe_script_takes_its_arguments_as_data():
     """Nothing the card said is spliced into it, and nothing in it evaluates."""
     assert "eval" not in discovery.SSH_PROBE_SCRIPT
     assert '"$1"' in discovery.SSH_PROBE_SCRIPT
+
+
+async def test_an_ssh_server_on_thirteen_opens_with_a_warning():
+    """The one real server this was written for runs Odoo 13."""
+    access, launch = ssh_recipe()
+    result = await discovery.probe_ssh(access, launch, runner=fake_runner([(0, SSH_FACTS, "")]))
+    assert result["ok"] is True
+    assert result["supported"] is True
+    assert result["untested"] is True
+    assert "13.0" in result["warning"]

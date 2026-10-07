@@ -486,6 +486,13 @@ button.icon:hover:not(:disabled) {
   color: var(--red);
 }
 
+/* A version nothing has run on here (13, 14): let through, so not red — and
+   not nothing either. The whole sentence is the badge's title. */
+.badge.untested {
+  background: var(--amber-dark);
+  color: var(--amber);
+}
+
 /* A build's stage. `staging` is ordinary information; `production` is the one
    word on this screen worth interrupting for, so it is the only badge that
    fills solid rather than tinting. */

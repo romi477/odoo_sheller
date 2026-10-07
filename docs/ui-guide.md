@@ -74,7 +74,7 @@ restart or a config change.
   narrow desktop column is not a phone: at 684px, the width the desktop app's
   **Compact Width** uses, the card's row needs 241 of the 626 it has.
 - Probe failures are explained specifically — "no odoo-bin found in this
-  container", "Odoo 14.0 found; supported: 15, 16, 17, 18, 19", "could not read database
+  container", "Odoo 12.0 found; supported: 15, 16, 17, 18, 19, 20 (13, 14: not fully tested)", "could not read database
   list — enter the name manually" — rather than as a generic error. A
   container that cannot host a session at all — no `python3` inside, or no
   `odoo-bin` — is folded under *N containers are not Odoo images* at the end of

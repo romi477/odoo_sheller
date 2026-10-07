@@ -79,6 +79,24 @@ accepted on the daemon's own.
 Tested against `tests/ssh_double/`: a container with `sshd`, `sudo` and Odoo 19
 installed in the system, started by `tests/ssh_double/up.sh`.
 
+### Odoo 13 and 14 open, with a warning, and are not claimed
+
+The one server this was tried against runs Odoo 13, and the gate refused it.
+`UNTESTED_MAJORS = (13, 14)` now lets both through: the probe answers `supported`
+with `untested: true` and a `warning`, and a card shows an amber *untested* badge
+whose hover is the whole sentence. They are not claimed — nothing has run on either
+here, and no document says "supported". What there is is a reading of their source:
+`odoo/cli/shell.py` is the same file as 15's, `Environment.clear` and
+`BaseModel.flush` are there, so a session, exec, commit, rollback and interrupt
+should work; 14's test runner has the shapes the fallback expects; **13's does not
+exist** — it keeps its runner in `odoo.modules.module` and has no loader to build
+a suite from — so `os_run_test` there answers `TestRunnerUnsupported` instead of an
+ImportError, before an HTTP daemon is spawned for a run that cannot happen.
+Anything older than 13 is still refused, and the message now names 13 and 14 as
+what would be let through. A server's version that the probe could not read is
+checked against the same gate when the session says it. The bootstrap is tested to
+parse as Python 3.6, the floor 13 declares.
+
 ## [1.8.4] — 2026-10-07
 
 ### The daemon answers only requests addressed to this machine
