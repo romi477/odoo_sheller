@@ -372,11 +372,12 @@ Delivering a signal is bounded too (`SIGNAL_TIMEOUT`): a wedged Engine or a
 dead SSH link used to hold Interrupt — and the timeout path that sends one —
 for as long as it stayed that way.
 
-## Two kinds of place, one mechanism
+## Three kinds of place, one mechanism
 
 Everything above `transport.py` — the frame protocol, the session state
-machine, the bootstrap itself — is identical for both, and that is not luck.
-The design never leaned on anything the two do differently:
+machine, the bootstrap itself — is identical for all three (a local container,
+an odoo.sh build, a server reached over SSH), and that is not luck. The design
+never leaned on anything they do differently:
 
 | What it relies on | Docker | SSH |
 |---|---|---|
@@ -421,6 +422,64 @@ treats as an ordinary death. And `ControlMaster` with `ControlPersist`,
 because interrupt and kill each open a second connection: measured against a
 real build, a fresh handshake costs ~1.1s against ~0.13s multiplexed — and
 1.1s is precisely the latency this tool exists to remove.
+
+### An Odoo installed on a server
+
+The third kind is the one nothing can be discovered about: which user runs Odoo,
+which interpreter (usually a venv), where `odoo-bin` and its config are, which
+database. The daemon does not guess — the person who can log in writes a card
+(`targets.py`, `recipe.py`), in two fields:
+
+    Access   ssh -i ~/.ssh/acme.pem ubuntu@acme.example.com sudo -n -u odoo -H
+    Launch   /opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf
+
+**Access is a prefix, because `sudo` closes every file descriptor above 2.** The
+whole transport rests on `exec 3<&0` keeping the command pipe alive, so the
+script that does it has to run *inside* the user switch, never before it. The
+transport assembles `ssh <ours> <card's options> -- dest sudo -n -u odoo -H sh -c
+'exec 3<&0; exec <launch> <<"OSBOOT" …'`, quoted once for ssh's own re-parse, and
+the same prefix carries the interrupt (`… kill -INT <pid>` — as the user the
+session runs as, since another user's process does not take the signal) and the
+probe. This is verified on a real server (`exec 3<&0` before `sudo` is
+`Bad file descriptor`, after it is fine), by a unit test with a `sudo` shim that
+closes the descriptors, and by `tests/test_e2e_ssh.py` against the real thing.
+Typed into a terminal, "ssh, then `sudo su`, then `su odoo`" are three commands in
+sequence; here stdin is our pipe and they nest, so the equivalent is one line.
+`su`, `runuser` and `doas` are refused until someone has checked that they keep
+fd 3.
+
+**Both fields are data, not code.** Each is tokenised with `shlex` (unquoted
+`; & | ( )` are refused as "this is one command", quoted ones are data), checked
+against a whitelist, and every token is quoted again on the way out; the spawn is
+`create_subprocess_exec`, with no local shell. Access accepts `-i -p -l -J` and
+`-o` with `Port IdentityFile User ProxyJump ConnectTimeout IdentitiesOnly`, in
+any of ssh's spellings, before or after the host, and normalises them (`-l
+ubuntu` becomes `ubuntu@host`, `~` is expanded here, a named key has to exist).
+It refuses what would make ssh act on *this* machine — `ProxyCommand`,
+`LocalCommand`, forwarding, `-F`, a pty — and anything that would weaken host key
+checking, each with a message that says why. Launch is an absolute path, a
+standalone `shell` token, and is **not modified**: nothing is appended but `-d
+DATABASE`, and only when the Database field is filled. Odoo's `shell` calls
+`server.start(preload=[], stop=True)`, which starts neither an HTTP server nor
+the cron thread — read from 13, 14 and 15 — so no `--no-http` is wanted.
+
+**The stage is declared.** Nothing on a plain server says what it is, so the card
+carries a stage, defaulting to `production` (commit refused outright);
+`staging` and `development` are closed to commit until granted, like an odoo.sh
+staging build. For odoo.sh the stage is read from the instance and never stored,
+because a stored one would be a caller-named one and the commit guard would be
+decorative.
+
+**The probe is plain `sh`.** The interpreter in the card may be the very thing
+being checked, so `probe_ssh` runs a fixed POSIX script with the card's tokens as
+arguments (never spliced in) and reports who it landed as, where, the interpreter
+version, whether the executable and the config are readable by that user, and the
+Odoo version read from `odoo/release.py` beside `odoo-bin`. The config being
+readable only by `odoo` is the normal shape of such a server, so a missing
+`sudo` reads as exactly that. When the version cannot be read the gate is applied
+when the session says it (`hello`). An ssh or sudo failure comes back with what to
+do — above all, an untrusted host key is "connect once from a terminal", never
+accepted by the daemon itself.
 
 ## Session state machine
 

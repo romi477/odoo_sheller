@@ -287,15 +287,21 @@ that runner is made of — same tag syntax, same suite loader — all older than
 
 **Remote hosts, SSH, odoo.sh?**
 
-An odoo.sh build, yes — a human opens it from the UI over SSH. A plain
-self-hosted box, no: it would need sudo, path discovery and a database list,
-which is a separate job.
+Both, and a human opens them from the UI over SSH. An odoo.sh build is a build id and
+a host, and says what it is itself. A plain server — Odoo installed in the system —
+cannot be discovered: which user runs it, which interpreter, where `odoo-bin` and its
+config are. So whoever can log in writes it down on a card, in two fields — how to
+arrive (`ssh -i KEY user@host sudo -n -u odoo -H`) and what to run there
+(`/abs/python /abs/odoo-bin shell -c /abs/odoo.conf`) — says whether it is
+production (the default: commit refused outright), staging or development, and the
+form shows what the recipe means before it is saved. Nothing typed is ever run on
+your machine. Odoo in Docker on a remote server is not handled yet.
 
 **What's still missing?**
 
 Tracing outgoing HTTP calls, showing "which records changed", running
-`with_delay` jobs synchronously, and streaming output live while a command
-runs. All of this is left room for in the protocol and the API — the UI just
+`with_delay` jobs synchronously, streaming output live while a command runs, and
+Odoo in Docker on a remote server. All of this is left room for in the protocol and the API — the UI just
 doesn't pretend any of it exists yet.
 
 **What do I need to install?**

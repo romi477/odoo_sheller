@@ -1,8 +1,8 @@
 # odoo-sheller
 
 Persistent Odoo REPL proxy (15 through 20): a local Python daemon keeps `odoo-bin shell`
-alive — in a local Docker container, or on an odoo.sh build over SSH — and
-exposes it over HTTP/WebSocket.
+alive — in a local Docker container, on an odoo.sh build, or on a server with Odoo
+installed in the system, the last two over SSH — and exposes it over HTTP/WebSocket.
 
 A web UI (stage 1) and later an AI agent (stage 2) run ORM code without paying
 registry startup on every call. Both clients use the same API.

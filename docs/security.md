@@ -9,14 +9,14 @@ it.
 odoo-sheller executes arbitrary Python as Odoo's superuser (`SUPERUSER_ID`)
 against a real database. It is a debugging tool for a developer who already
 has that level of access — through `docker exec` into their own container, or
-through SSH into an odoo.sh build they can already reach. It does not add a
+through SSH into an odoo.sh build or a server they can already reach. It does not add a
 new privilege, it just makes using an existing one faster. Every other
 decision here follows from taking that seriously.
 
 What changed when the second kind of target arrived is not the privilege but
 *whose machine it is*. On a local container the database is yours and the
-blast radius is your own dev data. On an odoo.sh build it may be a clone of
-production, or production itself. The sections below say which guarantees
+blast radius is your own dev data. On an odoo.sh build, or a server somebody
+reaches over SSH, it may be a clone of production, or production itself. The sections below say which guarantees
 that changes and which it does not.
 
 ## What is protected, and how
@@ -147,6 +147,58 @@ whole of the remote safety story:
   granted around is not a guard. Reading is untouched: `exec` and `rollback`
   work, because inspecting a production instance is the legitimate case and
   only writing is not.
+
+**A server reached over SSH has the same three guards, with a different source of
+truth, and one risk that is new.** Nothing on a plain server says what it is, so
+the stage is *declared* by the human who writes the card, and defaults to
+`production` — commit refused outright. `staging` and `development` are closed to
+commit until granted, like an odoo.sh staging build. A stage is stored for this
+kind and read from the instance for odoo.sh; for odoo.sh a stored stage would be a
+caller-named one, which the guard must never trust. Only a human opens one:
+`os_open_session` has no host, no build and no card, and `os_open_session(replace=…)`
+on a session that ran remotely is refused.
+
+**The new risk is on this machine, not on the server.** Until a card could name a
+command line, the API let a caller run code *inside a container*. A field that
+holds a command line makes it a way to run commands *on your own machine*: `ssh -o
+ProxyCommand=…` executes locally. The daemon has no authentication, so every
+layer below is independent of the others:
+
+1. **The admin key** guards every card write, change, delete, probe and decode —
+   the key is a file only your user reads, and a page in a browser cannot.
+   Reading the list needs none, and neither does opening a session on a card, so
+   the text of a card is not what stands between a local caller and the server;
+   the key is what stands between a caller and *making* a card.
+2. **A grammar, not a blacklist** (`recipe.py`). Access is `ssh`, a short list of
+   options (`-i -p -l -J`, and `-o` with `Port IdentityFile User ProxyJump
+   ConnectTimeout IdentitiesOnly`), a destination of letters, digits, `.`, `_` and
+   `-` that cannot start with `-`, and optionally `sudo -n [-u USER] [-H]`.
+   Everything else is refused with a message that says why, including `ProxyCommand`,
+   `LocalCommand`, forwarding, `-F`, a pty, and anything that weakens host key
+   checking: an unknown host key has to fail, loudly. `su`, `runuser` and `doas` are
+   refused until someone checks that they keep fd 3.
+3. **No local shell.** Each field is tokenised and every token re-quoted; the spawn
+   is `create_subprocess_exec`. A `;` is a literal argument, never a second command.
+4. **Host and Origin** (`guard.py`): the daemon answers only a request addressed to
+   it, so a rebound or foreign page gets nowhere, whatever the cards say.
+5. **A human reads a decoded breakdown before saving** — who it logs in as, to where,
+   which user it becomes, what it runs — and again when a field changes. This is
+   for the realistic vector: a recipe pasted from a chat or a wiki.
+6. **A probe** shows who the recipe lands as and where before the first session.
+
+What the validation is **not** for: the person who writes a recipe can already run
+anything on their server, and the grammar does not stop them. It protects them from
+typos and from text they did not write, and protects this machine from whatever
+else can reach the port.
+
+Things to know. A recipe may name root; Odoo as root writes root-owned files into the
+filestore, which the odoo user then cannot read, so the form warns and does not
+forbid. On a server where the `odoo` user is in the `sudo` group, code run in a
+session may be able to `sudo` — one more reason commit and production default
+closed. A remote session's journal holds that instance's data: the same trade-off as
+odoo.sh, accepted the same way. No password is accepted in either field, and
+`sshpass` is not in the grammar. The daemon never writes your `~/.ssh/config` or
+`known_hosts`; the app only shows you what to add.
 
 **The host key of a build is trusted on first sight, if you take the app's
 suggestion.** `ssh` asks about an unknown host, and the daemon runs it with no
@@ -284,6 +336,7 @@ the user. Guards that can be absent without anyone noticing are not guards.
 | Actor | Can do | Cannot do |
 |---|---|---|
 | Anyone on `127.0.0.1` | Open sessions, run arbitrary code, read/write the database (after Commit) | Anything requiring network access to the daemon — there isn't any |
+| Whatever pastes a recipe into the form | Nothing: the form shows what the recipe means, and the grammar refuses what would act on this machine | Run a command locally through an ssh option, a quoted `;`, or `su`; weaken host key checking |
 | A web page in your browser, on any site | Nothing: a request from it names another `Host`, or carries another `Origin`, and is refused as `foreign_host` or `foreign_origin` — a socket at the handshake | Reach the API or the event streams, or make the daemon run a command through an `ssh` argument |
 | A browser tab that isn't a session's owner | Watch that session's output live | Type into it, commit, or grant itself commit rights |
 | An agent with a session of its own | Run code, rollback, read journals it can reach | Commit, without a human granting it first — a grant, or a handover to a human, made with its own key is refused as `needs_a_human`; act on a session it wasn't opened in or handed |

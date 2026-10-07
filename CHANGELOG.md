@@ -5,10 +5,17 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 1.9.0
+## [1.9.0] — 2026-10-07
 
-Built in steps; each step is a commit, and the version is cut when the last one
-lands. Breaking changes are here as they happen.
+An Odoo installed on a server becomes a third kind of target, written down on a
+card by whoever can log in; Odoo 13 and 14 open, with a warning. **Breaking:** an
+odoo.sh build is no longer named in the request that opens a session
+(`build`/`host`/`kind` are gone from `POST /api/sessions`; open a card by
+`target_id`), and `POST /api/probe/odoosh` is replaced by the admin-gated
+`POST /api/targets/probe`. Nothing is added to the MCP surface: an agent still
+never opens a remote target. Also in this release, from the 1.8.4 patch below: the
+daemon refuses a request not addressed to it, and a build or host that is not a
+name never reaches ssh.
 
 ### Remote instances are cards a human wrote down — **breaking**
 

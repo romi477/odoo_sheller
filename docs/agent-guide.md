@@ -298,12 +298,12 @@ warning, unrelated to odoo-sheller).
 ## Sessions it did not open
 
 A session may run somewhere other than a local container — on an odoo.sh
-build, reached over SSH. An agent never opens one of those, and the reason is
-worth being precise about: it is not a check, it is the absence of a
-parameter. `os_open_session` takes `container`, `database` and `odoo_bin`, and
-no host or build; so does `os_run_test`. There is no way for an agent to
-*name* a remote instance, staging or production, and nothing to forget to
-enforce. It reaches one only through a handover a human performed after
+build, or on a server with Odoo installed in the system, both reached over SSH.
+An agent never opens one of those, and the reason is worth being precise about:
+it is not a check, it is the absence of a parameter. `os_open_session` takes
+`container`, `database` and `odoo_bin`, and no host, build or card; so does
+`os_run_test`. There is no way for an agent to *name* a remote instance,
+staging or production, and nothing to forget to enforce. It reaches one only through a handover a human performed after
 looking at what the instance said it was.
 
 Reopening one is refused too: `os_open_session(replace=...)` on a session

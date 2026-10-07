@@ -86,7 +86,7 @@ no session on its own, so `healthy` means ready.
 ```json
 {
   "ok": true,
-  "version": "1.8.4",
+  "version": "1.9.0",
   "container": true,
   "mcp": {
     "command": "docker",
@@ -192,10 +192,13 @@ The full model is [security.md](security.md).
 
 ## What it cannot reach
 
-**odoo.sh builds.** The image has no `ssh` client and none of your keys, so a
-containerized daemon cannot open a session on a build: the probe answers that
-`ssh` is not installed where the daemon runs, and nothing is spawned. Open
-those from a natively installed daemon, or the desktop app.
+**odoo.sh builds, and servers over SSH.** The image has no `ssh` client and none of
+your keys, so a containerized daemon cannot open a session on a build or on a
+server: the probe answers that `ssh` is not installed where the daemon runs, and
+nothing is spawned. A card is written for the machine the daemon runs on — a key
+it names has to exist *there* — so a daemon in a container would need an `ssh`
+client, the key mounted read-only, and the host trusted from inside it; none of
+that is set up. Open those from a natively installed daemon, or the desktop app.
 
 ## Reaching it with an agent
 

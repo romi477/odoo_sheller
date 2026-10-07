@@ -56,7 +56,11 @@ the same HTTP/WS API — there must never be a second API.
 | `transport.py` | spawn process for a target, expose pipes, signal, kill |
 | `bootstrap.py` | the loop that runs *inside* the container |
 | `session.py` | one live session: state, request serialization, commit/rollback/close/interrupt |
-| `registry.py` | sessions by id |
+| `registry.py` | sessions by id; opens a remote target by the id of its card |
+| `targets.py` | the cards a human wrote down, in `~/.odoo-sheller/targets.json` |
+| `recipe.py` | the grammar of an ssh card's two fields — parsed, whitelisted, never run |
+| `names.py` | what may stand for a build or a host before ssh sees it |
+| `guard.py` | the daemon answers only requests addressed to this machine (Host, Origin) |
 | `journal.py` | append-only JSONL record of everything, per session |
 | `api.py` | HTTP + WebSocket |
 | `web/index.html` | UI, no build step (behavior spec: `docs/ui-guide.md`) |
@@ -182,11 +186,23 @@ starting ──(hello)──> ready ──(exec)──> busy ──(result)─�
 
 ## Target discovery
 
-Targets are discovered live, not configured. `docker ps` lists running
+Local targets are discovered live, not configured. `docker ps` lists running
 containers; a one-shot probe inside a chosen container reports odoo-bin path,
 Odoo version, Python version, config file location, and database list (via
 `psycopg2`, which any Odoo container has). Then the user picks a database and
 connects. Last used target is remembered in `localStorage`.
+
+Remote targets are *entered*, as cards a human wrote down, and kept by the
+daemon in `~/.odoo-sheller/targets.json`. An odoo.sh build is a build id and a
+host; a server reached over SSH is two fields — **Access**, how to arrive as the
+right user (`ssh -i KEY user@host sudo -n -u odoo -H`, a *prefix*), and
+**Launch**, what to run there (`/abs/python /abs/odoo-bin shell -c /abs/conf`) —
+plus an optional database and a stage the human declares (default `production`).
+`sudo` closes every fd above 2, so the script that does `exec 3<&0` runs
+*inside* the user switch. Both fields are data: tokenised, whitelisted
+(`recipe.py`), re-quoted token by token, never given to a local shell. A session
+opens a card by `target_id`; writing, changing, probing a card needs the admin
+key. Odoo 13 and 14 open with a warning and are not claimed.
 
 ## Journal
 
@@ -215,11 +231,12 @@ close / interrupt / kill, stderr panel, web UI.
 
 Out, deliberately deferred: outgoing HTTP tracing, `changed` record diffing,
 synchronous `with_delay` execution, live streaming of output while a command
-runs, and generic self-hosted Odoo over SSH — a plain box would need sudo,
-path discovery and a database list, which is a separate job from odoo.sh.
+runs, and Odoo in Docker on a remote server (an ssh card's Launch line could be
+`docker exec -i …`; nothing verifies it).
 
-Since shipped past the MVP line: the MCP server, and odoo.sh builds as a
-second kind of target.
+Since shipped past the MVP line: the MCP server; odoo.sh builds as a second kind
+of target; and an Odoo installed on a server, reached over SSH, as a third — a
+card a human writes, since a plain box cannot be discovered.
 
 ## Conventions
 
