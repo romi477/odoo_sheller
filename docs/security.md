@@ -132,11 +132,19 @@ wrong in both directions.
 instance is a fact rather than a guess. Three things follow, and they are the
 whole of the remote safety story:
 
-- **Only a human opens a remote target, from the UI.** This is enforced by
-  omission, not by a check: `os_open_session` takes a container, a database
-  and an odoo_bin, and no host or build. An agent has no way to *name* an
-  odoo.sh instance, staging or production, so it reaches one only through a
-  handover a human performed deliberately. A guard with nothing to forget.
+- **Only a human opens a remote target, from the UI.** Two things hold this.
+  `os_open_session` takes a container, a database and an odoo_bin, and no host,
+  build or card, so an agent using the tools has no way to *name* a remote
+  instance: it reaches one only through a handover a human performed
+  deliberately. And the daemon itself refuses `POST /api/sessions` that names a card
+  unless it came from the page it serves — a browser puts that page's `Origin` on it,
+  `curl`, `requests` and `httpx` put nothing — or carries the admin key
+  (`403 needs_a_human`). The person at the UI is the admin already and types
+  nothing. **What this is not:** a script can add that header. The daemon cannot
+  tell a person's click from a script that imitates one, so this closes the road an
+  agent takes without meaning to — `curl` with an id it read from the open list —
+  and not one it walks on purpose, which only a boundary outside the daemon (the
+  agent not being able to reach the port at all) would.
 - **On a remote target, commit is off for everyone until granted.** Locally a
   human owner may commit at will, because they confirm each one in the UI and
   the flag exists to gate an agent. Owning the session is not the same as
@@ -166,9 +174,11 @@ layer below is independent of the others:
 
 1. **The admin key** guards every card write, change, delete, probe and decode —
    the key is a file only your user reads, and a page in a browser cannot.
-   Reading the list needs none, and neither does opening a session on a card, so
-   the text of a card is not what stands between a local caller and the server;
-   the key is what stands between a caller and *making* a card.
+   Reading the list needs none, so the text of a card is not what stands between a
+   local caller and the server; the key is what stands between a caller and *making*
+   a card. Opening a session on one needs the page's `Origin` or the key (see the
+   first guard above): there the cost of a key is paid on every open, by the person
+   it is meant not to stop.
 2. **A grammar, not a blacklist** (`recipe.py`). Access is `ssh`, a short list of
    options (`-i -p -l -J`, and `-o` with `Port IdentityFile User ProxyJump
    ConnectTimeout IdentitiesOnly`), a destination of letters, digits, `.`, `_` and

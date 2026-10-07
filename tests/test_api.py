@@ -1355,7 +1355,7 @@ def test_opening_a_card_that_no_longer_parses_is_422_with_the_field(client):
         raise RecipeError("key file /k/key.pem does not exist, or is not a file", field="access")
 
     client.registry.open = refuse
-    response = client.post("/api/sessions", json={"target_id": "ssh-1"})
+    response = client.post("/api/sessions", json={"target_id": "ssh-1"}, headers=ADMIN)
     assert response.status_code == 422
     assert response.json()["detail"]["field"] == "access"
 
@@ -1364,9 +1364,99 @@ def test_opening_a_card_that_no_longer_parses_is_422_with_the_field(client):
 
 
 def test_open_forwards_a_card_by_its_id(client):
-    response = client.post("/api/sessions", json={"target_id": "odoosh-36887345"})
+    response = client.post(
+        "/api/sessions", json={"target_id": "odoosh-36887345"}, headers=ADMIN
+    )
     assert response.status_code == 200
     assert client.registry.open_kwargs["target_id"] == "odoosh-36887345"
+
+
+# --- only a human opens a remote target, and the daemon is what says so ------------
+#
+# The daemon cannot tell a person's click from a script that imitates one, and a
+# key the person has to type is a cost on every open, for the one person it is
+# meant not to stop. What it can tell is whether a request came from the page it
+# serves: a browser puts that page's Origin on every POST, and `curl`, `requests`
+# and `httpx` put nothing. So a remote target opens for the page, or for the admin
+# key, and not for a bare request.
+
+PAGE = {"Origin": LOCAL}
+
+
+def test_a_bare_request_cannot_open_a_remote_target(client):
+    """It used to hold by omission: no MCP tool takes a card. That stops an agent
+    that uses the tools and nothing that can reach the port — `curl` to
+    127.0.0.1 with an id read from the open list would have opened a production
+    server."""
+    response = client.post("/api/sessions", json={"target_id": "ssh-1"})
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["error"] == "needs_a_human"
+    assert "remote" in detail["act"]
+    assert "Grant access" in detail["recovery"], "and it says what a human does, and what to do next"
+    assert not hasattr(client.registry, "open_kwargs"), "nothing was asked of the registry"
+
+
+def test_the_page_opens_a_remote_target_with_no_key(client):
+    """The person at the UI is the admin already, and is not asked to prove it."""
+    response = client.post("/api/sessions", json={"target_id": "ssh-1"}, headers=PAGE)
+    assert response.status_code == 200
+    assert client.registry.open_kwargs["target_id"] == "ssh-1"
+
+
+def test_the_admin_key_opens_it_too(client):
+    response = client.post("/api/sessions", json={"target_id": "ssh-1"}, headers=ADMIN)
+    assert response.status_code == 200
+
+
+def test_a_wrong_admin_key_is_no_better_than_none(client):
+    response = client.post(
+        "/api/sessions", json={"target_id": "ssh-1"}, headers={"X-OS-Admin-Key": "nope"}
+    )
+    assert response.status_code == 403
+    assert not hasattr(client.registry, "open_kwargs")
+
+
+def test_a_session_key_is_not_a_page(client):
+    """The agent that was handed a session holds a write key. It is not this."""
+    response = client.post(
+        "/api/sessions",
+        json={"target_id": "ssh-1"},
+        headers={"X-OS-Session-Key": OWNER_KEY},
+    )
+    assert response.status_code == 403
+    assert not hasattr(client.registry, "open_kwargs")
+
+
+def test_a_local_container_still_opens_without_either(client):
+    """The line is *remote*: a container on this machine is yours, and an agent
+    opens its own through the tool."""
+    response = client.post(
+        "/api/sessions", json={"container": "c", "database": "db", "odoo_bin": "/b"}
+    )
+    assert response.status_code == 200
+    assert client.registry.open_kwargs["target_id"] is None
+
+
+def test_the_refusal_comes_before_anything_about_the_card_is_looked_up(client):
+    """A refused caller learns nothing — not even that the card exists."""
+    async def would_say(**kwargs):
+        raise KeyError("no target 'ssh-1'")
+
+    client.registry.open = would_say
+    response = client.post("/api/sessions", json={"target_id": "ssh-1"})
+    assert response.status_code == 403
+
+
+def test_a_foreign_origin_is_not_the_page(client):
+    """The guard answers for that first: an Origin that is not this daemon's own
+    never reaches the route, so naming one does not open anything."""
+    response = client.post(
+        "/api/sessions", json={"target_id": "ssh-1"}, headers={"Origin": "http://evil.example"}
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "foreign_origin"
+    assert not hasattr(client.registry, "open_kwargs")
 
 
 def test_a_build_and_a_host_are_no_longer_an_open_body(client):
@@ -1387,7 +1477,7 @@ def test_opening_a_card_nobody_wrote_is_404(client):
         raise KeyError("no target 'odoosh-9'")
 
     client.registry.open = missing
-    response = client.post("/api/sessions", json={"target_id": "odoosh-9"})
+    response = client.post("/api/sessions", json={"target_id": "odoosh-9"}, headers=ADMIN)
     assert response.status_code == 404
     assert "odoosh-9" in str(response.json()["detail"])
 
@@ -1397,7 +1487,7 @@ def test_opening_an_unusable_build_is_422_not_500(client):
         raise ValueError("Odoo 17.0 found; only 19 is supported")
 
     client.registry.open = refuse
-    response = client.post("/api/sessions", json={"target_id": "odoosh-1"})
+    response = client.post("/api/sessions", json={"target_id": "odoosh-1"}, headers=ADMIN)
     assert response.status_code == 422
     assert "17.0" in str(response.json()["detail"])
 

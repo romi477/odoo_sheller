@@ -695,7 +695,38 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         }
 
     @app.post("/api/sessions")
-    async def open_session(body: OpenBody, x_os_admin_key: str | None = Header(None)):
+    async def open_session(
+        body: OpenBody,
+        x_os_admin_key: str | None = Header(None),
+        origin: str | None = Header(None),
+    ):
+        if body.target_id and not (origin or is_admin(x_os_admin_key)):
+            # Only a human opens a remote target. That used to hold by omission —
+            # no MCP tool takes a card — which stops an agent that uses the tools
+            # and nothing that can simply reach the port.
+            #
+            # The daemon cannot tell a person's click from a script that imitates
+            # one, and a key the person must type is a cost on every open, for the
+            # one person it is meant not to stop. What it can tell is whether the
+            # request came from the page it serves: a browser puts that page's
+            # Origin on every POST (and `guard.py` has already refused any Origin
+            # that is not this daemon's own), where `curl`, `requests` and `httpx`
+            # put nothing. A script can add the header; this closes the road an
+            # agent takes without meaning to, not one it walks on purpose.
+            #
+            # Refused before the card is looked up: a caller without either learns
+            # nothing, not even that the card exists.
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "needs_a_human",
+                    "act": "open a session on a remote target",
+                    "recovery": (
+                        "a human opens it from the UI and hands it over with Grant "
+                        "access; attach to it with os_attach_session"
+                    ),
+                },
+            )
         if (
             body.allow_commit
             and body.owner is not None

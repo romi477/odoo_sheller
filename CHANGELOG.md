@@ -39,6 +39,21 @@ the browser had kept to the daemon, once, when the odoo.sh list is first
 opened. A card that has not been probed since the page loaded can still be
 opened: the daemon asks the instance on the way in and refuses there if it must.
 
+### Only a human opens a remote target — and the daemon says so
+
+Until now this held by omission: no MCP tool takes a host, a build or a card. That
+stops an agent that uses the tools and nothing that can reach the port — `curl` to
+`127.0.0.1` with a card id read from the open list would have opened a production
+server. `POST /api/sessions` that names a card (`target_id`) is now `403 needs_a_human`
+unless the request came from the page the daemon serves — a browser puts that page's
+`Origin` on it, which the Host/Origin guard has already checked is the daemon's own —
+or carries the admin key. The person at the UI is the admin already and types nothing;
+a bare `curl`, `requests` or `httpx` puts no `Origin` and is refused before the card is
+looked up, so it learns nothing, not even that the card exists. A local container still
+opens without either. This is not a boundary against a script that adds the header: the
+daemon cannot tell a person's click from one that imitates it (`docs/security.md` says
+what would).
+
 ### An Odoo installed on a server, reached by ssh
 
 A third kind of target next to a local container and an odoo.sh build: an Odoo

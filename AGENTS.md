@@ -276,8 +276,9 @@ Rollback is the default everywhere; commit is always an explicit, confirmed act.
   be reviewed before being shared.
 - Production guards exist only where the target says what it is. A local
   database is never guessed at. An odoo.sh build reports `$ODOO_STAGE`, so
-  there: only a human opens a remote target (enforced by omission — no MCP
-  tool takes a host or a build), commit is off until granted even for a human
+  there: only a human opens a remote target (no MCP tool takes a host, a build or
+  a card, and the daemon refuses an open that does not come from its own page —
+  a bare `curl` — unless it carries the admin key), commit is off until granted even for a human
   owner, and on `production` it is refused outright, as `commit_forbidden`.
   A remote session's journal holding that instance's data was weighed and
   accepted; see `docs/security.md`.

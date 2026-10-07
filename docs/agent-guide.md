@@ -300,11 +300,14 @@ warning, unrelated to odoo-sheller).
 A session may run somewhere other than a local container — on an odoo.sh
 build, or on a server with Odoo installed in the system, both reached over SSH.
 An agent never opens one of those, and the reason is worth being precise about:
-it is not a check, it is the absence of a parameter. `os_open_session` takes
-`container`, `database` and `odoo_bin`, and no host, build or card; so does
-`os_run_test`. There is no way for an agent to *name* a remote instance,
-staging or production, and nothing to forget to enforce. It reaches one only through a handover a human performed after
-looking at what the instance said it was.
+it is first the absence of a parameter. `os_open_session` takes `container`,
+`database` and `odoo_bin`, and no host, build or card; so does `os_run_test`. There
+is no way for an agent to *name* a remote instance, staging or production, and
+nothing to forget to enforce. The daemon adds a second refusal for the agent that
+goes around the tools: `POST /api/sessions` with a card is `403 needs_a_human`
+unless it comes from the UI's own page or carries the admin key, which the agent does
+not have and must not read. It reaches a remote instance only through a handover a
+human performed after looking at what the instance said it was.
 
 Reopening one is refused too: `os_open_session(replace=...)` on a session
 that ran remotely says so in as many words. It used to fail with "container,
