@@ -3110,50 +3110,63 @@ def test_each_saved_list_counts_its_cards_and_the_composer_says_when_it_edits(ap
     assert "'.composer'" in app_js and "classList.toggle('editing'" in app_js
 
 
-# --- the server form folds away --------------------------------------------------------
+# --- the forms fold away ---------------------------------------------------------------
+
+FOLDING = [("ssh", "osComposerCollapsed"), ("odoosh", "osComposerOdooshCollapsed")]
 
 
-def _ssh_composer() -> str:
+def _composer(mode: str) -> str:
     page = _page()
     block = re.search(
-        r'<section class="composer[^"]*"[^>]*aria-labelledby="ssh-composer-title"[^>]*>(.*?)</section>',
+        rf'<section class="composer[^"]*"[^>]*aria-labelledby="{mode}-composer-title"[^>]*>(.*?)</section>',
         page, re.DOTALL,
     )
-    assert block is not None
+    assert block is not None, mode
 
     return block.group(1)
 
 
-def test_the_server_form_has_a_header_that_is_a_button_with_an_arrow():
+@pytest.mark.parametrize("mode", [mode for mode, _ in FOLDING])
+def test_a_form_has_a_header_that_is_a_button_with_an_arrow(mode):
     """The title is the control: a button, so the keyboard has it too, and an
     arrow that says which way it will go."""
-    composer = _ssh_composer()
+    composer = _composer(mode)
     toggle = re.search(r'<button[^>]*class="region-toggle"[^>]*>(.*?)</button>', composer, re.DOTALL)
     assert toggle is not None
     opening = re.search(r'<button[^>]*class="region-toggle"[^>]*>', composer).group(0)
     assert 'type="button"' in opening, "it must not submit the form"
     assert 'aria-expanded="false"' in opening, "it is folded until someone opens it"
-    assert 'aria-controls="ssh-composer-body"' in opening
+    assert f'aria-controls="{mode}-composer-body"' in opening
     assert 'title="Expand"' in opening
     assert 'class="chevron"' in toggle.group(1) and 'aria-hidden="true"' in toggle.group(1)
-    assert 'id="ssh-composer-title"' in toggle.group(1), "the title stays inside the button"
+    assert f'id="{mode}-composer-title"' in toggle.group(1), "the title stays inside the button"
     heading = re.search(r'<h2 class="region-title"[^>]*>(.*?)</h2>', composer, re.DOTALL)
     assert heading is not None and "region-toggle" in heading.group(1)
 
 
-def test_the_form_and_its_note_are_the_part_that_folds():
-    composer = _ssh_composer()
+@pytest.mark.parametrize("mode", [mode for mode, _ in FOLDING])
+def test_the_form_and_its_note_are_the_part_that_folds(mode):
+    composer = _composer(mode)
     body = re.search(
-        r'<div class="composer-body" id="ssh-composer-body" hidden>(.*)</div>\s*$',
+        rf'<div class="composer-body" id="{mode}-composer-body" hidden>(.*)</div>\s*$',
         composer, re.DOTALL,
     )
     assert body is not None, "the page is served folded, so there is no flash of an open form"
-    assert '<form class="ssh-form"' in body.group(1)
     assert 'class="odoosh-note"' in body.group(1)
     assert "region-title" not in body.group(1), "the header stays when the rest folds"
+    page = _page()
+    assert re.search(rf'<section class="composer collapsed"[^>]*{mode}-composer-title', page)
 
 
-def test_folding_the_form_is_remembered_and_editing_unfolds_it(app_js):
+def test_each_form_keeps_its_own_choice_and_the_server_form_keeps_the_key_it_always_had(app_js):
+    table = re.search(r"const COMPOSERS = \{(.*?)\n\};", app_js, re.DOTALL)
+    assert table is not None
+    for mode, key in FOLDING:
+        entry = re.search(rf"{mode}: \{{root: '#{mode}', stored: '{key}'\}}", table.group(1))
+        assert entry is not None, mode
+
+
+def test_folding_a_form_is_remembered_and_editing_a_card_unfolds_the_server_form(app_js):
     fold = re.search(r"function setComposerCollapsed\(.*?\n\}", app_js, re.DOTALL)
     assert fold is not None
     body = fold.group(0)
@@ -3161,21 +3174,26 @@ def test_folding_the_form_is_remembered_and_editing_unfolds_it(app_js):
     assert "aria-expanded" in body
     assert "classList.toggle('collapsed'" in body
     assert "'Expand'" in body and "'Collapse'" in body, "the tooltip says what a click does"
-    assert "localStorage.setItem('osComposerCollapsed'" in body
+    assert "localStorage.setItem(COMPOSERS[mode].stored" in body
     assert "try {" in body, "a page that cannot store still folds"
-    assert "localStorage.getItem('osComposerCollapsed')" in app_js
     edit = re.search(r"function editServer\(.*?\n\}", app_js, re.DOTALL)
     assert edit is not None
-    assert "setComposerCollapsed(false, false)" in edit.group(0), (
+    assert "setComposerCollapsed('ssh', false, false)" in edit.group(0), (
         "changing a card in a folded form would otherwise change nothing anyone can see — "
         "and must not overwrite what the person chose"
     )
     reset = re.search(r"function resetServerForm\(.*?\n\}", app_js, re.DOTALL)
     assert reset is not None
-    assert "setComposerCollapsed(composerWasCollapsed(), false)" in reset.group(0), (
+    assert "setComposerCollapsed('ssh', composerWasCollapsed('ssh'), false)" in reset.group(0), (
         "once the change is saved or dropped the form goes back to how it was left"
     )
-    assert ".region-toggle" in app_js and "addEventListener('click'" in app_js
+
+
+def test_every_form_that_folds_is_bound_and_starts_in_its_remembered_state(app_js):
+    init = re.search(r"Object\.keys\(COMPOSERS\)\.forEach\(\(mode\) => \{(.*?)\n\}\);", app_js, re.DOTALL)
+    assert init is not None
+    assert "'.region-toggle'" in init.group(1) and "addEventListener('click'" in init.group(1)
+    assert "setComposerCollapsed(mode, composerWasCollapsed(mode), false)" in init.group(1)
 
 
 def test_the_fold_arrow_turns_and_the_header_has_no_button_chrome():
@@ -3194,19 +3212,18 @@ def test_the_fold_arrow_turns_and_the_header_has_no_button_chrome():
     )
 
 
-def test_the_server_form_is_folded_by_default_and_open_only_when_the_person_opened_it(app_js):
+def test_a_form_is_folded_by_default_and_open_only_when_the_person_opened_it(app_js):
     """Most visits are to open a card that is already written, not to write one.
     Only an explicit choice to leave it open (`0`) is respected; no choice, or a
     page that cannot remember one, is folded."""
-    page = _page()
-    assert re.search(r'<section class="composer collapsed"[^>]*ssh-composer-title', page)
-    fold = re.search(r"function composerWasCollapsed\(\) \{.*?\n\}", app_js, re.DOTALL)
+    fold = re.search(r"function composerWasCollapsed\(mode\) \{.*?\n\}", app_js, re.DOTALL)
     assert fold is not None
     body = fold.group(0)
-    assert "!== '0'" in body
+    assert "COMPOSERS[mode].stored) !== '0'" in body
     assert "return true" in body, "a page that cannot read its storage is folded too"
     assert "=== '1'" not in body
 
 
-def test_an_empty_server_list_points_at_the_folded_form(app_js):
+def test_an_empty_list_points_at_the_folded_form_above_it(app_js):
     assert "empty: 'No servers yet. Open New server above and write one.'" in app_js
+    assert "empty: 'No builds yet. Open Add a build above and enter one.'" in app_js

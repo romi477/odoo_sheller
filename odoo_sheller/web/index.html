@@ -58,14 +58,18 @@
       </header>
       <ul id="containers"></ul>
       <div id="odoosh" hidden>
-        <section class="composer" aria-labelledby="odoosh-composer-title">
-          <h2 class="region-title" id="odoosh-composer-title">Add a build</h2>
-          <div class="odoosh-form">
-            <input class="odoosh-build mono" placeholder="build id" title="The numeric build id, which is also the SSH user — odoo.sh shows it beside the build.">
-            <input class="odoosh-host mono" placeholder="build hostname" title="The hostname the build's UI is served on. Together with the build id this is the SSH destination.">
-            <button class="odoosh-add" title="Ask the build what it is: database, Odoo version, and whether it is staging or production. Nothing is opened yet.">Probe</button>
+        <section class="composer collapsed" aria-labelledby="odoosh-composer-title">
+          <h2 class="region-title">
+            <button type="button" class="region-toggle" aria-expanded="false" aria-controls="odoosh-composer-body" title="Expand"><span class="chevron" aria-hidden="true"></span><span id="odoosh-composer-title">Add a build</span></button>
+          </h2>
+          <div class="composer-body" id="odoosh-composer-body" hidden>
+            <div class="odoosh-form">
+              <input class="odoosh-build mono" placeholder="build id" title="The numeric build id, which is also the SSH user — odoo.sh shows it beside the build.">
+              <input class="odoosh-host mono" placeholder="build hostname" title="The hostname the build's UI is served on. Together with the build id this is the SSH destination.">
+              <button class="odoosh-add" title="Ask the build what it is: database, Odoo version, and whether it is staging or production. Nothing is opened yet.">Probe</button>
+            </div>
+            <p class="odoosh-note">A build is entered, not discovered — there is no listing for odoo.sh. Probing only reads what the instance says about itself.</p>
           </div>
-          <p class="odoosh-note">A build is entered, not discovered — there is no listing for odoo.sh. Probing only reads what the instance says about itself.</p>
         </section>
         <section class="saved" aria-labelledby="odoosh-saved-title">
           <h2 class="region-title" id="odoosh-saved-title">Saved builds <span class="count" id="odoosh-count"></span></h2>

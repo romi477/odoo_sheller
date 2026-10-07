@@ -167,8 +167,8 @@ draw from one function. Everything a card says is set as text, never as markup.
 On the odoo.sh and server screens the form and the saved cards are two regions:
 the form is a dashed panel under its own title (it turns amber and says *Editing
 ‹name›* when a card is changed), and the cards sit under *Saved servers · N* with
-a rule. The server form is folded to its title, with an arrow, until someone opens it, and
-the choice is kept.
+a rule. Both forms are folded to their title, with an arrow, until someone opens them, and
+each keeps its own choice.
 A card under the pointer is outlined in the brand cyan.
 
 ## [1.8.4] — 2026-10-07

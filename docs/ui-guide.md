@@ -47,13 +47,14 @@ says *Editing ‹name›*. Under it, headed by a rule, are the **saved cards** �
 title with a count (*Saved servers · 2*) and the cards themselves. A card under
 the pointer is outlined in the brand cyan, on every screen.
 
-The server form folds: its title is a button with an arrow — down while the form is
-open, right once it is folded — and a click on it folds the form to that title, or
-opens it again. It is **folded until someone opens it**, since most visits are to
-open a card already written; a form left open stays open on the next visit, and a
-page that cannot keep the choice stays folded. A draft written in it survives being
-folded. Changing a card opens the form for as long as it takes, and when the change
-is saved or dropped the form goes back to how it was left.
+Both forms fold. A form's title is a button with an arrow — down while the form
+is open, right once it is folded — and a click on it folds the form to that title,
+or opens it again. They are **folded until someone opens them**, since most visits
+are to open a card already written; a form left open stays open on the next visit
+(each remembers its own choice), and a page that cannot keep the choice stays
+folded. A draft written in one survives being folded. Changing a card opens the
+server form for as long as it takes, and when the change is saved or dropped the
+form goes back to how it was left.
 
 ### Local
 

@@ -869,24 +869,30 @@ function composerEditing(name) {
   );
 }
 
-// The form folds to its header, and is folded until someone opens it: most
-// visits are to open a card that is already written, and a form a screen tall
-// above the cards is in the way of that. Only an explicit choice to leave it
-// open is respected; a page that cannot keep a choice stays folded. Changing a
-// card unfolds the form for as long as it takes, and does not overwrite the
-// choice.
-function composerWasCollapsed() {
+// The forms fold to their header, and are folded until someone opens them: most
+// visits are to open a card that is already written, and a form above the
+// cards is in the way of that. Each remembers its own choice — the server
+// form under the key it has always used. Only an explicit choice to leave a
+// form open is respected; a page that cannot keep a choice stays folded.
+// Changing a card unfolds the server form for as long as it takes, and does
+// not overwrite the choice.
+const COMPOSERS = {
+  odoosh: {root: '#odoosh', stored: 'osComposerOdooshCollapsed'},
+  ssh: {root: '#ssh', stored: 'osComposerCollapsed'},
+};
+
+function composerWasCollapsed(mode) {
   try {
 
-    return localStorage.getItem('osComposerCollapsed') !== '0';
+    return localStorage.getItem(COMPOSERS[mode].stored) !== '0';
   } catch (_error) {
 
     return true;
   }
 }
 
-function setComposerCollapsed(collapsed, remember = true) {
-  const composer = document.querySelector('#ssh').querySelector('.composer');
+function setComposerCollapsed(mode, collapsed, remember = true) {
+  const composer = document.querySelector(COMPOSERS[mode].root).querySelector('.composer');
   const toggle = composer.querySelector('.region-toggle');
   composer.querySelector('.composer-body').hidden = collapsed;
   composer.classList.toggle('collapsed', collapsed);
@@ -894,7 +900,7 @@ function setComposerCollapsed(collapsed, remember = true) {
   toggle.title = collapsed ? 'Expand' : 'Collapse';
   if (remember) {
     try {
-      localStorage.setItem('osComposerCollapsed', collapsed ? '1' : '0');
+      localStorage.setItem(COMPOSERS[mode].stored, collapsed ? '1' : '0');
     } catch (_error) {
       // Nothing to keep it in; the fold itself already happened.
     }
@@ -905,7 +911,7 @@ function resetServerForm() {
   const form = serverFormElement();
   state.serverEditing = null;
   composerEditing(null);
-  setComposerCollapsed(composerWasCollapsed(), false);
+  setComposerCollapsed('ssh', composerWasCollapsed('ssh'), false);
   form.querySelector('.ssh-name').value = '';
   form.querySelector('.ssh-access').value = '';
   form.querySelector('.ssh-launch').value = '';
@@ -925,7 +931,7 @@ function editServer(entry) {
   state.serverEditing = entry.id;
   composerEditing(entry.name);
   // A change made in a folded form would be one nobody can see.
-  setComposerCollapsed(false, false);
+  setComposerCollapsed('ssh', false, false);
   form.querySelector('.ssh-name').value = entry.name;
   form.querySelector('.ssh-access').value = entry.access;
   form.querySelector('.ssh-launch').value = entry.launch;
@@ -1157,7 +1163,7 @@ const REMOTE_KINDS = {
     noun: 'build',
     entries: () => state.builds,
     error: () => state.buildsError,
-    empty: 'No builds yet. Enter one above.',
+    empty: 'No builds yet. Open Add a build above and enter one.',
     probing: 'probing build…',
     // The instance says what it is.
     stage: (entry, probe) => probe.stage,
@@ -4119,14 +4125,14 @@ document.querySelectorAll('#connect-modes [data-connect-mode]').forEach((button)
   form.querySelector('.ssh-probe').addEventListener('click', probeServerForm);
   form.querySelector('.ssh-save').addEventListener('click', saveServerForm);
   form.querySelector('.ssh-cancel').addEventListener('click', resetServerForm);
-  document.querySelector('#ssh').querySelector('.region-toggle').addEventListener(
-    'click',
-    () => setComposerCollapsed(
-      !document.querySelector('#ssh').querySelector('.composer').classList.contains('collapsed'),
-    ),
-  );
-  setComposerCollapsed(composerWasCollapsed(), false);
 }
+Object.keys(COMPOSERS).forEach((mode) => {
+  const root = document.querySelector(COMPOSERS[mode].root);
+  root.querySelector('.region-toggle').addEventListener('click', () => {
+    setComposerCollapsed(mode, !root.querySelector('.composer').classList.contains('collapsed'));
+  });
+  setComposerCollapsed(mode, composerWasCollapsed(mode), false);
+});
 document.querySelector('.odoosh-add').addEventListener('click', () => {
   const build = document.querySelector('.odoosh-build').value.trim();
   const host = document.querySelector('.odoosh-host').value.trim();
