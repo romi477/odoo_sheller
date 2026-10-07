@@ -164,6 +164,12 @@ probed — and one whose key file has gone says so and stays listed, to be edite
 its stage, and an *untested* badge for 13 and 14. The two kinds of remote card now
 draw from one function. Everything a card says is set as text, never as markup.
 
+On the odoo.sh and server screens the form and the saved cards are two regions:
+the form is a dashed panel under its own title (it turns amber and says *Editing
+‹name›* when a card is changed), and the cards sit under *Saved servers · N* with
+a rule. The server form folds to its title, with an arrow, and the choice is kept.
+A card under the pointer is outlined in the brand cyan.
+
 ## [1.8.4] — 2026-10-07
 
 ### The daemon answers only requests addressed to this machine

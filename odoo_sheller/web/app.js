@@ -869,10 +869,41 @@ function composerEditing(name) {
   );
 }
 
+// The form folds to its header: someone whose cards are all written has no use
+// for a form a screen tall above them. The choice is theirs and is kept, but a
+// page that cannot keep it still folds. Changing a card unfolds the form for
+// as long as it takes, and does not overwrite the choice.
+function composerWasCollapsed() {
+  try {
+
+    return localStorage.getItem('osComposerCollapsed') === '1';
+  } catch (_error) {
+
+    return false;
+  }
+}
+
+function setComposerCollapsed(collapsed, remember = true) {
+  const composer = document.querySelector('#ssh').querySelector('.composer');
+  const toggle = composer.querySelector('.region-toggle');
+  composer.querySelector('.composer-body').hidden = collapsed;
+  composer.classList.toggle('collapsed', collapsed);
+  toggle.setAttribute('aria-expanded', String(!collapsed));
+  toggle.title = collapsed ? 'Expand' : 'Collapse';
+  if (remember) {
+    try {
+      localStorage.setItem('osComposerCollapsed', collapsed ? '1' : '0');
+    } catch (_error) {
+      // Nothing to keep it in; the fold itself already happened.
+    }
+  }
+}
+
 function resetServerForm() {
   const form = serverFormElement();
   state.serverEditing = null;
   composerEditing(null);
+  setComposerCollapsed(composerWasCollapsed(), false);
   form.querySelector('.ssh-name').value = '';
   form.querySelector('.ssh-access').value = '';
   form.querySelector('.ssh-launch').value = '';
@@ -891,6 +922,8 @@ function editServer(entry) {
   resetServerForm();
   state.serverEditing = entry.id;
   composerEditing(entry.name);
+  // A change made in a folded form would be one nobody can see.
+  setComposerCollapsed(false, false);
   form.querySelector('.ssh-name').value = entry.name;
   form.querySelector('.ssh-access').value = entry.access;
   form.querySelector('.ssh-launch').value = entry.launch;
@@ -4084,6 +4117,13 @@ document.querySelectorAll('#connect-modes [data-connect-mode]').forEach((button)
   form.querySelector('.ssh-probe').addEventListener('click', probeServerForm);
   form.querySelector('.ssh-save').addEventListener('click', saveServerForm);
   form.querySelector('.ssh-cancel').addEventListener('click', resetServerForm);
+  document.querySelector('#ssh').querySelector('.region-toggle').addEventListener(
+    'click',
+    () => setComposerCollapsed(
+      !document.querySelector('#ssh').querySelector('.composer').classList.contains('collapsed'),
+    ),
+  );
+  setComposerCollapsed(composerWasCollapsed(), false);
 }
 document.querySelector('.odoosh-add').addEventListener('click', () => {
   const build = document.querySelector('.odoosh-build').value.trim();

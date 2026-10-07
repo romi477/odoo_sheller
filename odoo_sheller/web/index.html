@@ -74,52 +74,56 @@
       </div>
       <div id="ssh" hidden>
         <section class="composer" aria-labelledby="ssh-composer-title">
-          <h2 class="region-title" id="ssh-composer-title">New server</h2>
-          <form class="ssh-form" autocomplete="off" novalidate>
-            <label class="ssh-field">
-              <span class="ssh-label">Name</span>
-              <input class="ssh-name" placeholder="acme production" maxlength="60" spellcheck="false"
-                     title="What this card is called. It is also what the sessions on it are called.">
-              <p class="field-error" data-field="name" hidden></p>
-            </label>
-            <label class="ssh-field">
-              <span class="ssh-label">Access</span>
-              <input class="ssh-access mono" placeholder="ssh -i ~/.ssh/server.pem ubuntu@host sudo -n -u odoo -H" spellcheck="false"
-                     title="How to arrive as the user Odoo runs as. Not a command on its own: what to run goes after it, in Launch. Steps typed one after another into a terminal (ssh, sudo su, su odoo) become one line: ssh … sudo -n -u odoo -H.">
-              <p class="field-error" data-field="access" hidden></p>
-            </label>
-            <label class="ssh-field">
-              <span class="ssh-label">Launch</span>
-              <input class="ssh-launch mono" placeholder="/opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf --no-http" spellcheck="false"
-                     title="What to run once there: the absolute path of the interpreter and of odoo-bin, then shell and whatever options the server needs. It is run exactly as written. Add --no-http: a server whose config has workers above 0 makes the shell bind its HTTP port, and fails beside the running service with 'Address already in use'.">
-              <p class="field-error" data-field="launch" hidden></p>
-            </label>
-            <div class="ssh-row">
-              <label class="ssh-field ssh-database-field">
-                <span class="ssh-label">Database <span class="optional">optional</span></span>
-                <input class="ssh-database mono" placeholder="the server's own default" spellcheck="false"
-                       title="Appended to Launch as -d. Leave it empty and the instance's own db_name decides — write it in one place, not both.">
-                <p class="field-error" data-field="database" hidden></p>
+          <h2 class="region-title">
+            <button type="button" class="region-toggle" aria-expanded="true" aria-controls="ssh-composer-body" title="Collapse"><span class="chevron" aria-hidden="true"></span><span id="ssh-composer-title">New server</span></button>
+          </h2>
+          <div class="composer-body" id="ssh-composer-body">
+            <form class="ssh-form" autocomplete="off" novalidate>
+              <label class="ssh-field">
+                <span class="ssh-label">Name</span>
+                <input class="ssh-name" placeholder="acme production" maxlength="60" spellcheck="false"
+                       title="What this card is called. It is also what the sessions on it are called.">
+                <p class="field-error" data-field="name" hidden></p>
               </label>
-              <label class="ssh-field ssh-stage-field">
-                <span class="ssh-label">Stage</span>
-                <select class="ssh-stage"
-                        title="Nothing on a plain server says what it is, so you do. Production refuses a commit outright; staging and development are closed to commit until you grant it.">
-                  <option value="production" selected>production — commit refused</option>
-                  <option value="staging">staging — commit off until granted</option>
-                  <option value="development">development — commit off until granted</option>
-                </select>
+              <label class="ssh-field">
+                <span class="ssh-label">Access</span>
+                <input class="ssh-access mono" placeholder="ssh -i ~/.ssh/server.pem ubuntu@host sudo -n -u odoo -H" spellcheck="false"
+                       title="How to arrive as the user Odoo runs as. Not a command on its own: what to run goes after it, in Launch. Steps typed one after another into a terminal (ssh, sudo su, su odoo) become one line: ssh … sudo -n -u odoo -H.">
+                <p class="field-error" data-field="access" hidden></p>
               </label>
-            </div>
-            <div class="ssh-breakdown" aria-live="polite"></div>
-            <div class="ssh-probe-result probe-note" aria-live="polite" hidden></div>
-            <div class="ssh-actions">
-              <button type="button" class="ssh-probe" title="Run the recipe once to see who it lands as, where, and which Odoo. Nothing is started and no database is touched.">Probe</button>
-              <button type="button" class="ssh-save primary" title="Write this card down.">Save</button>
-              <button type="button" class="ssh-cancel" hidden>Cancel</button>
-            </div>
-          </form>
-          <p class="odoosh-note">A server is written down by whoever can log in: <b>Access</b> is how to arrive as the right user, <b>Launch</b> is what to run once there. Access is a prefix — it ends where a command may follow, which is why steps become one line. Both are read as data and never run on this machine; an unknown host key is refused until you trust it once from a terminal.</p>
+              <label class="ssh-field">
+                <span class="ssh-label">Launch</span>
+                <input class="ssh-launch mono" placeholder="/opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf --no-http" spellcheck="false"
+                       title="What to run once there: the absolute path of the interpreter and of odoo-bin, then shell and whatever options the server needs. It is run exactly as written. Add --no-http: a server whose config has workers above 0 makes the shell bind its HTTP port, and fails beside the running service with 'Address already in use'.">
+                <p class="field-error" data-field="launch" hidden></p>
+              </label>
+              <div class="ssh-row">
+                <label class="ssh-field ssh-database-field">
+                  <span class="ssh-label">Database <span class="optional">optional</span></span>
+                  <input class="ssh-database mono" placeholder="the server's own default" spellcheck="false"
+                         title="Appended to Launch as -d. Leave it empty and the instance's own db_name decides — write it in one place, not both.">
+                  <p class="field-error" data-field="database" hidden></p>
+                </label>
+                <label class="ssh-field ssh-stage-field">
+                  <span class="ssh-label">Stage</span>
+                  <select class="ssh-stage"
+                          title="Nothing on a plain server says what it is, so you do. Production refuses a commit outright; staging and development are closed to commit until you grant it.">
+                    <option value="production" selected>production — commit refused</option>
+                    <option value="staging">staging — commit off until granted</option>
+                    <option value="development">development — commit off until granted</option>
+                  </select>
+                </label>
+              </div>
+              <div class="ssh-breakdown" aria-live="polite"></div>
+              <div class="ssh-probe-result probe-note" aria-live="polite" hidden></div>
+              <div class="ssh-actions">
+                <button type="button" class="ssh-probe" title="Run the recipe once to see who it lands as, where, and which Odoo. Nothing is started and no database is touched.">Probe</button>
+                <button type="button" class="ssh-save primary" title="Write this card down.">Save</button>
+                <button type="button" class="ssh-cancel" hidden>Cancel</button>
+              </div>
+            </form>
+            <p class="odoosh-note">A server is written down by whoever can log in: <b>Access</b> is how to arrive as the right user, <b>Launch</b> is what to run once there. Access is a prefix — it ends where a command may follow, which is why steps become one line. Both are read as data and never run on this machine; an unknown host key is refused until you trust it once from a terminal.</p>
+          </div>
         </section>
         <section class="saved" aria-labelledby="ssh-saved-title">
           <h2 class="region-title" id="ssh-saved-title">Saved servers <span class="count" id="ssh-count"></span></h2>

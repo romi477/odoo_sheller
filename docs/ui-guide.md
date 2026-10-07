@@ -45,7 +45,13 @@ is where a card is written, and it is drawn as a draft so that it does not read 
 one more card. Changing a card puts it back in that panel, which turns amber and
 says *Editing ‹name›*. Under it, headed by a rule, are the **saved cards** — a
 title with a count (*Saved servers · 2*) and the cards themselves. A card under
-the pointer is outlined in green, on every screen.
+the pointer is outlined in the brand cyan, on every screen.
+
+The server form folds: its title is a button with an arrow — down while the form is
+open, right once it is folded — and a click on it folds the form to that title, or
+opens it again. A draft written in it survives being folded. The choice is kept in
+the browser. Changing a card opens the form for as long as it takes, and when the
+change is saved or dropped the form goes back to how it was left.
 
 ### Local
 

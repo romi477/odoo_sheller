@@ -3080,14 +3080,15 @@ def test_the_composer_is_a_panel_and_the_saved_region_is_headed_by_a_rule():
     )
 
 
-def test_a_card_is_outlined_in_green_under_the_pointer():
+def test_a_card_is_outlined_in_the_brand_cyan_under_the_pointer():
     css = (WEB / "style.css").read_text(encoding="utf-8")
     hover = re.search(r"(#containers[^{]*:hover[^{]*)\{([^}]*)\}", css)
     assert hover is not None
     selector, body = hover.groups()
     for list_id in ("#containers", "#odoosh-builds", "#ssh-servers"):
         assert list_id in selector, list_id
-    assert "outline: 2px solid var(--green)" in body
+    assert "outline: 2px solid var(--cyan)" in body, "the brand colour, not a new one"
+    assert "green" not in body
     assert ".not-a-target" in selector, "a card with nothing to do is not offered as one"
 
 
@@ -3101,3 +3102,84 @@ def test_each_saved_list_counts_its_cards_and_the_composer_says_when_it_edits(ap
     assert edit is not None and reset is not None
     assert "composerEditing(" in edit.group(0) and "composerEditing(" in reset.group(0)
     assert "'.composer'" in app_js and "classList.toggle('editing'" in app_js
+
+
+# --- the server form folds away --------------------------------------------------------
+
+
+def _ssh_composer() -> str:
+    page = _page()
+    block = re.search(
+        r'<section class="composer"[^>]*aria-labelledby="ssh-composer-title"[^>]*>(.*?)</section>',
+        page, re.DOTALL,
+    )
+    assert block is not None
+
+    return block.group(1)
+
+
+def test_the_server_form_has_a_header_that_is_a_button_with_an_arrow():
+    """The title is the control: a button, so the keyboard has it too, and an
+    arrow that says which way it will go."""
+    composer = _ssh_composer()
+    toggle = re.search(r'<button[^>]*class="region-toggle"[^>]*>(.*?)</button>', composer, re.DOTALL)
+    assert toggle is not None
+    opening = re.search(r'<button[^>]*class="region-toggle"[^>]*>', composer).group(0)
+    assert 'type="button"' in opening, "it must not submit the form"
+    assert 'aria-expanded="true"' in opening
+    assert 'aria-controls="ssh-composer-body"' in opening
+    assert 'title="Collapse"' in opening
+    assert 'class="chevron"' in toggle.group(1) and 'aria-hidden="true"' in toggle.group(1)
+    assert 'id="ssh-composer-title"' in toggle.group(1), "the title stays inside the button"
+    heading = re.search(r'<h2 class="region-title"[^>]*>(.*?)</h2>', composer, re.DOTALL)
+    assert heading is not None and "region-toggle" in heading.group(1)
+
+
+def test_the_form_and_its_note_are_the_part_that_folds():
+    composer = _ssh_composer()
+    body = re.search(r'<div class="composer-body" id="ssh-composer-body">(.*)</div>\s*$', composer, re.DOTALL)
+    assert body is not None
+    assert '<form class="ssh-form"' in body.group(1)
+    assert 'class="odoosh-note"' in body.group(1)
+    assert "region-title" not in body.group(1), "the header stays when the rest folds"
+
+
+def test_folding_the_form_is_remembered_and_editing_unfolds_it(app_js):
+    fold = re.search(r"function setComposerCollapsed\(.*?\n\}", app_js, re.DOTALL)
+    assert fold is not None
+    body = fold.group(0)
+    assert "composer-body" in body and ".hidden =" in body
+    assert "aria-expanded" in body
+    assert "classList.toggle('collapsed'" in body
+    assert "'Expand'" in body and "'Collapse'" in body, "the tooltip says what a click does"
+    assert "localStorage.setItem('osComposerCollapsed'" in body
+    assert "try {" in body, "a page that cannot store still folds"
+    assert "localStorage.getItem('osComposerCollapsed')" in app_js
+    edit = re.search(r"function editServer\(.*?\n\}", app_js, re.DOTALL)
+    assert edit is not None
+    assert "setComposerCollapsed(false, false)" in edit.group(0), (
+        "changing a card in a folded form would otherwise change nothing anyone can see — "
+        "and must not overwrite what the person chose"
+    )
+    reset = re.search(r"function resetServerForm\(.*?\n\}", app_js, re.DOTALL)
+    assert reset is not None
+    assert "setComposerCollapsed(composerWasCollapsed(), false)" in reset.group(0), (
+        "once the change is saved or dropped the form goes back to how it was left"
+    )
+    assert ".region-toggle" in app_js and "addEventListener('click'" in app_js
+
+
+def test_the_fold_arrow_turns_and_the_header_has_no_button_chrome():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    toggle = re.search(r"\nbutton\.region-toggle\s*\{([^}]*)\}", css)
+    assert toggle is not None, "the element is in the selector: the generic `button` rule is more specific than a class"
+    for declaration in ("border: 0", "background: none", "text-transform: inherit", "width: 100%"):
+        assert declaration in toggle.group(1), declaration
+    turned = re.search(r'\.region-toggle\[aria-expanded="false"\] \.chevron\s*\{([^}]*)\}', css)
+    assert turned is not None and "rotate(" in turned.group(1)
+    assert re.search(r"\.composer\.collapsed\s+\.region-title\s*\{[^}]*margin-bottom:\s*0", css), (
+        "a folded panel is its header and nothing else"
+    )
+    assert re.search(r"button\.region-toggle:active:not\(:disabled\)\s*\{[^}]*transform:\s*none", css), (
+        "a header that sinks like a push button when clicked reads as a button, not a title"
+    )

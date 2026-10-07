@@ -376,13 +376,13 @@ button.icon:hover:not(:disabled) {
   border-color: var(--cyan);
 }
 
-/* A card under the pointer is outlined in green, drawn over its own border so
+/* A card under the pointer is outlined in the brand cyan, drawn over its own border so
    nothing moves (2px wide, centred on the 1px edge). A folded-away container has nothing to offer, so it is left
    alone. */
 #containers .card:not(.not-a-target):hover,
 #odoosh-builds .card:hover,
 #ssh-servers .card:hover {
-  outline: 2px solid var(--green);
+  outline: 2px solid var(--cyan);
   outline-offset: -1px;
 }
 
@@ -417,6 +417,57 @@ button.icon:hover:not(:disabled) {
 
 .composer.editing .region-title {
   color: var(--amber);
+}
+
+/* The title of the server form is a button that folds it. All the chrome of a
+   push button is taken off — it is a title that happens to be clickable — and
+   the arrow beside it says which way a click goes. The element is in the
+   selector on purpose: the generic `button` rule is more specific than a class. */
+button.region-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: left;
+}
+
+button.region-toggle:hover:not(:disabled) {
+  color: var(--cyan);
+}
+
+button.region-toggle:active:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+}
+
+/* The arrow is drawn, not typed: a glyph at this size read as a dot. Pointing
+   down while the form is open, right once it is folded. */
+.region-toggle .chevron {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin: 0 6px 3px 3px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 120ms ease;
+}
+
+.region-toggle[aria-expanded="false"] .chevron {
+  margin-bottom: 0;
+  transform: rotate(-45deg);
+}
+
+.composer.collapsed .region-title {
+  margin-bottom: 0;
 }
 
 .saved .region-title::after {
