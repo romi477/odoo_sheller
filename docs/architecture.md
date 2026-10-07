@@ -458,8 +458,9 @@ ubuntu` becomes `ubuntu@host`, `~` is expanded here, a named key has to exist).
 It refuses what would make ssh act on *this* machine — `ProxyCommand`,
 `LocalCommand`, forwarding, `-F`, a pty — and anything that would weaken host key
 checking, each with a message that says why. Launch is an absolute path, a
-standalone `shell` token, and is **not modified**: nothing is appended but `-d
-DATABASE`, and only when the Database field is filled.
+standalone `shell` token (the first argument after the script — Odoo allows
+only a leading `--addons-path=…` before it), and is **not modified**: nothing is
+appended but `-d DATABASE`, and only when the Database field is filled.
 
 **What the server's config can do to `shell`.** `odoo-bin shell` calls
 `server.start(preload=[], stop=True)`. With `workers = 0` (the default) that is the

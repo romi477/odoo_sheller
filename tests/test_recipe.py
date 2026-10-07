@@ -538,6 +538,39 @@ def test_odoo_bin_is_the_token_before_shell():
     assert parse_launch("/usr/bin/env A=b /x/py /x/odoo-bin shell -c /c").odoo_bin == "/x/odoo-bin"
 
 
+def test_shell_may_follow_a_leading_addons_path():
+    """Odoo reads `--addons-path=` before the subcommand — it is the one option
+    that may come first (`odoo/cli/command.py`) — so a launch written that way
+    runs, and `odoo-bin` is still the script, not the option."""
+    launch = parse_launch(
+        "/venv/bin/python /odoo/odoo-bin --addons-path=/a,/b shell -c /etc/odoo.conf"
+    )
+    assert launch.odoo_bin == "/odoo/odoo-bin"
+    assert launch.config == "/etc/odoo.conf"
+    assert launch.argv.count("shell") == 1
+    assert launch.argv[2:4] == ("--addons-path=/a,/b", "shell")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Odoo takes any other leading option as the legacy server command, and
+        # `shell` after it is not a subcommand.
+        "/venv/bin/python /odoo/odoo-bin --db_host=x shell",
+        "/venv/bin/python /odoo/odoo-bin --db_host=x --addons-path=/a shell",
+    ],
+)
+def test_no_other_option_may_come_before_shell(text):
+    with pytest.raises(RecipeError, match="no `shell`"):
+        parse_launch(text)
+
+
+def test_the_missing_shell_message_says_where_options_go():
+    with pytest.raises(RecipeError) as refused:
+        parse_launch("/venv/bin/python /odoo/odoo-bin --db_host=x shell")
+    assert "after `shell`" in str(refused.value)
+
+
 # --- HTTP: the one thing a server's config can do to `shell` -------------------
 #
 # `shell` starts no HTTP server and no cron when the config says `workers = 0`.

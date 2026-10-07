@@ -553,6 +553,29 @@ def check_database(name: str) -> str:
     return name
 
 
+def _find_shell(tokens: list[str]) -> tuple[int, str] | None:
+    """Where the `shell` subcommand is, and the script it follows.
+
+    Odoo takes the subcommand from the first argument after the script, and
+    makes one exception: a leading `--addons-path=…` (`odoo/cli/command.py`),
+    read first so that a command an addon defines can be found. A `shell` after
+    an option value (`-c shell`) is a file called shell, not the subcommand.
+    """
+    for index, token in enumerate(tokens):
+        if index < 1 or token != "shell":
+            continue
+        before = tokens[index - 1]
+        if before.startswith("--addons-path=") and index >= 2:
+            if not tokens[index - 2].startswith("-"):
+
+                return index, tokens[index - 2]
+        elif not before.startswith("-"):
+
+            return index, before
+
+    return None
+
+
 def parse_launch(text: str, database: str | None = None) -> Launch:
     try:
 
@@ -581,19 +604,15 @@ def _parse_launch(text: str, database: str | None) -> Launch:
             f"launch starts with an absolute path, not {tokens[0]!r}: nothing here "
             "searches PATH on the server, and ~ is not expanded there"
         )
-    shell_at = next(
-        (
-            index
-            for index, token in enumerate(tokens)
-            if index >= 1 and token == "shell" and not tokens[index - 1].startswith("-")
-        ),
-        None,
-    )
-    if shell_at is None:
+    found = _find_shell(tokens)
+    if found is None:
         raise RecipeError(
             "launch has no `shell`: it runs Odoo's shell, e.g. "
-            "`/path/to/python /path/to/odoo-bin shell -c /path/to/odoo.conf`"
+            "`/path/to/python /path/to/odoo-bin shell -c /path/to/odoo.conf`. "
+            "Options go after `shell`; Odoo accepts only a leading `--addons-path=…` "
+            "before it"
         )
+    shell_at, odoo_bin = found
     wanted = None
     if isinstance(database, str) and database.strip():
         wanted = check_database(database.strip())
@@ -613,7 +632,7 @@ def _parse_launch(text: str, database: str | None) -> Launch:
         database=wanted or in_launch or None,
         database_in_launch=in_launch or None,
         config=_config_flag(after),
-        odoo_bin=tokens[shell_at - 1],
+        odoo_bin=odoo_bin,
         http_off=(
             "--no-http" in after or "--no-xmlrpc" in after or _workers_flag(after) == "0"
         ),
