@@ -9,6 +9,7 @@ from odoo_sheller.session import (
     STDERR_DRAIN,
     CommitForbidden,
     CommitNotAllowed,
+    ProductionConfirmation,
     Session,
     SessionBusy,
     SessionDead,
@@ -1005,30 +1006,133 @@ async def test_a_remote_session_starts_with_commit_off_even_for_a_human(tmp_path
         await session.kill()
 
 
-async def test_production_refuses_a_commit_outright(tmp_path):
-    """Not "awaiting a grant" — there is no grant to wait for."""
+async def test_production_awaits_a_grant_like_any_remote_instance_but_a_heavier_one(tmp_path):
+    """A human may write to production, so a commit there is not "never": it is
+    refused until they have said so. An agent never writes there — see below."""
     session = await make_session(tmp_path, target=oosh_target("production"))
     await session.start()
     try:
+        with pytest.raises(CommitNotAllowed) as refused:
+            await session.commit()
+        assert not isinstance(refused.value, CommitForbidden), "a human can grant this one"
+        assert not any(r["kind"] == "commit" for r in session.journal.records())
+    finally:
+        await session.kill()
+
+
+async def test_a_human_grants_production_by_naming_it(tmp_path):
+    """The name is typed in the UI and checked here, so the right cannot be given
+    by a click that was meant for something else."""
+    session = await make_session(tmp_path, target=oosh_target("production"))
+    await session.start()
+    try:
+        for wrong in (None, "", "staging", "36887345 "):
+            with pytest.raises(ProductionConfirmation):
+                session.set_allow_commit(True, confirm=wrong)
+            assert session.allow_commit is False
+        session.set_allow_commit(True, confirm="36887345")
+        assert session.allow_commit is True
+        granted = [r for r in session.journal.records() if r["kind"] == "policy_changed"][-1]
+        assert granted["allow_commit"] is True
+        assert granted["stage"] == "production"
+        assert granted["confirmed"] == "36887345"
+    finally:
+        await session.kill()
+
+
+async def test_the_production_grant_is_for_one_commit(tmp_path):
+    session = await make_session(tmp_path, target=oosh_target("production"))
+    await session.start()
+    try:
+        session.set_allow_commit(True, confirm="36887345")
+        assert (await session.commit())["error"] is None
+        assert session.allow_commit is False, "spent"
+        assert session.describe()["allow_commit"] is False
+        with pytest.raises(CommitNotAllowed):
+            await session.commit()
+        records = session.journal.records()
+        spent = [r for r in records if r["kind"] == "policy_changed"][-1]
+        assert spent["allow_commit"] is False and spent["reason"] == "commit attempted"
+        committed = [r for r in records if r["kind"] == "commit"][-1]
+        assert committed["stage"] == "production"
+    finally:
+        await session.kill()
+
+
+async def test_a_commit_that_was_attempted_spends_the_grant_even_if_it_never_answered(
+    tmp_path, monkeypatch
+):
+    """After a timeout nobody knows whether the write happened. The next one is
+    another decision."""
+    session = await make_session(tmp_path, target=oosh_target("production"))
+    await session.start()
+    try:
+        session.set_allow_commit(True, confirm="36887345")
+
+        async def never(*args, **kwargs):
+            raise TimeoutError("no answer")
+
+        monkeypatch.setattr(session, "_request", never)
+        with pytest.raises(TimeoutError):
+            await session.commit()
+        assert session.allow_commit is False
+    finally:
+        await session.kill()
+
+
+async def test_a_rollback_on_production_takes_the_grant_with_the_transaction(tmp_path):
+    """The grant was given for the work that was pending; a new transaction is
+    new work."""
+    session = await make_session(tmp_path, target=oosh_target("production"))
+    await session.start()
+    try:
+        session.set_allow_commit(True, confirm="36887345")
+        assert (await session.rollback())["error"] is None
+        assert session.allow_commit is False
+        revoked = [r for r in session.journal.records() if r["kind"] == "policy_changed"][-1]
+        assert revoked["allow_commit"] is False and revoked["reason"] == "transaction ended"
+    finally:
+        await session.kill()
+
+
+async def test_an_agent_never_writes_to_production_whoever_granted_what(tmp_path):
+    """The agent prepares in a transaction that rolls back, hands the session
+    over, and a human commits — or does not."""
+    session = await make_session(tmp_path, target=oosh_target("production"))
+    await session.start()
+    try:
+        session.transfer_owner({"kind": "agent", "label": "claude"})
         with pytest.raises(CommitForbidden):
+            session.set_allow_commit(True, confirm="36887345")
+        assert session.allow_commit is False
+        with pytest.raises(CommitForbidden):
+            await session.commit()
+        assert not any(r["kind"] == "commit" for r in session.journal.records())
+    finally:
+        await session.kill()
+
+
+async def test_a_grant_does_not_survive_a_handover(tmp_path):
+    session = await make_session(tmp_path, target=oosh_target("production"))
+    await session.start()
+    try:
+        session.set_allow_commit(True, confirm="36887345")
+        session.transfer_owner({"kind": "agent", "label": "claude"})
+        session.transfer_owner({"kind": "human", "label": "browser"})
+        assert session.allow_commit is False
+        with pytest.raises(CommitNotAllowed):
             await session.commit()
     finally:
         await session.kill()
 
 
-async def test_production_refuses_the_grant_itself(tmp_path):
-    """A guard that can be granted around is not a guard."""
+async def test_revoking_a_production_grant_needs_no_confirmation(tmp_path):
     session = await make_session(tmp_path, target=oosh_target("production"))
     await session.start()
     try:
-        with pytest.raises(CommitForbidden):
-            session.set_allow_commit(True)
+        session.set_allow_commit(True, confirm="36887345")
+        session.set_allow_commit(False)
         assert session.allow_commit is False
-        with pytest.raises(CommitForbidden):
-            await session.commit()
-        assert not any(
-            record["kind"] == "commit" for record in session.journal.records()
-        ), "nothing may reach the pipe"
     finally:
         await session.kill()
 
@@ -1399,11 +1503,7 @@ async def test_a_remote_handover_round_trip_brings_back_no_grant(tmp_path):
             session.transfer_owner({"kind": "human", "label": "browser"})
             assert session.allow_commit is False, stage
             assert session.describe()["allow_commit"] is False, stage
-            if stage == "staging":
-                assert session._may_commit() is False
-            else:
-                with pytest.raises(CommitForbidden):
-                    session._may_commit()
+            assert session._may_commit() is False, stage
         finally:
             await session.kill()
 

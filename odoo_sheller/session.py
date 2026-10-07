@@ -77,12 +77,20 @@ class CommitNotAllowed(Exception):
 
 
 class CommitForbidden(CommitNotAllowed):
-    """A write that will never be allowed here, not one awaiting a grant.
+    """A write that will never be allowed to *this* caller, not one awaiting a grant.
 
     Subclasses CommitNotAllowed so every existing caller keeps refusing; the
-    difference is that there is nothing to ask for. Raised on a production
-    instance, by both `commit` and the attempt to grant the right — a guard
-    that can be granted around is not a guard.
+    difference is that there is nothing to ask for. Raised for an agent on a
+    production instance, by both `commit` and the attempt to grant it the
+    right: only a human writes to production, and only by granting it.
+    """
+
+
+class ProductionConfirmation(CommitNotAllowed):
+    """The right to write to production was asked for without naming it.
+
+    The name is typed by a person in the UI and checked here, so the right
+    cannot be given by a click that was meant for something else.
     """
 
 
@@ -410,7 +418,7 @@ class Session:
         to be granted the right explicitly. On a remote instance neither
         applies: being the owner is enough locally, and is not enough on
         someone's own Odoo, so a human starts without the right there too —
-        and on production nothing ever holds it.
+        and on production a human holds it only once they have granted it.
         """
 
         return (
@@ -440,18 +448,44 @@ class Session:
 
         return "invalid"
 
-    def set_allow_commit(self, allowed: bool) -> None:
+    def set_allow_commit(self, allowed: bool, confirm: str | None = None) -> None:
+        fields: dict = {"allow_commit": allowed}
         if allowed and self.target.stage == PRODUCTION:
-            raise CommitForbidden(self._production_refusal())
+            # Production is written to by a human who says so, once, and by
+            # nobody else. An agent that holds the session cannot be granted
+            # the right whoever asks: the work is handed back first.
+            if self.owner.get("kind") != "human":
+                raise CommitForbidden(self._production_refusal())
+            if confirm != self.target.name:
+                raise ProductionConfirmation(
+                    "writing to production has to be confirmed by typing its "
+                    f"name, {self.target.name!r}"
+                )
+            fields.update(stage=PRODUCTION, confirmed=confirm)
         self.allow_commit = allowed
-        self.journal.write("policy_changed", allow_commit=allowed)
+        self.journal.write("policy_changed", **fields)
         self._emit({"kind": "policy", "allow_commit": allowed, "session": self.id})
+
+    def _spend_production_grant(self, reason: str) -> None:
+        """Take a production grant back: it is for one commit, not a session.
+
+        Called when a commit is *attempted*, not only when it succeeds — after
+        a timeout nobody knows whether the write happened, and the next one is
+        another decision — and when the transaction it was given for ends.
+        """
+        if self.target.stage == PRODUCTION and self.allow_commit:
+            self.allow_commit = False
+            self.journal.write(
+                "policy_changed", allow_commit=False, stage=PRODUCTION, reason=reason
+            )
+            self._emit({"kind": "policy", "allow_commit": False, "session": self.id})
 
     def _production_refusal(self) -> str:
 
         return (
             f"this session runs on production ({self.target.name} at "
-            f"{self.target.host}); commit is refused there, rollback is not"
+            f"{self.target.host}); only a human commits there, once they have "
+            "granted it — an agent never does. Rollback is not refused"
         )
 
     def _may_commit(self) -> bool:
@@ -459,9 +493,10 @@ class Session:
 
         Locally a human owner confirms in the UI, so the flag is an agent
         gate. On a remote instance that reasoning does not carry: the flag
-        gates everyone, and on production nothing lifts it.
+        gates everyone, and on production an agent is refused outright, however
+        the flag stands.
         """
-        if self.target.stage == PRODUCTION:
+        if self.target.stage == PRODUCTION and self.owner.get("kind") != "human":
             raise CommitForbidden(self._production_refusal())
         if self.owner.get("kind") == "human" and not self.target.is_remote:
 
@@ -591,12 +626,21 @@ class Session:
     async def _boundary(self, kind, builder, timeout) -> dict:
         if kind == "commit" and not self._may_commit():
             raise CommitNotAllowed(
-                "this session may not commit; a human has to grant the right first"
+                "this session is on production: a commit needs the grant, and the "
+                "grant is for one commit"
+                if self.target.stage == PRODUCTION
+                else "this session may not commit; a human has to grant the right first"
             )
         request_id = self._take_id()
-        result = await self._request(builder(request_id), timeout)
+        try:
+            result = await self._request(builder(request_id), timeout)
+        finally:
+            self._spend_production_grant(
+                "commit attempted" if kind == "commit" else "transaction ended"
+            )
         self.journal.write(
-            kind, id=request_id, error=result.get("error"), actor=dict(self.owner)
+            kind, id=request_id, error=result.get("error"), actor=dict(self.owner),
+            stage=self.target.stage,
         )
         if not result.get("error"):
             # The transaction is over either way, so nobody's work is pending

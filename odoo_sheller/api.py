@@ -26,6 +26,7 @@ from odoo_sheller.registry import EVENT_BACKLOG, Registry, load_admin_key
 from odoo_sheller.session import (
     CommitForbidden,
     CommitNotAllowed,
+    ProductionConfirmation,
     SessionBusy,
     SessionDead,
     SessionNotReady,
@@ -190,6 +191,9 @@ class OwnerBody(BaseModel):
 
 class PolicyBody(BaseModel):
     allow_commit: bool
+    # What a person typed to allow a write to production: the name of the
+    # target, checked by the session. Ignored everywhere else.
+    confirm: str | None = None
 
 
 IN_CONTAINER_ENV = "ODOO_SHELLER_IN_CONTAINER"
@@ -405,6 +409,18 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         if isinstance(exc, (SessionBusy, SessionNotReady)):
 
             return HTTPException(status_code=409, detail=str(exc))
+        if isinstance(exc, ProductionConfirmation):
+            # A request to complete, not a refusal: the person can fix it by
+            # typing. Checked before CommitNotAllowed, which it subclasses.
+
+            return HTTPException(
+                status_code=422,
+                detail={
+                    "error": "confirm_target",
+                    "message": str(exc),
+                    "recovery": "type the name of the target to allow writing to it",
+                },
+            )
         if isinstance(exc, CommitForbidden):
             # Checked before CommitNotAllowed, which it subclasses. The codes
             # have to differ: `commit_not_allowed` means "ask the human", and
@@ -417,8 +433,10 @@ def create_app(registry: Registry | None = None) -> FastAPI:
                     "error": "commit_forbidden",
                     "message": str(exc),
                     "recovery": (
-                        "nothing grants this — end with rollback, or open a "
-                        "session on a staging build if you need to write"
+                        "an agent never writes to production — end with rollback "
+                        "and say what should be written; a human takes the session "
+                        "back and commits it themselves, or open a session on a "
+                        "staging instance if you need to write"
                     ),
                 },
             )
@@ -1050,8 +1068,8 @@ def create_app(registry: Registry | None = None) -> FastAPI:
                 },
             )
         try:
-            session.set_allow_commit(body.allow_commit)
-        except CommitForbidden as exc:
+            session.set_allow_commit(body.allow_commit, confirm=body.confirm)
+        except (CommitNotAllowed, CommitForbidden) as exc:
             raise translate(exc, session_id) from None
 
         return {"allow_commit": session.allow_commit}

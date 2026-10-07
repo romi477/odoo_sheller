@@ -191,8 +191,9 @@ async def test_an_interrupt_reaches_a_process_owned_by_another_user(session):
 async def test_a_plain_server_is_production_until_a_human_says_otherwise(session):
     assert session.target.stage == "production"
     assert session.allow_commit is False
-    with pytest.raises(CommitForbidden):
+    with pytest.raises(CommitNotAllowed) as refused:
         await session.commit()
+    assert not isinstance(refused.value, CommitForbidden), "a human may grant this one"
 
 
 @pytest.mark.parametrize("stage", ["staging", "development"])

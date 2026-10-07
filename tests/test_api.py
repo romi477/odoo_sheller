@@ -79,8 +79,9 @@ class FakeSession:
 
         return self.write_key
 
-    def set_allow_commit(self, allowed):
+    def set_allow_commit(self, allowed, confirm=None):
         self.calls.append(("set_allow_commit", allowed))
+        self.confirmed = confirm
         self.allow_commit = allowed
 
     def stderr_tail(self, limit=200):
@@ -1524,21 +1525,55 @@ def test_a_production_commit_is_refused_as_terminal_not_as_pending(client):
     assert "rollback" in detail["recovery"]
 
 
-def test_granting_commit_on_production_is_refused_too(client):
-    """A guard that can be granted around is not a guard."""
+def test_granting_commit_to_an_agent_on_production_is_refused_as_terminal(client):
+    """Only a human writes to production. The grant is refused for a session an
+    agent holds, and the code says nothing will change that."""
     from odoo_sheller.session import CommitForbidden
 
-    def refuse(allowed):
+    def refuse(allowed, confirm=None):
         raise CommitForbidden("this session runs on production (99 at h)")
 
     client.registry.session.set_allow_commit = refuse
     response = client.post(
         "/api/sessions/s1/policy",
-        json={"allow_commit": True},
+        json={"allow_commit": True, "confirm": "99"},
         headers={"X-OS-Admin-Key": ADMIN_KEY},
     )
     assert response.status_code == 423
     assert response.json()["detail"]["error"] == "commit_forbidden"
+
+
+def test_the_name_typed_to_grant_production_reaches_the_session(client):
+    session = client.registry.session
+    session.describe = lambda: {"id": "s1", "kind": "ssh", "stage": "production",
+                                "owner": dict(session.owner)}
+    response = client.post(
+        "/api/sessions/s1/policy",
+        json={"allow_commit": True, "confirm": "acme production"},
+        headers=ADMIN,
+    )
+    assert response.status_code == 200
+    assert session.confirmed == "acme production"
+
+
+def test_a_grant_for_production_without_its_name_is_a_request_to_complete_not_a_refusal(client):
+    """422, and a code of its own: the human can fix this one by typing."""
+    from odoo_sheller.session import ProductionConfirmation
+
+    def ask(allowed, confirm=None):
+        raise ProductionConfirmation(
+            "writing to production has to be confirmed by typing its name, 'acme production'"
+        )
+
+    client.registry.session.set_allow_commit = ask
+    response = client.post(
+        "/api/sessions/s1/policy", json={"allow_commit": True}, headers=ADMIN
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["error"] == "confirm_target"
+    assert "acme production" in detail["message"]
+    assert "type" in detail["recovery"]
 
 
 def test_revoking_commit_from_a_human_on_a_remote_target_is_allowed(client):
