@@ -376,6 +376,61 @@ button.icon:hover:not(:disabled) {
   border-color: var(--cyan);
 }
 
+/* A card under the pointer is outlined in green, drawn over its own border so
+   nothing moves (2px wide, centred on the 1px edge). A folded-away container has nothing to offer, so it is left
+   alone. */
+#containers .card:not(.not-a-target):hover,
+#odoosh-builds .card:hover,
+#ssh-servers .card:hover {
+  outline: 2px solid var(--green);
+  outline-offset: -1px;
+}
+
+/* Where a card is written and where cards are kept are two regions. The form is
+   drawn as a draft — a dashed edge, a darker well — so that it does not read as
+   one more card; the cards sit under a title and a rule, which says that
+   everything below it is kept. */
+.composer {
+  margin-bottom: 28px;
+  padding: 14px 16px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--panel) 40%, var(--background));
+}
+
+/* Editing is the same form with an edge that says it is not a new card. */
+.composer.editing {
+  border-style: solid;
+  border-color: var(--amber);
+}
+
+.region-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  color: var(--muted);
+  font: 600 11px/1.2 var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.composer.editing .region-title {
+  color: var(--amber);
+}
+
+.saved .region-title::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+
+.region-title .count {
+  color: var(--muted-low);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
 .row {
   gap: 6px;
 }

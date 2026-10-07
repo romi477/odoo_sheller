@@ -3020,3 +3020,84 @@ def test_a_remote_startup_is_kept_and_found_under_the_cards_key(app_js):
         assert function is not None, name
         assert "state.startups.get(targetKey(info))" in function.group(0), name
     assert "connectStartupSocket(targetKey(info), info.id)" in app_js
+
+
+# --- where a card is written and where cards are kept ---------------------------------
+
+
+def _page() -> str:
+    return (WEB / "index.html").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("mode", "composer", "saved", "list"),
+    [
+        ("odoosh", "odoosh-composer-title", "odoosh-saved-title", "odoosh-builds"),
+        ("ssh", "ssh-composer-title", "ssh-saved-title", "ssh-servers"),
+    ],
+)
+def test_the_form_and_the_saved_cards_are_two_regions_each_with_a_title(
+    mode, composer, saved, list
+):
+    """One screen held a form and a list with only a margin between them, and a
+    person could not tell where writing a card stopped and keeping them began."""
+    page = _page()
+    block = re.search(rf'<div id="{mode}" hidden>(.*?)\n      </div>\n', page, re.DOTALL)
+    assert block is not None, mode
+    body = block.group(1)
+    write = re.search(
+        rf'<section class="composer"[^>]*aria-labelledby="{composer}"[^>]*>(.*?)</section>',
+        body, re.DOTALL,
+    )
+    keep = re.search(
+        rf'<section class="saved"[^>]*aria-labelledby="{saved}"[^>]*>(.*?)</section>',
+        body, re.DOTALL,
+    )
+    assert write is not None and keep is not None, mode
+    assert f'id="{composer}"' in write.group(1)
+    assert f'id="{saved}"' in keep.group(1)
+    assert f'<ul id="{list}">' in keep.group(1), "the cards belong to the kept region"
+    assert f'<ul id="{list}">' not in write.group(1)
+    assert body.index("composer") < body.index('class="saved"'), "write first, keep below"
+
+
+def test_the_composer_is_a_panel_and_the_saved_region_is_headed_by_a_rule():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    composer = re.search(r"\n\.composer\s*\{([^}]*)\}", css)
+    assert composer is not None
+    assert "border:" in composer.group(1) and "dashed" in composer.group(1), (
+        "an unfinished card is drawn as a draft, not as another card"
+    )
+    assert "border-radius" in composer.group(1)
+    assert re.search(r"\n\.composer\.editing\s*\{[^}]*var\(--amber\)", css), (
+        "editing a card has to look different from writing a new one"
+    )
+    title = re.search(r"\n\.region-title\s*\{([^}]*)\}", css)
+    assert title is not None
+    assert "uppercase" in title.group(1)
+    assert re.search(r"\.saved \.region-title::after\s*\{[^}]*border-top", css), (
+        "a rule runs from the title to the edge, so the list reads as a region"
+    )
+
+
+def test_a_card_is_outlined_in_green_under_the_pointer():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    hover = re.search(r"(#containers[^{]*:hover[^{]*)\{([^}]*)\}", css)
+    assert hover is not None
+    selector, body = hover.groups()
+    for list_id in ("#containers", "#odoosh-builds", "#ssh-servers"):
+        assert list_id in selector, list_id
+    assert "outline: 2px solid var(--green)" in body
+    assert ".not-a-target" in selector, "a card with nothing to do is not offered as one"
+
+
+def test_each_saved_list_counts_its_cards_and_the_composer_says_when_it_edits(app_js):
+    render = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL)
+    assert render is not None
+    assert "kind.count" in render.group(0)
+    assert "count: '#odoosh-count'" in app_js and "count: '#ssh-count'" in app_js
+    edit = re.search(r"function editServer\(.*?\n\}", app_js, re.DOTALL)
+    reset = re.search(r"function resetServerForm\(.*?\n\}", app_js, re.DOTALL)
+    assert edit is not None and reset is not None
+    assert "composerEditing(" in edit.group(0) and "composerEditing(" in reset.group(0)
+    assert "'.composer'" in app_js and "classList.toggle('editing'" in app_js

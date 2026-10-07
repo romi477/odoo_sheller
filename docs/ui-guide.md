@@ -39,6 +39,14 @@ asked for the first time one of those is refused; the list needs none. Cards tha
 an earlier version kept in the browser move across once, when the odoo.sh list is
 first opened.
 
+On each of the two entered screens there are two regions, and nothing else. The
+**form** is a dashed panel under its own title (*New server*, *Add a build*): it
+is where a card is written, and it is drawn as a draft so that it does not read as
+one more card. Changing a card puts it back in that panel, which turns amber and
+says *Editing ‹name›*. Under it, headed by a rule, are the **saved cards** — a
+title with a count (*Saved servers · 2*) and the cards themselves. A card under
+the pointer is outlined in green, on every screen.
+
 ### Local
 
 A list of running containers, one card each. The **↻** beside the title

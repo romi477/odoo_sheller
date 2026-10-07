@@ -858,9 +858,21 @@ async function saveServerForm() {
   await loadTargets();
 }
 
+// The panel a card is written in says whether it is a new card or one being
+// changed: both are the same form, and nothing else on the screen tells.
+function composerEditing(name) {
+  const composer = document.querySelector('#ssh').querySelector('.composer');
+  composer.classList.toggle('editing', Boolean(name));
+  setText(
+    document.querySelector('#ssh-composer-title'),
+    name ? `Editing ${name}` : 'New server',
+  );
+}
+
 function resetServerForm() {
   const form = serverFormElement();
   state.serverEditing = null;
+  composerEditing(null);
   form.querySelector('.ssh-name').value = '';
   form.querySelector('.ssh-access').value = '';
   form.querySelector('.ssh-launch').value = '';
@@ -878,6 +890,7 @@ function editServer(entry) {
   const form = serverFormElement();
   resetServerForm();
   state.serverEditing = entry.id;
+  composerEditing(entry.name);
   form.querySelector('.ssh-name').value = entry.name;
   form.querySelector('.ssh-access').value = entry.access;
   form.querySelector('.ssh-launch').value = entry.launch;
@@ -1105,6 +1118,7 @@ const REMOTE_KINDS = {
   odoosh: {
     template: '#odoosh-card',
     list: '#odoosh-builds',
+    count: '#odoosh-count',
     noun: 'build',
     entries: () => state.builds,
     error: () => state.buildsError,
@@ -1122,6 +1136,7 @@ const REMOTE_KINDS = {
   ssh: {
     template: '#ssh-card',
     list: '#ssh-servers',
+    count: '#ssh-count',
     noun: 'server',
     entries: () => state.servers,
     error: () => state.serversError,
@@ -1160,6 +1175,8 @@ function renderServers() {
 function renderRemoteCards(kind) {
   const list = document.querySelector(kind.list);
   const entries = kind.entries();
+  // How many are kept, beside the title of the region that keeps them.
+  setText(document.querySelector(kind.count), entries.length ? `· ${entries.length}` : '');
   list.replaceChildren();
   if (!entries.length) {
     const empty = document.createElement('li');
