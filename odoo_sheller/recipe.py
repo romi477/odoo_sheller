@@ -164,6 +164,11 @@ class Launch:
     # The token just before `shell`: the script Odoo is started from, which is
     # where its own `odoo/release.py` is looked for.
     odoo_bin: str
+    # Whether the launch itself says no HTTP will be bound: `--no-http`, or
+    # `--workers=0` (the threaded path, which starts none). And the port it moves
+    # HTTP to instead, if it does that, which is not the same thing.
+    http_off: bool = False
+    http_port: str | None = None
 
 
 def _split(text: object, field: str) -> list[str]:
@@ -502,6 +507,35 @@ def _config_flag(tokens: Sequence[str]) -> str | None:
     return None
 
 
+def _workers_flag(tokens: Sequence[str]) -> str | None:
+    for index, token in enumerate(tokens):
+        if token == "--workers":
+
+            return tokens[index + 1] if index + 1 < len(tokens) else None
+        if token.startswith("--workers="):
+
+            return token.split("=", 1)[1]
+
+    return None
+
+
+def _port_flag(tokens: Sequence[str]) -> str | None:
+    """The port `--http-port`, `--xmlrpc-port` or `-p` moves HTTP to."""
+    for index, token in enumerate(tokens):
+        if token in ("--http-port", "--xmlrpc-port", "-p"):
+
+            return tokens[index + 1] if index + 1 < len(tokens) else None
+        for long in ("--http-port=", "--xmlrpc-port="):
+            if token.startswith(long):
+
+                return token[len(long):]
+        if token.startswith("-p") and not token.startswith("--") and len(token) > 2:
+
+            return token[2:]
+
+    return None
+
+
 def check_database(name: str) -> str:
     if (
         len(name) > MAX_DATABASE
@@ -532,9 +566,14 @@ def _parse_launch(text: str, database: str | None) -> Launch:
     """Parse the Launch field, and the optional Database that goes with it.
 
     The Launch is taken as written: nothing is added — not `--no-http`, not
-    `-d`, not `--workers`. Odoo's `shell` does not start an HTTP server, so
-    there is nothing to protect from one. The one thing that is appended is
-    `-d DATABASE`, and only when the Database field is filled.
+    `-d`, not `--workers`. The one thing that is appended is `-d DATABASE`, and
+    only when the Database field is filled.
+
+    Odoo's `shell` starts no HTTP server — when the config says `workers = 0`.
+    With more, it takes the prefork path, which binds the HTTP port before the
+    shell starts: beside the running service, "Address already in use".
+    `--no-http` or `--workers=0` prevents it, and `describe` says so, since
+    nothing here can see the server's config.
     """
     tokens = _split(text, "launch")
     if not tokens[0].startswith("/"):
@@ -567,12 +606,18 @@ def _parse_launch(text: str, database: str | None) -> Launch:
         )
     argv = tuple(tokens) + (("-d", wanted) if wanted else ())
 
+    after = tokens[shell_at + 1 :]
+
     return Launch(
         argv=argv,
         database=wanted or in_launch or None,
         database_in_launch=in_launch or None,
-        config=_config_flag(tokens[shell_at + 1 :]),
+        config=_config_flag(after),
         odoo_bin=tokens[shell_at - 1],
+        http_off=(
+            "--no-http" in after or "--no-xmlrpc" in after or _workers_flag(after) == "0"
+        ),
+        http_port=_port_flag(after),
     )
 
 
@@ -600,6 +645,19 @@ def describe(access: Access, launch: Launch) -> dict:
             "this runs Odoo as root: it writes root-owned files into the "
             "filestore, which the odoo user then cannot read"
         )
+    if not launch.http_off:
+        if launch.http_port:
+            warnings.append(
+                f"the launch moves Odoo's HTTP port to {launch.http_port} instead of "
+                "turning HTTP off: that works only while nothing else listens there. "
+                "`--no-http` takes the port out of it"
+            )
+        else:
+            warnings.append(
+                "if the server's config has workers above 0, Odoo's shell binds its HTTP "
+                "port before it starts and fails with 'Address already in use' beside the "
+                "running service. `--no-http` (or `--workers=0`) prevents it"
+            )
     script = launch_script(launch, "… the session's bootstrap …\nOSBOOT\n")
     # How it reads typed into a terminal, which is not quite how it is sent:
     # ssh joins the remote command into one string (`ssh_argv`). The shape is

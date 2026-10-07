@@ -292,7 +292,7 @@ a host, and says what it is itself. A plain server — Odoo installed in the sys
 cannot be discovered: which user runs it, which interpreter, where `odoo-bin` and its
 config are. So whoever can log in writes it down on a card, in two fields — how to
 arrive (`ssh -i KEY user@host sudo -n -u odoo -H`) and what to run there
-(`/abs/python /abs/odoo-bin shell -c /abs/odoo.conf`) — says whether it is
+(`/abs/python /abs/odoo-bin shell -c /abs/odoo.conf --no-http`) — says whether it is
 production (the default: commit refused outright), staging or development, and the
 form shows what the recipe means before it is saved. Nothing typed is ever run on
 your machine. Odoo in Docker on a remote server is not handled yet.

@@ -459,9 +459,23 @@ It refuses what would make ssh act on *this* machine — `ProxyCommand`,
 `LocalCommand`, forwarding, `-F`, a pty — and anything that would weaken host key
 checking, each with a message that says why. Launch is an absolute path, a
 standalone `shell` token, and is **not modified**: nothing is appended but `-d
-DATABASE`, and only when the Database field is filled. Odoo's `shell` calls
-`server.start(preload=[], stop=True)`, which starts neither an HTTP server nor
-the cron thread — read from 13, 14 and 15 — so no `--no-http` is wanted.
+DATABASE`, and only when the Database field is filled.
+
+**What the server's config can do to `shell`.** `odoo-bin shell` calls
+`server.start(preload=[], stop=True)`. With `workers = 0` (the default) that is the
+threaded server, which with `stop` starts neither HTTP nor cron. With `workers`
+above 0 — which a server that is in use usually has — it is the *prefork* server,
+and `PreforkServer.start` binds the HTTP port before the shell starts (and closes it
+again right after the registry preload). Beside the running service that is
+`OSError: [Errno 98] Address already in use`, from the shell, before it has loaded
+anything. This was found on the real server, whose config says `workers = 4`, and
+reproduced there and in the double. `--no-http` makes the prefork server's address
+empty so nothing is bound; `--workers=0` takes the threaded path (and is what lets
+`run_test` run, which refuses `workers != 0`). `--xmlrpc-port`/`--http-port` only
+*move* the bind, which works while nothing listens on the new port. The launch is
+not modified, so the form warns when it has none of these, the probe reads `workers`
+and `http_port` from the config and says what will happen, and a session that does
+die on the port is told what to add.
 
 **The stage is declared.** Nothing on a plain server says what it is, so the card
 carries a stage, defaulting to `production` (commit refused outright);

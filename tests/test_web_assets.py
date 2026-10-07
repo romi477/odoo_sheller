@@ -2939,3 +2939,28 @@ def test_a_session_on_a_server_is_reopened_from_its_card(app_js):
 def test_the_connect_mode_remembers_ssh_too(app_js):
     assert "osConnectMode" in app_js
     assert "ssh: [" in app_js, "the mode has a title and a line of its own"
+
+
+# --- a config with workers above 0 ------------------------------------------------
+
+
+def test_the_launch_field_suggests_no_http_and_says_why():
+    page = (WEB / "index.html").read_text(encoding="utf-8")
+    field = re.search(r'<input class="ssh-launch[^>]*>', page, re.DOTALL)
+    assert field is not None
+    assert 'placeholder="' in field.group(0)
+    assert "--no-http" in re.search(r'placeholder="([^"]*)"', field.group(0)).group(1)
+    assert "Address already in use" in field.group(0), "the hover says what the flag is for"
+
+
+def test_what_the_config_will_do_to_the_launch_stays_on_the_card_and_in_the_probe_result(app_js):
+    cards = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL)
+    assert cards is not None
+    assert "probe.launch_warning" in cards.group(0)
+    assert "'caution'" in cards.group(0), "amber: the probe worked, so it is not an error"
+    described = re.search(r"function describeServerProbe\(.*?\n\}", app_js, re.DOTALL)
+    assert described is not None
+    assert "launch_warning" in described.group(0)
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    rule = re.search(r"\.probe-note\.caution\s*\{([^}]*)\}", css)
+    assert rule is not None and "--amber" in rule.group(1)

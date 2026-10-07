@@ -812,3 +812,63 @@ async def test_an_ssh_server_on_thirteen_opens_with_a_warning():
     assert result["supported"] is True
     assert result["untested"] is True
     assert "13.0" in result["warning"]
+
+
+# --- a config with workers above 0 -----------------------------------------------
+
+
+async def test_a_config_with_workers_says_the_launch_will_bind_the_http_port():
+    """The reason a recipe worked by hand on a server and failed in a session:
+    with `workers` above 0 Odoo's shell takes the prefork path and binds 8069
+    before it starts, beside the service that is already listening."""
+    access, launch = ssh_recipe()
+    facts = SSH_FACTS + "workers=4\nhttp_port=8069\n"
+    result = await discovery.probe_ssh(access, launch, runner=fake_runner([(0, facts, "")]))
+    assert result["ok"] is True, "a probe cannot know the service is up; it can say what will happen"
+    assert result["workers"] == 4
+    assert "workers = 4" in result["launch_warning"]
+    assert "8069" in result["launch_warning"]
+    assert "--no-http" in result["launch_warning"]
+
+
+@pytest.mark.parametrize("flag", ["--no-http", "--workers=0"])
+async def test_a_launch_that_turns_http_off_has_nothing_to_warn_about(flag):
+    access, launch = ssh_recipe(launch=SSH_LAUNCH + " " + flag)
+    facts = SSH_FACTS + "workers=4\nhttp_port=8069\n"
+    result = await discovery.probe_ssh(access, launch, runner=fake_runner([(0, facts, "")]))
+    assert result["launch_warning"] is None
+
+
+@pytest.mark.parametrize("workers", ["0", "", "False"])
+async def test_a_config_without_workers_has_nothing_to_warn_about(workers):
+    access, launch = ssh_recipe()
+    facts = SSH_FACTS + f"workers={workers}\n"
+    result = await discovery.probe_ssh(access, launch, runner=fake_runner([(0, facts, "")]))
+    assert result["launch_warning"] is None
+
+
+async def test_a_config_that_moves_the_port_is_named_by_it():
+    access, launch = ssh_recipe(launch=SSH_LAUNCH + " --xmlrpc-port 8068")
+    facts = SSH_FACTS + "workers=4\nhttp_port=8069\n"
+    result = await discovery.probe_ssh(access, launch, runner=fake_runner([(0, facts, "")]))
+    assert result["launch_warning"] is None, "8068 is not the service's port; nothing to say"
+    facts = SSH_FACTS + "workers=4\nhttp_port=8068\n"
+    result = await discovery.probe_ssh(access, launch, runner=fake_runner([(0, facts, "")]))
+    assert "8068" in result["launch_warning"]
+
+
+def test_the_probe_script_reads_workers_and_the_http_port_from_the_config(tmp_path):
+    import subprocess
+
+    conf = tmp_path / "odoo.conf"
+    conf.write_text("[options]\ndb_name = acme\nworkers = 4\nhttp_port = 8070\n", encoding="utf-8")
+    exe = tmp_path / "py"
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    exe.chmod(0o755)
+    out = subprocess.run(
+        ["sh", "-c", discovery.SSH_PROBE_SCRIPT, "sh", str(exe), str(conf), str(exe)],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    facts = dict(line.split("=", 1) for line in out.splitlines())
+    assert facts["workers"] == "4"
+    assert facts["http_port"] == "8070"

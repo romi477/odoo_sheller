@@ -159,7 +159,10 @@ whoever can log in writes it down, in two fields and a few more:
   `sudo su`, then `su odoo`) become one line.
 - **Launch** — what to run once there: the absolute path of the interpreter and of
   `odoo-bin`, then `shell` and whatever options the server needs. Run exactly as
-  written.
+  written. Add `--no-http` (or `--workers=0`): a server whose config has `workers`
+  above 0 makes the shell bind its HTTP port first, and fails beside the running
+  service with "Address already in use". The form warns when neither is there, and
+  Probe says what the config will do.
 - **Database** (optional) — appended to Launch as `-d`; empty means the server's
   own `db_name`. Written in both places is an error.
 - **Stage** — `production` (the default: commit refused outright), `staging` or

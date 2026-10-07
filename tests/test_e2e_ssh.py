@@ -32,7 +32,7 @@ import pytest
 
 from odoo_sheller import discovery, transport
 from odoo_sheller.registry import Registry
-from odoo_sheller.session import CommitForbidden, CommitNotAllowed
+from odoo_sheller.session import CommitForbidden, CommitNotAllowed, SessionDead
 from odoo_sheller.targets import TargetStore
 
 STATE = Path(
@@ -47,7 +47,12 @@ CONFIG = os.environ.get("PT_E2E_SSH_CONFIG", "/etc/odoo/odoo.conf")
 pytestmark = pytest.mark.e2e
 
 BECOME = "sudo -n -u odoo -H"
-LAUNCH = f"{PYTHON} {ODOO_BIN} shell -c {CONFIG}"
+# The double's config says `workers = 2`, as a server that is in use does, and
+# something is listening on its HTTP port. A launch that does not turn HTTP off
+# dies binding that port — which is what the real server did, and what this was
+# written to reproduce.
+BARE = f"{PYTHON} {ODOO_BIN} shell -c {CONFIG}"
+LAUNCH = f"{BARE} --no-http"
 
 
 def access(become=BECOME):
@@ -108,6 +113,8 @@ async def test_probe_says_who_the_recipe_lands_as_and_which_odoo():
     assert result["config_readable"] is True
     assert result["executable_ok"] is True
     assert result["supported"] is True
+    assert result["workers"] == 2
+    assert result["launch_warning"] is None, "this launch turns HTTP off"
 
 
 async def test_forgetting_the_become_is_named_the_way_the_real_server_would_show_it():
@@ -226,3 +233,58 @@ def _parsed(access_text, launch_text, database):
     from odoo_sheller.recipe import parse_access, parse_launch
 
     return parse_access(access_text), parse_launch(launch_text, database)
+
+
+# --- a config with workers above 0 ------------------------------------------------
+
+
+async def test_the_probe_says_what_the_config_will_do_to_a_launch_that_leaves_http_alone():
+    result = await discovery.probe_ssh(*_parsed(access(), BARE, DATABASE))
+    assert result["ok"] is True
+    assert result["workers"] == 2
+    assert "workers = 2" in result["launch_warning"]
+    assert "8069" in result["launch_warning"]
+    assert "--no-http" in result["launch_warning"]
+
+
+async def test_a_launch_that_leaves_http_alone_dies_on_the_port_and_says_what_to_add(registry):
+    """The failure from the real server, reproduced: the shell binds the HTTP port
+    before it starts, something is already there, and Odoo says so in its own words.
+    The words are kept; the fix is added."""
+    with pytest.raises(SessionDead) as died:
+        await open_card(registry, launch=BARE, name="bare")
+    message = str(died.value)
+    assert "Address already in use" in message
+    assert "--no-http" in message
+    assert registry.sessions == {}
+
+
+@pytest.mark.parametrize("flag", ["--no-http", "--workers=0"])
+async def test_either_way_of_turning_http_off_opens(registry, flag):
+    live = await open_card(registry, launch=f"{BARE} {flag}", name="off")
+    try:
+        result = await live.execute("1 + 1")
+        assert result["result"] == "2"
+    finally:
+        await registry.close(live.id, force=True)
+
+
+async def test_moving_the_port_to_a_free_one_works_every_time(registry):
+    """Odoo's prefork server binds the port for a moment and closes it again
+    before the shell starts, so a moved port is only ever in the way of something
+    that is listening on it. `--xmlrpc-port 8068` was this, and it worked."""
+    moved = f"{BARE} --http-port 8068"
+    for name in ("first", "second"):
+        live = await open_card(registry, launch=moved, name=name)
+        try:
+            assert (await live.execute("1 + 1"))["result"] == "2"
+        finally:
+            await registry.close(live.id, force=True)
+
+
+async def test_moving_the_port_onto_the_services_own_dies_like_leaving_it_alone(registry):
+    onto_the_service = f"{BARE} --http-port 8069"
+    with pytest.raises(SessionDead, match="Address already in use"):
+        await open_card(registry, launch=onto_the_service, name="onto")
+    result = await discovery.probe_ssh(*_parsed(access(), onto_the_service, DATABASE))
+    assert "8069" in result["launch_warning"], "and the probe says so beforehand"

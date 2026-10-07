@@ -16,7 +16,7 @@ from odoo_sheller.journal import (
     journal_path,
     target_from_records,
 )
-from odoo_sheller.session import Session
+from odoo_sheller.session import Session, SessionDead
 from odoo_sheller.targets import TargetStore
 from odoo_sheller.transport import (
     DOCKER,
@@ -71,6 +71,28 @@ def _hang_up(queue: asyncio.Queue) -> None:
     while not queue.empty():
         queue.get_nowait()
     queue.put_nowait(None)
+
+
+# Odoo's own words, for a shell that could not bind the port beside a running
+# service. They are kept; the fix is not in them.
+BIND_HINT = (
+    "\n— the server's config probably has workers above 0, which makes Odoo's shell "
+    "bind its HTTP port before it starts. Add --no-http to Launch (or --workers=0)"
+)
+
+
+def _with_advice(exc: BaseException, target: Target) -> BaseException:
+    """The same death, plus what to do about it where that is known."""
+    if (
+        target.kind == SSH
+        and isinstance(exc, SessionDead)
+        and "Address already in use" in str(exc)
+        and "--no-http" not in str(exc)
+    ):
+
+        return SessionDead(f"{exc}{BIND_HINT}")
+
+    return exc
 
 
 class Registry:
@@ -295,7 +317,8 @@ class Registry:
             if target.kind == SSH and (refusal := version_refusal(hello.get("odoo"))):
                 # The probe could not read the version; now it is a fact.
                 raise ValueError(refusal)
-        except BaseException as exc:
+        except BaseException as caught:
+            exc = _with_advice(caught, target)
             if session is not None:
                 with contextlib.suppress(Exception):
                     await session.kill()
@@ -314,6 +337,8 @@ class Registry:
                     "session": session_id,
                     "reason": str(exc),
                 })
+            if exc is not caught:
+                raise exc from caught
             raise
 
         self._broadcast({"kind": "session_opened", "session": session.describe()})

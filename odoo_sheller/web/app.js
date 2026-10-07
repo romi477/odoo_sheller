@@ -777,6 +777,9 @@ function describeServerProbe(probe) {
   if (probe.warning) {
     parts.push(probe.warning);
   }
+  if (probe.launch_warning) {
+    parts.push(`Careful: ${probe.launch_warning}`);
+  }
 
   return parts.filter(Boolean).join(' · ');
 }
@@ -1181,7 +1184,12 @@ function renderRemoteCards(kind) {
       note.textContent = broken;
       note.classList.add('error');
     } else if (probe.ok && probe.supported) {
-      note.hidden = true;
+      // The probe worked. When it also found something the config will do to
+      // this launch, that stays on the card: it is what the first session would
+      // otherwise find out the hard way.
+      note.hidden = !probe.launch_warning;
+      note.textContent = probe.launch_warning || '';
+      note.classList.toggle('caution', Boolean(probe.launch_warning));
     } else {
       note.textContent = probe.error || 'not probed yet';
       note.classList.toggle('error', Boolean(probe.error));

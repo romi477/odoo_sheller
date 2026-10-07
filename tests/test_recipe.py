@@ -452,7 +452,7 @@ def test_ordinary_database_names(name):
 
 def test_the_breakdown_says_who_where_and_what(key):
     access = parse_access(f"ssh -i {key} -p 2200 ubuntu@h.example.com sudo -n -u odoo -H")
-    breakdown = describe(access, parse_launch(LAUNCH, database="acme"))
+    breakdown = describe(access, parse_launch(LAUNCH + " --no-http", database="acme"))
     assert breakdown["login"] == {"user": "ubuntu", "host": "h.example.com", "port": 2200}
     assert breakdown["become"] == {"user": "odoo", "home": True}
     assert breakdown["runs_as"] == "odoo"
@@ -494,7 +494,8 @@ def test_logging_in_as_root_warns(key):
 
 def test_no_become_and_a_config_the_login_user_may_not_read_is_not_ours_to_guess(key):
     """The probe finds that out; the grammar has no opinion on the server."""
-    assert describe(parse_access(f"ssh -i {key} ubuntu@h"), parse_launch(LAUNCH))["warnings"] == []
+    launch = parse_launch(LAUNCH + " --no-http")
+    assert describe(parse_access(f"ssh -i {key} ubuntu@h"), launch)["warnings"] == []
 
 
 # --- assembly: data, not code ----------------------------------------------
@@ -535,3 +536,58 @@ def test_odoo_bin_is_the_token_before_shell():
     assert parse_launch(LAUNCH).odoo_bin == "/opt/odoo/13.0/odoo/odoo-bin"
     assert parse_launch("/usr/bin/odoo shell").odoo_bin == "/usr/bin/odoo"
     assert parse_launch("/usr/bin/env A=b /x/py /x/odoo-bin shell -c /c").odoo_bin == "/x/odoo-bin"
+
+
+# --- HTTP: the one thing a server's config can do to `shell` -------------------
+#
+# `shell` starts no HTTP server and no cron when the config says `workers = 0`.
+# When it says more, Odoo takes the prefork path, which binds the HTTP port
+# *before* the shell starts: beside the running service that is "Address
+# already in use". `--no-http` or `--workers=0` prevents it.
+
+
+def http_warnings(launch_text, key):
+    access = parse_access(f"ssh -i {key} ubuntu@h")
+
+    return [w for w in describe(access, parse_launch(launch_text))["warnings"] if "HTTP" in w]
+
+
+@pytest.mark.parametrize(
+    "flags",
+    ["--no-http", "--no-xmlrpc", "--workers=0", "--workers 0", "--no-http --workers=2"],
+)
+def test_a_launch_that_turns_http_off_is_not_warned_about_it(key, flags):
+    assert parse_launch(f"{LAUNCH} {flags}").http_off is True
+    assert http_warnings(f"{LAUNCH} {flags}", key) == []
+
+
+@pytest.mark.parametrize("flags", ["", "--workers=4", "--workers 2", "--log-level=debug"])
+def test_a_launch_that_leaves_http_alone_is_warned_about_the_port(key, flags):
+    launch = parse_launch(f"{LAUNCH} {flags}")
+    assert launch.http_off is False
+    warnings = http_warnings(f"{LAUNCH} {flags}", key)
+    assert len(warnings) == 1
+    assert "Address already in use" in warnings[0]
+    assert "--no-http" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "flags",
+    ["--xmlrpc-port 8068", "--http-port 8070", "--http-port=8070", "-p 8070", "-p8070"],
+)
+def test_moving_the_port_is_not_the_same_as_turning_http_off(key, flags):
+    """It works for as long as nothing else listens on the new port, which is a
+    thing to keep true rather than a thing that cannot go wrong."""
+    launch = parse_launch(f"{LAUNCH} {flags}")
+    assert launch.http_off is False
+    assert launch.http_port == "8068" if "8068" in flags else launch.http_port == "8070"
+    warnings = http_warnings(f"{LAUNCH} {flags}", key)
+    assert len(warnings) == 1
+    assert "moves" in warnings[0]
+    assert "--no-http" in warnings[0]
+
+
+def test_an_http_flag_before_shell_is_not_one_of_the_launchs_arguments():
+    """`shell` is the subcommand; what follows it is Odoo's, what precedes it is
+    the interpreter's own."""
+    assert parse_launch("/x/py -p /x/odoo-bin shell").http_off is False

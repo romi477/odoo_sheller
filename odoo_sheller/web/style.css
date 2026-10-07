@@ -673,6 +673,11 @@ button.ssh-save {
   color: var(--red);
 }
 
+/* The probe worked and found something to say: not a failure, so not red. */
+.probe-note.caution {
+  color: var(--amber);
+}
+
 .picker {
   display: flex;
   gap: 6px;

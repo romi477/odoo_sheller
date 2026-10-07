@@ -25,7 +25,7 @@
     <nav id="top">
       <a class="brand" href="https://github.com/romi477/odoo_sheller" target="_blank" rel="noopener noreferrer" title="odoo-sheller on GitHub">
         <img class="logo" src="/static/logo.svg" alt="" width="18" height="18">
-        <span class="wordmark">odoo-sheller.<sub>v1.9.0</sub></span>
+        <span class="wordmark">odoo-sheller.<sub>v1.9.1</sub></span>
       </a>
       <div class="nav-tabs">
         <button data-screen="connect" class="active" title="Running containers. Probe and start a session. ⌥⌘←/→ switches tabs.">Connect</button>
@@ -82,8 +82,8 @@
           </label>
           <label class="ssh-field">
             <span class="ssh-label">Launch</span>
-            <input class="ssh-launch mono" placeholder="/opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf" spellcheck="false"
-                   title="What to run once there: the absolute path of the interpreter and of odoo-bin, then shell and whatever options the server needs. It is run exactly as written.">
+            <input class="ssh-launch mono" placeholder="/opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf --no-http" spellcheck="false"
+                   title="What to run once there: the absolute path of the interpreter and of odoo-bin, then shell and whatever options the server needs. It is run exactly as written. Add --no-http: a server whose config has workers above 0 makes the shell bind its HTTP port, and fails beside the running service with 'Address already in use'.">
             <p class="field-error" data-field="launch" hidden></p>
           </label>
           <div class="ssh-row">

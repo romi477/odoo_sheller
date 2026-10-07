@@ -526,6 +526,8 @@ if [ -n "$2" ]; then
   if [ -r "$2" ]; then
     emit config_readable 1
     emit db_name "$(sed -n 's/^[[:space:]]*db_name[[:space:]]*=[[:space:]]*//p' "$2" | head -n 1)"
+    emit workers "$(sed -n 's/^[[:space:]]*workers[[:space:]]*=[[:space:]]*//p' "$2" | head -n 1)"
+    emit http_port "$(sed -n -e 's/^[[:space:]]*http_port[[:space:]]*=[[:space:]]*//p' -e 's/^[[:space:]]*xmlrpc_port[[:space:]]*=[[:space:]]*//p' "$2" | head -n 1)"
   else
     emit config_readable 0
   fi
@@ -609,7 +611,7 @@ def _ssh_failure(code: int, out: str, err: str) -> dict:
 
     return {
         "ok": False, "supported": False, "version_known": False,
-        "untested": False, "warning": None,
+        "untested": False, "warning": None, "launch_warning": None, "workers": None,
         "odoo_bin": None, "odoo_version": None, "odoo_major": None,
         "python": None, "config": None, "db_name": None, "databases": [],
         "stage": None, "error_code": error_code, "error": error, "error_detail": raw,
@@ -624,6 +626,35 @@ def _facts(out: str) -> dict:
             facts[key] = value.strip()
 
     return facts
+
+
+def _launch_warning(facts: dict, launch: Launch) -> str | None:
+    """What the server's config will do to this launch, when it can be seen.
+
+    With `workers` above 0 Odoo's shell takes the prefork path and binds the HTTP
+    port before it starts: beside the running service, "Address already in use".
+    A probe cannot know the service is up, so it does not refuse — it says what
+    will happen. A launch that turns HTTP off has nothing to fear; one that moves
+    the port only does if it moves it onto the service's own.
+    """
+    workers = facts.get("workers", "")
+    if not workers.isdigit() or int(workers) == 0 or launch.http_off:
+
+        return None
+    configured = facts.get("http_port") or "8069"
+    port = launch.http_port or configured
+    if port != configured:
+
+        return None
+    where = f"HTTP port {port}"
+    if launch.http_port:
+        where += " (the one the launch moved it to is the service's own)"
+
+    return (
+        f"the config has workers = {workers}: this shell will bind the {where} before it "
+        "starts and fail beside the running service. Add --no-http to the launch "
+        "(or --workers=0)"
+    )
 
 
 async def probe_ssh(access: Access, launch: Launch, runner=None) -> dict:
@@ -679,6 +710,8 @@ async def probe_ssh(access: Access, launch: Launch, runner=None) -> dict:
         "error_code": None,
         "error_detail": None,
         "version_known": major is not None,
+        "workers": int(facts["workers"]) if facts.get("workers", "").isdigit() else None,
+        "launch_warning": _launch_warning(facts, launch),
     }
     if not payload["executable_ok"]:
         payload.update(

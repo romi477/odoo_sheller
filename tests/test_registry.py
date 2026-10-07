@@ -796,3 +796,70 @@ async def test_a_card_that_no_longer_parses_says_so_and_spawns_nothing(tmp_path,
     with pytest.raises(ValueError, match="key.pem"):
         await registry.open(target_id=card["id"])
     assert "argv" not in captured and "probed" not in captured
+
+
+@pytest.mark.asyncio
+async def test_a_server_whose_shell_could_not_bind_its_port_is_told_what_to_add(tmp_path, monkeypatch):
+    """The process died with Odoo's own words in its stderr. The words are right and
+    not enough: this is a config with workers above 0, and the fix is a flag."""
+    from odoo_sheller.session import SessionDead
+
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _ssh_probe(monkeypatch, captured)
+
+    class DiesBinding:
+        def __init__(self, session_id, target, process, journal, **kwargs):
+            self.id = session_id
+            self.target = target
+
+        async def start(self, timeout=90.0):
+            raise SessionDead(
+                "session did not start: OSError: [Errno 98] Address already in use"
+            )
+
+        async def kill(self):
+            pass
+
+        def describe(self):
+
+            return {"id": self.id}
+
+    monkeypatch.setattr("odoo_sheller.registry.Session", DiesBinding)
+    registry, card = _ssh_registry(tmp_path)
+    with pytest.raises(SessionDead) as raised:
+        await registry.open(target_id=card["id"])
+    message = str(raised.value)
+    assert "Address already in use" in message, "Odoo's own words are kept"
+    assert "--no-http" in message
+    assert "workers" in message
+
+
+@pytest.mark.asyncio
+async def test_other_deaths_are_not_given_that_advice(tmp_path, monkeypatch):
+    from odoo_sheller.session import SessionDead
+
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _ssh_probe(monkeypatch, captured)
+
+    class DiesOtherwise:
+        def __init__(self, session_id, target, process, journal, **kwargs):
+            self.id = session_id
+            self.target = target
+
+        async def start(self, timeout=90.0):
+            raise SessionDead("session did not start: database does not exist")
+
+        async def kill(self):
+            pass
+
+        def describe(self):
+
+            return {"id": self.id}
+
+    monkeypatch.setattr("odoo_sheller.registry.Session", DiesOtherwise)
+    registry, card = _ssh_registry(tmp_path)
+    with pytest.raises(SessionDead) as raised:
+        await registry.open(target_id=card["id"])
+    assert "--no-http" not in str(raised.value)
