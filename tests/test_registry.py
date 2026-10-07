@@ -725,7 +725,7 @@ async def test_opening_an_ssh_card_opens_what_it_says(tmp_path, monkeypatch):
 async def test_the_stage_of_a_plain_server_is_the_one_a_human_declared(tmp_path, monkeypatch):
     """Not from a probe, and not from whoever asked to open it. This is what the
     commit guard turns on, and nothing on a plain server says what it is."""
-    for declared in ("production", "staging", "development"):
+    for declared in ("production", "staging"):
         captured = {}
         _stub_spawn_and_session(monkeypatch, captured)
         _ssh_probe(monkeypatch, captured, stage="staging")

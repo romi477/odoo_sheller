@@ -246,9 +246,35 @@ def test_the_default_stage_is_production(ssh_store):
     assert card["database"] is None
 
 
-@pytest.mark.parametrize("stage", ["production", "staging", "development"])
+@pytest.mark.parametrize("stage", ["production", "staging"])
 def test_the_stages_a_human_may_declare(ssh_store, stage):
+    """Two, because the guard tells two apart: production is written to only by a
+    human who types its name, once; everything else is closed until granted."""
     assert add_ssh(ssh_store, stage=stage)["stage"] == stage
+
+
+def test_the_third_stage_there_used_to_be_is_no_longer_one_to_declare(ssh_store):
+    with pytest.raises(ValueError, match="stage"):
+        add_ssh(ssh_store, stage="development")
+
+
+def test_a_card_written_when_there_were_three_stages_reads_as_staging(ssh_store):
+    """`development` behaved exactly as `staging` did, so an old card keeps its
+    meaning — and a stage the store no longer knows would have made the whole
+    file unreadable."""
+    ssh_store.path.write_text(
+        json.dumps({
+            "version": 1, "odoosh": [],
+            "ssh": [{
+                "id": "ssh-ab12", "name": "dev box", "access": ACCESS, "launch": LAUNCH,
+                "database": None, "stage": "development",
+            }],
+        }),
+        encoding="utf-8",
+    )
+    assert ssh_store.list()[0]["stage"] == "staging"
+    ssh_store.add_odoosh("1", "a.example.com")
+    assert on_disk(ssh_store)["ssh"][0]["stage"] == "staging"
 
 
 @pytest.mark.parametrize("stage", ["", "prod", "PRODUCTION", "test", None, 1])

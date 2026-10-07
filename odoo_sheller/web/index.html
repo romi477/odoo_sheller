@@ -111,10 +111,9 @@
                 <label class="ssh-field ssh-stage-field">
                   <span class="ssh-label">Stage</span>
                   <select class="ssh-stage"
-                          title="Nothing on a plain server says what it is, so you do. Production refuses a commit outright; staging and development are closed to commit until you grant it.">
-                    <option value="production" selected>production — commit refused</option>
+                          title="Nothing on a plain server says what it is, so you do. On production only you commit, one commit at a time, after typing its name — an agent never writes there. Staging is closed to commit until you grant it.">
+                    <option value="production" selected>production — commit only by you, after typing its name</option>
                     <option value="staging">staging — commit off until granted</option>
-                    <option value="development">development — commit off until granted</option>
                   </select>
                 </label>
               </div>

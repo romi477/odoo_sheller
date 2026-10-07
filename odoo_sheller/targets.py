@@ -50,7 +50,10 @@ SSH_PREFIX = "ssh-"
 
 # What a human may declare a plain server to be. Nothing on one says what it
 # is, so the default is the dangerous one: production refuses a commit outright.
-STAGES = ("production", "staging", "development")
+# Two, because the guard tells two apart: production is written to only by a
+# human who types its name, once; everything else is closed until granted. A
+# third, `development`, behaved exactly as `staging` did.
+STAGES = ("production", "staging")
 DEFAULT_STAGE = "production"
 MAX_NAME = 60
 SSH_FIELDS = ("name", "access", "launch", "database", "stage")
@@ -128,6 +131,11 @@ class TargetStore:
             ):
                 raise self._refuse("has an odoosh entry without a build and a host")
         for entry in data["ssh"]:
+            if isinstance(entry, dict) and entry.get("stage") == "development":
+                # A card written when there were three. It meant what staging
+                # means, and a stage unknown here would make the whole file
+                # unreadable.
+                entry["stage"] = "staging"
             if not (
                 isinstance(entry, dict)
                 and isinstance(entry.get("id"), str)

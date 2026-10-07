@@ -196,7 +196,7 @@ async def test_a_plain_server_is_production_until_a_human_says_otherwise(session
     assert not isinstance(refused.value, CommitForbidden), "a human may grant this one"
 
 
-@pytest.mark.parametrize("stage", ["staging", "development"])
+@pytest.mark.parametrize("stage", ["staging"])
 async def test_a_declared_non_production_server_is_closed_to_commit_until_granted(registry, stage):
     live = await open_card(registry, stage=stage)
     try:
@@ -209,13 +209,13 @@ async def test_a_declared_non_production_server_is_closed_to_commit_until_grante
 
 async def test_what_a_session_created_is_gone_when_it_closes(registry):
     """Closing discards the open transaction; a second session never sees it."""
-    live = await open_card(registry, stage="development")
+    live = await open_card(registry, stage="staging")
     try:
         created = await live.execute("p = env['res.partner'].create({'name': 'pt-e2e-ssh-never'})\np.id")
         assert created["error"] is None
     finally:
         await registry.close(live.id)
-    again = await open_card(registry, stage="development", name="second")
+    again = await open_card(registry, stage="staging", name="second")
     try:
         seen = await again.execute(
             "env['res.partner'].search_count([('name', '=', 'pt-e2e-ssh-never')])"

@@ -2868,9 +2868,9 @@ def test_the_stage_of_a_server_defaults_to_production_and_each_choice_says_what_
     select = re.search(r'<select class="ssh-stage".*?</select>', page, re.DOTALL)
     assert select is not None
     options = re.findall(r'<option value="(\w+)"( selected)?>([^<]*)</option>', select.group(0))
-    assert [value for value, _, _ in options] == ["production", "staging", "development"]
+    assert [value for value, _, _ in options] == ["production", "staging"]
     assert options[0][1], "production is the default: nothing on a plain server says what it is"
-    assert "refused" in options[0][2]
+    assert "name" in options[0][2], "production is written to by typing its name"
     assert all("commit" in text for _, _, text in options)
 
 
