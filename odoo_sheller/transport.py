@@ -42,7 +42,8 @@ def docker_bin() -> str:
 
     return os.environ.get("ODOO_SHELLER_DOCKER") or "docker"
 
-# What odoo.sh calls its instances. Only this one refuses a commit outright.
+# What odoo.sh calls its instances. Only this one has the production guard: an
+# agent never writes to it, and a human only once, by typing its name.
 PRODUCTION = "production"
 
 def ssh_destination(build: object, host: object) -> str:

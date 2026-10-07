@@ -50,7 +50,8 @@ ODOOSH_PREFIX = "odoosh-"
 SSH_PREFIX = "ssh-"
 
 # What a human may declare a plain server to be. Nothing on one says what it
-# is, so the default is the dangerous one: production refuses a commit outright.
+# is, so the default is the dangerous one: production, which an agent never
+# writes to and a human writes to only once, by typing its name.
 # Two, because the guard tells two apart: production is written to only by a
 # human who types its name, once; everything else is closed until granted. A
 # third, `development`, behaved exactly as `staging` did.

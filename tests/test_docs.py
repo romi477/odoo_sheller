@@ -356,3 +356,11 @@ def test_the_compact_width_cap_matches_the_page_it_caps():
     assert abs(eval(declared.group(1).replace("_", "")) - wanted) < 0.5, (
         f"the stylesheet says {wanted}px, lib.rs says {declared.group(1).strip()}"
     )
+
+
+def test_security_says_the_production_gate_is_on_the_commit_tool_not_on_code():
+    """`exec` can commit by itself. A promise that "only a human writes" which did
+    not say so would be wider than what the code does."""
+    text = " ".join((DOCS / "security.md").read_text(encoding="utf-8").split())
+    assert "The gate is on the commit tool" in text
+    assert "env.cr.commit()" in text

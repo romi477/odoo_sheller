@@ -167,8 +167,9 @@ class SshCardBody(NoDatabase):
     name: str
     access: str
     launch: str
-    # Nothing on a plain server says what it is, so the default is the one
-    # that refuses a commit outright, and a human says otherwise.
+    # Nothing on a plain server says what it is, so the default is the one with
+    # the strictest guard — production, where an agent never writes and a human
+    # only once — and a human says otherwise.
     stage: str = DEFAULT_STAGE
 
 

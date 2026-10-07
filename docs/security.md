@@ -160,7 +160,14 @@ whole of the remote safety story:
   the transaction it was given for. The journal records the grant with the name
   that was typed, its spending, and the stage of every commit. Reading is
   untouched: `exec` and `rollback` work, because inspecting a production instance
-  is the legitimate case. This used to be refused outright, and on an ssh card
+  is the legitimate case. The gate is on the commit tool: code an agent runs
+  through `exec` can still commit by itself (`env.cr.commit()`, or
+  `button_immediate_upgrade()`, which does so on its own), because the daemon
+  cannot tell what Python will do. Forbidding that is the agent's instructions'
+  job — "never `env.cr.commit()` in code" — and the journal, which holds every
+  `exec`'s code, is how it is checked afterwards; so an agent session on
+  production is handed over only for data whose accidental write is survivable.
+  This used to be refused outright, and on an ssh card
   that was one mislabelled stage away from nothing: a fix that had to be
   committed on a production server meant calling it "staging", and losing every
   signal that it is not. A guard that cannot be passed honestly is passed
