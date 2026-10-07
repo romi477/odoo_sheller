@@ -2985,14 +2985,6 @@ async function transaction(id, kind) {
     renderSessions();
   } catch (error) {
     noticeDialog(`${kind} failed: ${error.message}`);
-  } finally {
-    // The daemon spends a production grant when a commit is attempted — also
-    // one that failed, since nobody knows what it wrote — and when a
-    // transaction ends. A latch left pressed would offer a commit it refuses.
-    if (record.info.stage === 'production') {
-      record.info.allow_commit = false;
-      renderSessions();
-    }
   }
 }
 

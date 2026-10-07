@@ -3321,15 +3321,19 @@ def test_granting_on_production_asks_for_the_name_and_sends_what_was_typed(app_j
     assert "typed === null" in body or "!typed" in body, "cancelling asks nothing of the daemon"
 
 
-def test_the_grant_is_forgotten_on_this_side_as_soon_as_it_is_spent(app_js):
-    """The daemon spends it when a commit is attempted and when a transaction ends;
-    a latch still showing pressed afterwards would offer a commit that is refused."""
+def test_the_page_learns_that_a_grant_was_spent_from_the_daemon_not_by_guessing(app_js):
+    """The daemon spends a production grant when a commit is attempted and when a
+    transaction ends, and says so (`policy`). Clearing it on this side whatever
+    happened was wrong whenever the request never got that far — a 403, a
+    network error — because the daemon still held it while the page showed
+    "Not granted"."""
     tx = re.search(r"async function transaction\(.*?\n\}", app_js, re.DOTALL)
     assert tx is not None
-    body = tx.group(0)
-    assert "stage === 'production'" in body
-    assert "allow_commit = false" in body
-    assert "finally" in body, "a failed attempt spends it too"
+    assert "allow_commit" not in tx.group(0), "this function does not decide whose grant it is"
+    assert "finally" not in tx.group(0)
+    socket = re.search(r"message\.kind === 'policy'\) \{(.*?)\}", app_js, re.DOTALL)
+    assert socket is not None
+    assert "current.info.allow_commit = message.allow_commit" in socket.group(1)
 
 
 def test_an_armed_production_session_looks_armed(app_js):
