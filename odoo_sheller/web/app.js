@@ -24,6 +24,7 @@ const state = {
   startups: new Map(),
   connectMode: 'local',
   builds: [],
+  buildsError: null,
   containerCards: new Map(),
 };
 
@@ -176,6 +177,15 @@ const api = {
       method: 'POST',
       headers: {'content-type': 'application/json', ...headers},
       body: body === undefined ? null : JSON.stringify(body),
+    });
+
+    return check(response);
+  },
+  async put(path, body, headers = {}) {
+    const response = await fetch(path, {
+      method: 'PUT',
+      headers: {'content-type': 'application/json', ...headers},
+      body: JSON.stringify(body),
     });
 
     return check(response);
@@ -513,31 +523,108 @@ function closeLabel(records) {
 //
 // Local containers are discovered; a build is entered. There is no `docker ps`
 // for odoo.sh, so the only list that can exist is the one you built yourself —
-// kept here so a 40-character hostname is typed once, not once per session.
+// kept so a 40-character hostname is typed once, not once per session.
+//
+// The list is the daemon's (`~/.odoo-sheller/targets.json`), not this page's:
+// a desktop-app frame does not keep localStorage. Writing a card down, changing
+// it, deleting it and probing it need the admin key — each is an instruction to
+// this machine to open an ssh connection — and it is asked for the first time
+// one of them is refused. What stays here is only what the last probe said.
 
-function savedBuilds() {
+function adminHeaders() {
+
+  return authHeaders(null, {admin: true});
+}
+
+function patchBuild(build, patch) {
+  state.builds = state.builds.map((item) => (item.build === build ? {...item, ...patch} : item));
+}
+
+async function loadBuilds() {
   try {
-
-    return JSON.parse(localStorage.getItem('osBuilds') || '[]');
-  } catch {
-
-    return [];
+    const cards = await request(() => api.get('/api/targets'));
+    const known = new Map(state.builds.map((item) => [item.id, item]));
+    state.builds = cards.map((card) => ({
+      ...card,
+      probe: known.get(card.id)?.probe,
+      probing: known.get(card.id)?.probing,
+    }));
+    state.buildsError = null;
+  } catch (error) {
+    state.buildsError = error.message;
   }
-}
-
-function rememberBuild(entry) {
-  const builds = savedBuilds().filter((item) => item.build !== entry.build);
-  builds.unshift(entry);
-  localStorage.setItem('osBuilds', JSON.stringify(builds.slice(0, 12)));
-  state.builds = savedBuilds();
-}
-
-function forgetBuild(build) {
-  localStorage.setItem(
-    'osBuilds', JSON.stringify(savedBuilds().filter((item) => item.build !== build)),
-  );
-  state.builds = savedBuilds();
   renderBuilds();
+}
+
+async function addBuild(build, host) {
+  try {
+    await withAdminRetry(
+      () => api.post('/api/targets', {kind: 'odoosh', build, host}, adminHeaders()),
+    );
+  } catch (error) {
+    noticeDialog(`Could not save the build: ${error.message}`);
+
+    return;
+  }
+  await loadBuilds();
+  await probeBuild(build, host);
+}
+
+async function forgetBuild(entry) {
+  try {
+    await withAdminRetry(() => api.del(`/api/targets/${entry.id}`, adminHeaders()));
+  } catch (error) {
+    noticeDialog(`Could not remove the build: ${error.message}`);
+
+    return;
+  }
+  await loadBuilds();
+}
+
+// Builds used to be kept in this browser's localStorage. Moved to the daemon
+// once, when the odoo.sh list is first opened — never at load, which would
+// put an admin-key prompt in front of someone who never uses odoo.sh. An entry
+// the daemon refuses is dropped; a key left unentered leaves them all for next
+// time.
+let migratingBuilds = false;
+
+async function migrateBuilds() {
+  if (migratingBuilds) {
+
+    return;
+  }
+  let legacy = [];
+  try {
+    legacy = JSON.parse(localStorage.getItem('osBuilds') || '[]');
+  } catch {
+    legacy = [];
+  }
+  const entries = Array.isArray(legacy) ? legacy.filter((item) => item?.build && item?.host) : [];
+  if (!entries.length) {
+    localStorage.removeItem('osBuilds');
+
+    return;
+  }
+  migratingBuilds = true;
+  try {
+    // Oldest first: the daemon lists the newest card first.
+    for (const entry of entries.slice().reverse()) {
+      try {
+        await withAdminRetry(() => api.post(
+          '/api/targets', {kind: 'odoosh', build: entry.build, host: entry.host}, adminHeaders(),
+        ));
+      } catch (error) {
+        if (error.status !== 422) {
+
+          return;
+        }
+      }
+    }
+    localStorage.removeItem('osBuilds');
+  } finally {
+    migratingBuilds = false;
+    await loadBuilds();
+  }
 }
 
 function renderTargets() {
@@ -564,23 +651,25 @@ function setConnectMode(mode) {
     : 'Enter a build id and its hostname. The instance decides the rest.';
   if (!local) {
     renderBuilds();
+    migrateBuilds();
   }
 }
 
 async function probeBuild(build, host) {
-  const known = savedBuilds().find((item) => item.build === build) || {build, host};
-  rememberBuild({...known, host, probing: true});
+  patchBuild(build, {probing: true});
   renderBuilds();
   try {
-    const probe = await request(() => api.post('/api/probe/odoosh', {build, host}));
-    rememberBuild({...known, host, probe, probing: false});
+    const probe = await withAdminRetry(
+      () => api.post('/api/targets/probe', {kind: 'odoosh', build, host}, adminHeaders()),
+    );
+    patchBuild(build, {probe, probing: false});
   } catch (error) {
-    rememberBuild({...known, host, probe: {ok: false, error: String(error)}, probing: false});
+    patchBuild(build, {probe: {ok: false, error: error.message}, probing: false});
   }
   renderBuilds();
 }
 
-async function startOdooshSession(build, host) {
+async function startOdooshSession(build) {
   const previous = state.startups.get(build);
   if (previous?.socket) {
     previous.socket.close();
@@ -608,9 +697,7 @@ async function startOdooshSession(build, host) {
   adoptStartingSession(build);
   try {
     const info = await request(() => api.post('/api/sessions', {
-      kind: 'odoosh',
-      build,
-      host,
+      target_id: `odoosh-${build}`,
       client_token: token,
     }));
     const opening = state.startups.get(build);
@@ -652,7 +739,9 @@ function renderBuilds() {
   if (!state.builds.length) {
     const empty = document.createElement('li');
     empty.className = 'empty';
-    empty.textContent = 'No builds yet. Enter one above.';
+    empty.textContent = state.buildsError
+      ? `Could not read the saved builds: ${state.buildsError}`
+      : 'No builds yet. Enter one above.';
     list.append(empty);
 
     return;
@@ -686,14 +775,17 @@ function renderBuilds() {
       note.textContent = probe.error || 'not probed yet';
     }
 
-    card.querySelector('.start').disabled = !(probe.ok && probe.supported);
+    // A card nobody has probed this load is not a bad card: the daemon asks the
+    // instance on the way in, and refuses there if it must.
+    card.querySelector('.start').disabled = Boolean(entry.probing)
+      || (Boolean(entry.probe) && !(probe.ok && probe.supported));
     card.querySelector('.start').addEventListener(
-      'click', () => startOdooshSession(entry.build, entry.host),
+      'click', () => startOdooshSession(entry.build),
     );
     card.querySelector('.reprobe').addEventListener(
       'click', () => probeBuild(entry.build, entry.host),
     );
-    card.querySelector('.forget').addEventListener('click', () => forgetBuild(entry.build));
+    card.querySelector('.forget').addEventListener('click', () => forgetBuild(entry));
 
     const open = sessionsForTarget(entry.build);
     const connected = card.querySelector('.connected');
@@ -2438,7 +2530,7 @@ async function withAdminRetry(operation) {
 async function askForAdminKey() {
   const stored = adminKey();
   const entered = await promptDialog(
-    'Admin key — needed to act on a session you do not own.\n\n'
+    'Admin key — needed to act on a session you do not own, or to write, probe or remove an odoo.sh build.\n\n'
     + (stored ? 'The daemon refused the key below. Correct it and try again.\n\n' : '')
     + 'The daemon printed it at startup, and keeps it here:\n'
     + '  ~/.odoo-sheller/admin.key\n\n'
@@ -2643,12 +2735,9 @@ async function duplicateSession(id) {
     let opening;
     if (record.info.kind === 'odoosh') {
       // A build needs no probe of ours to reopen: the daemon probes it on the
-      // way in, and the instance dictates the database either way.
-      opening = {
-        kind: 'odoosh',
-        build: record.info.container,
-        host: record.info.host,
-      };
+      // way in, and the instance dictates the database either way. Its card
+      // is what says where it is.
+      opening = {target_id: `odoosh-${record.info.container}`};
     } else {
       const container = state.containers.find((item) => item.name === record.info.container);
       const probe = container?.probe?.odoo_bin
@@ -3524,7 +3613,7 @@ document.querySelector('.odoosh-add').addEventListener('click', () => {
   const build = document.querySelector('.odoosh-build').value.trim();
   const host = document.querySelector('.odoosh-host').value.trim();
   if (build && host) {
-    probeBuild(build, host);
+    addBuild(build, host);
   }
 });
 
@@ -3544,7 +3633,6 @@ if (new URLSearchParams(location.search).has('app')) {
 
 connectRegistrySocket();
 restoreScreen();
-state.builds = savedBuilds();
 setConnectMode(localStorage.getItem('osConnectMode') === 'odoosh' ? 'odoosh' : 'local');
 setInterval(tickSessionAges, 1000);
-Promise.allSettled([loadContainers(), reattachSessions()]);
+Promise.allSettled([loadContainers(), reattachSessions(), loadBuilds()]);

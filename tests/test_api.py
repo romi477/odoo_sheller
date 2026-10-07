@@ -16,6 +16,7 @@ from odoo_sheller.session import (
     SessionNotReady,
     SessionState,
 )
+from odoo_sheller.targets import TargetStore
 
 OWNER_KEY = "write-key-s1"
 ADMIN_KEY = "admin-key"
@@ -191,8 +192,9 @@ class FakeRegistry:
 
 
 @pytest.fixture
-def client():
+def client(tmp_path):
     registry = FakeRegistry()
+    registry.targets = TargetStore(tmp_path / "targets.json")
     app = create_app(registry=registry)
     with TestClient(app, headers={"X-OS-Session-Key": OWNER_KEY}, base_url=LOCAL) as test_client:
         test_client.registry = registry
@@ -1022,37 +1024,65 @@ def test_open_does_not_autoclose_by_default(client):
     assert client.registry.open_kwargs["autoclose"] is False
 
 
-# --- odoo.sh targets ----------------------------------------------------
+# --- cards: where a remote instance is, written down by a human ----------
+
+ADMIN = {"X-OS-Admin-Key": ADMIN_KEY}
+BUILD = {"kind": "odoosh", "build": "36887345", "host": "build.dev.odoo.com"}
 
 
-def test_open_forwards_an_odoosh_target(client):
-    response = client.post(
-        "/api/sessions",
-        json={"kind": "odoosh", "build": "36887345", "host": "build.dev.odoo.com"},
-    )
-    assert response.status_code == 200
-    assert client.registry.open_kwargs["kind"] == "odoosh"
-    assert client.registry.open_kwargs["build"] == "36887345"
-    assert client.registry.open_kwargs["host"] == "build.dev.odoo.com"
+def test_no_cards_to_begin_with(client):
+    assert client.get("/api/targets").json() == []
 
 
-def test_open_is_a_local_docker_target_unless_told_otherwise(client):
-    client.post("/api/sessions", json={"container": "c", "database": "db", "odoo_bin": "/b"})
-    assert client.registry.open_kwargs["kind"] == "docker"
+def test_a_card_is_written_only_with_the_admin_key(client):
+    refused = client.post("/api/targets", json=BUILD)
+    assert refused.status_code == 403
+    assert refused.json()["detail"]["error"] == "admin_only"
+    wrong = client.post("/api/targets", json=BUILD, headers={"X-OS-Admin-Key": "nope"})
+    assert wrong.status_code == 403
+    assert client.get("/api/targets").json() == []
+
+    written = client.post("/api/targets", json=BUILD, headers=ADMIN)
+    assert written.status_code == 200
+    assert written.json() == {
+        "id": "odoosh-36887345", "kind": "odoosh", "name": "36887345",
+        "build": "36887345", "host": "build.dev.odoo.com",
+    }
+    assert client.get("/api/targets").json() == [written.json()]
 
 
-def test_probing_a_build_answers_what_the_instance_said(client, monkeypatch):
-    async def fake_probe(build, host, runner=None):
+def test_the_list_needs_no_key(client):
+    """A key to merely see the cards would mean the Connect screen asks for the
+    admin key on every load, for a feature most people never use. The cards hold
+    names, not secrets; what they do — write, change, probe — is gated."""
+    client.post("/api/targets", json=BUILD, headers=ADMIN)
+    assert client.get("/api/targets").status_code == 200
 
-        return {"ok": True, "supported": True, "stage": "staging",
-                "db_name": "ventor-dev-36887345", "odoo_version": "19.0", "error": None}
 
-    monkeypatch.setattr("odoo_sheller.api.discovery.probe_odoosh", fake_probe)
-    body = client.post(
-        "/api/probe/odoosh", json={"build": "36887345", "host": "build.dev.odoo.com"}
-    ).json()
-    assert body["stage"] == "staging"
-    assert body["db_name"] == "ventor-dev-36887345"
+def test_a_card_is_changed_and_deleted_only_with_the_admin_key(client):
+    client.post("/api/targets", json=BUILD, headers=ADMIN)
+    card = "/api/targets/odoosh-36887345"
+    assert client.put(card, json={"host": "other.dev.odoo.com"}).status_code == 403
+    assert client.delete(card).status_code == 403
+    assert client.get("/api/targets").json()[0]["host"] == "build.dev.odoo.com"
+
+    changed = client.put(card, json={"host": "other.dev.odoo.com"}, headers=ADMIN)
+    assert changed.status_code == 200
+    assert changed.json()["host"] == "other.dev.odoo.com"
+    assert client.delete(card, headers=ADMIN).status_code == 200
+    assert client.get("/api/targets").json() == []
+
+
+def test_a_card_nobody_wrote_is_404(client):
+    assert client.put("/api/targets/odoosh-9", json={"host": "h"}, headers=ADMIN).status_code == 404
+    assert client.delete("/api/targets/odoosh-9", headers=ADMIN).status_code == 404
+
+
+def test_a_build_cannot_be_renamed(client):
+    client.post("/api/targets", json=BUILD, headers=ADMIN)
+    response = client.put("/api/targets/odoosh-36887345", json={"build": "1"}, headers=ADMIN)
+    assert response.status_code == 422
+    assert "build" in str(response.json()["detail"])
 
 
 @pytest.mark.parametrize(
@@ -1076,11 +1106,97 @@ def test_a_build_or_host_that_is_not_a_name_is_422_before_anything_runs(
         return {}
 
     monkeypatch.setattr("odoo_sheller.api.discovery.probe_odoosh", fake_probe)
-    assert client.post("/api/probe/odoosh", json={"build": build, "host": host}).status_code == 422
-    opened = client.post("/api/sessions", json={"kind": "odoosh", "build": build, "host": host})
-    assert opened.status_code == 422
+    body = {"kind": "odoosh", "build": build, "host": host}
+    assert client.post("/api/targets", json=body, headers=ADMIN).status_code == 422
+    assert client.post("/api/targets/probe", json=body, headers=ADMIN).status_code == 422
+    assert client.get("/api/targets").json() == []
     assert probed == []
-    assert not hasattr(client.registry, "open_kwargs")
+
+
+@pytest.mark.parametrize("host", ["-oProxyCommand=x", "a b", "h;id", ""])
+def test_a_host_that_is_not_a_name_cannot_replace_a_good_one(client, host):
+    client.post("/api/targets", json=BUILD, headers=ADMIN)
+    response = client.put("/api/targets/odoosh-36887345", json={"host": host}, headers=ADMIN)
+    assert response.status_code == 422
+    assert client.get("/api/targets").json()[0]["host"] == "build.dev.odoo.com"
+
+
+def test_probing_a_card_answers_what_the_instance_said(client, monkeypatch):
+    async def fake_probe(build, host, runner=None):
+
+        return {"ok": True, "supported": True, "stage": "staging",
+                "db_name": "ventor-dev-36887345", "odoo_version": "19.0", "error": None}
+
+    monkeypatch.setattr("odoo_sheller.api.discovery.probe_odoosh", fake_probe)
+    body = client.post("/api/targets/probe", json=BUILD, headers=ADMIN).json()
+    assert body["stage"] == "staging"
+    assert body["db_name"] == "ventor-dev-36887345"
+    assert client.get("/api/targets").json() == [], "a probe stores nothing"
+
+
+def test_probing_is_the_admin_s_act(client, monkeypatch):
+    """It makes this machine open an ssh connection to a host somebody named."""
+    called = []
+
+    async def fake_probe(build, host, runner=None):
+        called.append(build)
+
+        return {}
+
+    monkeypatch.setattr("odoo_sheller.api.discovery.probe_odoosh", fake_probe)
+    assert client.post("/api/targets/probe", json=BUILD).status_code == 403
+    assert called == []
+
+
+def test_the_probe_by_body_is_gone(client):
+    """Probing runs on a card, behind the admin key. The open endpoint that took
+    any build and host from anyone is not kept for compatibility."""
+    assert client.post("/api/probe/odoosh", json=BUILD).status_code == 404
+
+
+def test_a_file_that_cannot_be_read_is_a_500_that_says_which_and_why(client):
+    client.registry.targets.path.write_text("{oops", encoding="utf-8")
+    for response in (
+        client.get("/api/targets"),
+        client.post("/api/targets", json=BUILD, headers=ADMIN),
+    ):
+        assert response.status_code == 500
+        detail = response.json()["detail"]
+        assert detail["error"] == "targets_file_unusable"
+        assert "targets.json" in detail["message"]
+    assert client.registry.targets.path.read_text(encoding="utf-8") == "{oops"
+
+
+# --- opening a session on a card -------------------------------------------
+
+
+def test_open_forwards_a_card_by_its_id(client):
+    response = client.post("/api/sessions", json={"target_id": "odoosh-36887345"})
+    assert response.status_code == 200
+    assert client.registry.open_kwargs["target_id"] == "odoosh-36887345"
+
+
+def test_a_build_and_a_host_are_no_longer_an_open_body(client):
+    """Removed on purpose, with no compatibility: a session opens a card a human
+    wrote down, not whatever a caller names."""
+    client.post(
+        "/api/sessions",
+        json={"container": "c", "database": "d", "kind": "odoosh", "build": "1", "host": "h"},
+    )
+    kwargs = client.registry.open_kwargs
+    assert "build" not in kwargs
+    assert "host" not in kwargs
+    assert "kind" not in kwargs
+
+
+def test_opening_a_card_nobody_wrote_is_404(client):
+    async def missing(**kwargs):
+        raise KeyError("no target 'odoosh-9'")
+
+    client.registry.open = missing
+    response = client.post("/api/sessions", json={"target_id": "odoosh-9"})
+    assert response.status_code == 404
+    assert "odoosh-9" in str(response.json()["detail"])
 
 
 def test_opening_an_unusable_build_is_422_not_500(client):
@@ -1088,7 +1204,7 @@ def test_opening_an_unusable_build_is_422_not_500(client):
         raise ValueError("Odoo 17.0 found; only 19 is supported")
 
     client.registry.open = refuse
-    response = client.post("/api/sessions", json={"kind": "odoosh", "build": "1", "host": "h"})
+    response = client.post("/api/sessions", json={"target_id": "odoosh-1"})
     assert response.status_code == 422
     assert "17.0" in str(response.json()["detail"])
 

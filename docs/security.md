@@ -51,7 +51,11 @@ sessions with no credential, and nothing tells the two apart.
 **The admin key exists for the same reason, one level up.** It's needed to
 act on a session you never owned, or to delete a journal file — actions
 where "any local process can do this anyway" isn't quite true, because they
-affect someone else's in-progress work. It is never served by any API
+affect someone else's in-progress work. It is also what writes, changes,
+deletes and probes a remote instance's card (`/api/targets`): a card is an
+instruction to this machine to open an ssh connection somewhere, and the
+daemon takes that instruction only from someone who can read a file a web page
+cannot. Reading the list needs no key — it holds names, not secrets. It is never served by any API
 endpoint: the daemon prints it once at startup and keeps it in
 `~/.odoo-sheller/admin.key`, because an endpoint that returned it would hand
 it to anything able to fetch a page from the same unauthenticated daemon.

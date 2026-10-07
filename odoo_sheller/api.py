@@ -29,6 +29,7 @@ from odoo_sheller.session import (
     SessionNotReady,
     SessionState,
 )
+from odoo_sheller.targets import TargetsError
 from odoo_sheller.transport import check_ssh_name
 
 WEB = web_dir()
@@ -111,33 +112,36 @@ class OpenBody(BaseModel):
     # A session opened to run one test and then close itself. Never for a
     # human: the browser's session is theirs until they end it.
     autoclose: bool = False
-    # Where this runs. A local container needs container/database/odoo_bin;
-    # an odoo.sh build needs build/host, and the instance dictates the rest.
-    kind: str = "docker"
-    build: str | None = None
-    host: str | None = None
-
-    @field_validator("build", "host")
-    @classmethod
-    def _a_name_for_ssh(cls, value: str | None, info) -> str | None:
-        """Both end up in an ssh argument; see `transport.check_ssh_name`."""
-
-        return value if value is None else check_ssh_name(info.field_name, value)
+    # Where this runs. A local container needs container/database/odoo_bin.
+    # A remote instance is a card a human wrote down (`/api/targets`), opened
+    # by its id: the card says where it is, and the instance says what it is.
+    target_id: str | None = None
 
 
 class ProbeBody(BaseModel):
     container: str
 
 
-class ProbeOdooshBody(BaseModel):
+class OdooshCardBody(BaseModel):
+    """An odoo.sh build to write down, or to probe without writing it down."""
+
+    kind: Literal["odoosh"] = "odoosh"
     build: str
     host: str
 
     @field_validator("build", "host")
     @classmethod
     def _a_name_for_ssh(cls, value: str, info) -> str:
+        """Both end up in an ssh argument; see `transport.check_ssh_name`."""
 
         return check_ssh_name(info.field_name, value)
+
+
+class CardChangeBody(BaseModel):
+    host: str | None = None
+    # Accepted only so that asking for it can be refused in words: a card's
+    # build is its identity.
+    build: str | None = None
 
 
 class OwnerBody(BaseModel):
@@ -431,14 +435,84 @@ def create_app(registry: Registry | None = None) -> FastAPI:
 
         return await discovery.probe(body.container)
 
-    @app.post("/api/probe/odoosh")
-    async def probe_odoosh(body: ProbeOdooshBody):
-        """What a build says it is, before anything is opened in it.
+    def cards():
+        """The store, or a 500 that says which file is wrong and leaves it be."""
+
+        return app.state.registry.targets
+
+    def unusable(exc: TargetsError) -> HTTPException:
+
+        return HTTPException(
+            status_code=500,
+            detail={
+                "error": "targets_file_unusable",
+                "message": str(exc),
+                "recovery": "fix the file by hand, or remove it and write the cards again",
+            },
+        )
+
+    @app.get("/api/targets")
+    async def list_targets():
+        """Every card, newest first. Names, not secrets — so no key to read."""
+        try:
+
+            return cards().list()
+        except TargetsError as exc:
+            raise unusable(exc) from None
+
+    @app.post("/api/targets")
+    async def add_target(body: OdooshCardBody, x_os_admin_key: str | None = Header(None)):
+        """Write a card down, or update the one already there for that build.
+
+        A card says where a remote instance is, and that is an instruction to
+        this machine to open an ssh connection there: only a human writes one,
+        and the admin key is how the daemon tells.
+        """
+        require_admin(x_os_admin_key)
+        try:
+
+            return cards().add_odoosh(body.build, body.host)
+        except TargetsError as exc:
+            raise unusable(exc) from None
+
+    @app.put("/api/targets/{target_id}")
+    async def change_target(
+        target_id: str, body: CardChangeBody, x_os_admin_key: str | None = Header(None)
+    ):
+        require_admin(x_os_admin_key)
+        try:
+
+            return cards().update(target_id, body.model_dump(exclude_none=True))
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"no target {target_id!r}") from None
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        except TargetsError as exc:
+            raise unusable(exc) from None
+
+    @app.delete("/api/targets/{target_id}")
+    async def delete_target(target_id: str, x_os_admin_key: str | None = Header(None)):
+        require_admin(x_os_admin_key)
+        try:
+            cards().delete(target_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"no target {target_id!r}") from None
+        except TargetsError as exc:
+            raise unusable(exc) from None
+
+        return {"deleted": target_id}
+
+    @app.post("/api/targets/probe")
+    async def probe_target(body: OdooshCardBody, x_os_admin_key: str | None = Header(None)):
+        """What an instance says it is, before anything is written or opened.
 
         There is no listing for odoo.sh — a build is entered, not discovered —
         so this is the whole of target discovery for that kind. `stage` is the
-        field to read: it is what tells staging from production.
+        field to read: it is what tells staging from production. Nothing is
+        stored. It is the admin's act because it makes this machine reach out
+        to a host somebody named.
         """
+        require_admin(x_os_admin_key)
 
         return await discovery.probe_odoosh(body.build, body.host)
 
@@ -513,9 +587,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
                 replace=body.replace,
                 client_token=body.client_token,
                 autoclose=body.autoclose,
-                kind=body.kind,
-                build=body.build,
-                host=body.host,
+                target_id=body.target_id,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from None

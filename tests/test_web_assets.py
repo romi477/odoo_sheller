@@ -2000,7 +2000,9 @@ def test_a_second_session_on_a_remote_target_reopens_the_same_kind(app_js):
     assert duplicate is not None, "the duplicate path moved; check this test"
     body = duplicate.group(1)
     assert "odoosh" in body, "it must branch on the kind of target"
-    assert "build" in body and "host" in body
+    # The card says where the instance is; the session only names the card.
+    assert "target_id" in body
+    assert "host" not in body
 
 
 def test_connect_offers_a_choice_of_where_to_open(markup):
@@ -2020,8 +2022,40 @@ def test_the_odoosh_mode_asks_for_a_build_and_a_host(markup):
 def test_a_remembered_build_is_a_card_like_a_container(app_js):
     """Typing a 40-character hostname twice is once too many, and it keeps the
     existing habit: click a card, press Start."""
-    assert "osBuilds" in app_js
-    assert "rememberBuild" in app_js or "saveBuild" in app_js
+    assert "function loadBuilds(" in app_js
+    assert "'/api/targets'" in app_js
+
+
+def test_the_cards_live_on_the_daemon_not_in_the_page(app_js):
+    """A desktop-app frame is a third-party origin in WKWebView and keeps no
+    localStorage, so a list kept there was gone at every launch."""
+    assert "localStorage.setItem('osBuilds'" not in app_js
+    assert "JSON.parse(localStorage.getItem('osBuilds')" in app_js, "read, to move them across"
+
+
+def test_writing_probing_and_deleting_a_card_go_through_the_admin_key(app_js):
+    """Each is an instruction to this machine to open an ssh connection."""
+    for name in ("addBuild", "probeBuild", "forgetBuild"):
+        function = re.search(rf"async function {name}\(.*?\n\}}", app_js, re.DOTALL)
+        assert function is not None, name
+        body = function.group(0)
+        assert "withAdminRetry(" in body, name
+        assert "adminHeaders()" in body, name
+
+
+def test_the_old_cards_are_moved_when_the_list_is_opened_not_at_load(app_js):
+    """A prompt for the admin key at page load, in front of someone who never
+    opens the odoo.sh list, would be a feature charging for something unused."""
+    mode = re.search(r"function setConnectMode\(.*?\n\}", app_js, re.DOTALL)
+    assert mode is not None
+    assert "migrateBuilds(" in mode.group(0)
+    tail = app_js[app_js.index("connectRegistrySocket();\nrestoreScreen();"):]
+    assert "migrateBuilds(" not in tail
+    # What the daemon refuses is dropped; what it has not been given a key for waits.
+    migrate = re.search(r"async function migrateBuilds\(.*?\n\}", app_js, re.DOTALL)
+    assert migrate is not None
+    assert "422" in migrate.group(0)
+    assert "removeItem('osBuilds')" in migrate.group(0)
 
 
 def test_starting_a_build_opens_a_build_not_a_container(app_js):
@@ -2030,8 +2064,9 @@ def test_starting_a_build_opens_a_build_not_a_container(app_js):
     )
     assert starter is not None
     body = starter.group(2)
-    assert "kind: 'odoosh'" in body
-    assert "build" in body and "host" in body
+    assert "target_id" in body
+    assert "kind: 'odoosh'" not in body, "a build and a host are no longer an open body"
+    assert "host" not in body
 
 
 def test_production_is_unmistakable(app_js):

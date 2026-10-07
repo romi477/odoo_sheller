@@ -607,9 +607,12 @@ answers `409` until that command's result finally arrives. Use `interrupt`, or
 | `GET` | `/health` | liveness and version; no session data, no admin key |
 | `GET` | `/api/containers` | running containers |
 | `POST` | `/api/probe` | probe one container |
-| `POST` | `/api/probe/odoosh` | probe an odoo.sh build (`{"build", "host"}`); answers `stage`, `db_name`, version |
+| `GET` | `/api/targets` | the cards — remote instances a human wrote down — newest first; names, not secrets, so no key |
+| `POST` | `/api/targets` | write an odoo.sh card down (`{"build", "host"}`), or update the one for that build. Admin key |
+| `PUT` / `DELETE` | `/api/targets/{id}` | change a card's host / delete it. Admin key |
+| `POST` | `/api/targets/probe` | ask an instance about itself (`{"build", "host"}`), storing nothing; answers `stage`, `db_name`, version. Admin key |
 | `GET` | `/api/containers/{container}/tests` | test classes/methods in one addon (`?module=`) |
-| `POST` | `/api/sessions` | open a session, wait for `hello`. A local container needs `container` and `database`; leave `odoo_bin` out and the daemon probes that container for it, refusing an unsupported one with a `422` before anything starts. `kind: "odoosh"` with `build`/`host` opens on an odoo.sh build instead of a container; the instance dictates the database, and its stage is read from the build itself, not from the request. Optional `client_token` is echoed back in the session description, so a client recognises its own `session_starting` among several. An `agent` owner with `allow_commit: true` is a `403 needs_a_human` without the admin key. A process that dies before `hello` is a `410 session_did_not_start` whose message ends with what Odoo logged |
+| `POST` | `/api/sessions` | open a session, wait for `hello`. A local container needs `container` and `database`; leave `odoo_bin` out and the daemon probes that container for it, refusing an unsupported one with a `422` before anything starts. `target_id` opens a card (`odoosh-<build>`) instead of a container; the instance dictates the database, and its stage is read from the instance itself, not from the request. Optional `client_token` is echoed back in the session description, so a client recognises its own `session_starting` among several. An `agent` owner with `allow_commit: true` is a `403 needs_a_human` without the admin key. A process that dies before `hello` is a `410 session_did_not_start` whose message ends with what Odoo logged |
 | `GET` | `/api/sessions` | live sessions |
 | `GET` | `/api/sessions/{id}` | one session; sent with `X-OS-Session-Key`, it adds `key_status` — `owner`, `former_owner` or `invalid` — for that key |
 | `POST` | `/api/sessions/{id}/exec` | run code. `read_only: true` is the caller's word that it writes nothing: journalled with the flag, not counted in `pending_commands` |

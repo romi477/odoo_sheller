@@ -573,7 +573,19 @@ odoo.sh, so this is the one place the "discovered live, never configured"
 principle does not hold, and the UI should say so rather than blur it. The
 probe is correspondingly smaller: no path guessing, no config candidates, no
 database list — the build answers from its own environment, over
-`POST /api/probe/odoosh`.
+`POST /api/targets/probe`.
+
+**A remote instance is a card a human wrote down.** `build` and `host` are no
+longer part of the body of `POST /api/sessions`: a session opens a card by
+`target_id` (`odoosh-<build>`), and a card is written, changed, deleted and
+probed with the admin key (`POST`/`PUT`/`DELETE /api/targets`,
+`POST /api/targets/probe`) — it is an instruction to this machine to open an
+ssh connection somewhere, and only a human gives one. Reading the list needs no
+key: it holds names, not secrets. The cards live in
+`~/.odoo-sheller/targets.json` (`targets.py`): one JSON file, one key per kind
+of target, written atomically and mode 0600, left untouched when it cannot be
+read. It replaces the list the browser used to keep in `localStorage`, which a
+desktop-app frame does not reliably keep.
 
 | Needed | Comes from |
 |---|---|

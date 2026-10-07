@@ -17,6 +17,7 @@ from odoo_sheller.journal import (
     target_from_records,
 )
 from odoo_sheller.session import Session
+from odoo_sheller.targets import TargetStore
 from odoo_sheller.transport import (
     DOCKER,
     ODOOSH,
@@ -72,7 +73,15 @@ def _hang_up(queue: asyncio.Queue) -> None:
 
 
 class Registry:
-    def __init__(self, journal_root=JOURNAL_ROOT, admin_key: str | None = None):
+    def __init__(
+        self,
+        journal_root=JOURNAL_ROOT,
+        admin_key: str | None = None,
+        targets: TargetStore | None = None,
+    ):
+        # The cards a human wrote down. Only ever read from here; writing them
+        # is the API's, behind the admin key.
+        self.targets = targets if targets is not None else TargetStore()
         self.sessions: dict[str, Session] = {}
         self.subscribers: dict[str, list[asyncio.Queue]] = {}
         # Watchers of the registry itself. Per-session sockets cannot announce a
@@ -132,7 +141,16 @@ class Registry:
 
         return Target(container=container, database=database, odoo_bin=odoo_bin)
 
-    async def _odoosh_target(self, build: str | None, host: str | None) -> Target:
+    async def _remote_target(self, target_id: str) -> Target:
+        """A target a human wrote down, opened by the id of its card."""
+        try:
+            card = self.targets.get(target_id)
+        except KeyError:
+            raise KeyError(f"no target {target_id!r}") from None
+
+        return await self._odoosh_target(card["build"], card["host"])
+
+    async def _odoosh_target(self, build: str, host: str) -> Target:
         """Ask the build what it is before opening anything in it.
 
         The stage comes from here rather than from the request: a caller that
@@ -141,8 +159,6 @@ class Registry:
         probe doubles as validation — an unsupported version is refused now
         instead of on the first command.
         """
-        if not (build and host):
-            raise ValueError("build and host are required for an odoo.sh target")
         probe = await probe_odoosh(build, host)
         if not probe.get("supported"):
             raise ValueError(probe.get("error") or f"build {build} is not usable")
@@ -168,17 +184,20 @@ class Registry:
         replace: str | None = None,
         client_token: str | None = None,
         autoclose: bool = False,
-        kind: str = DOCKER,
-        build: str | None = None,
-        host: str | None = None,
+        target_id: str | None = None,
     ) -> Session:
+        if target_id and replace:
+            # A journal records the identity slot but not how to reach it
+            # again over SSH. An agent cannot open these at all, and a human
+            # picks the card again, so say so rather than rebuild the wrong
+            # kind of target from the right-looking fields.
+            raise ValueError("replace is only for local targets")
+        if target_id and (container or database or odoo_bin):
+            raise ValueError(
+                "a target_id names the whole target; container, database and "
+                "odoo_bin belong to a local one"
+            )
         if replace:
-            if kind != DOCKER:
-                # A journal records the identity slot but not how to reach it
-                # again over SSH. An agent cannot open these at all, and a
-                # human retypes the build, so say so rather than rebuild the
-                # wrong kind of target from the right-looking fields.
-                raise ValueError("replace is only for local targets")
             previous = self.target_of_past_session(replace)
             if previous is None:
                 raise KeyError(f"no journal for session {replace}")
@@ -198,8 +217,8 @@ class Registry:
             container = container or previous["container"]
             database = database or previous["database"]
             odoo_bin = odoo_bin or previous["odoo_bin"]
-        if kind == ODOOSH:
-            target = await self._odoosh_target(build, host)
+        if target_id:
+            target = await self._remote_target(target_id)
         else:
             target = await self._docker_target(container, database, odoo_bin)
         session_id = uuid.uuid4().hex[:12]

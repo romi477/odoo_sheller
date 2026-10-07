@@ -6,6 +6,7 @@ import pytest
 from odoo_sheller.journal import Journal, journal_path
 from odoo_sheller.registry import Registry, load_admin_key
 from odoo_sheller.session import SessionDead, SessionState
+from odoo_sheller.targets import TargetStore
 from odoo_sheller.transport import Target
 
 
@@ -419,8 +420,9 @@ async def test_opening_an_odoosh_build_takes_the_stage_from_the_instance(
 
     monkeypatch.setattr("odoo_sheller.registry.probe_odoosh", fake_probe)
 
-    registry = Registry(journal_root=tmp_path)
-    await registry.open(kind="odoosh", build="99", host="build-99.dev.odoo.com")
+    registry = Registry(journal_root=tmp_path, targets=TargetStore(tmp_path / "t.json"))
+    card = registry.targets.add_odoosh("99", "build-99.dev.odoo.com")
+    await registry.open(target_id=card["id"])
 
     assert captured["probed"] == ("99", "build-99.dev.odoo.com")
     target = captured["target"]
@@ -447,17 +449,29 @@ async def test_opening_an_odoosh_build_refuses_an_unsupported_instance(
 
     monkeypatch.setattr("odoo_sheller.registry.probe_odoosh", fake_probe)
 
-    registry = Registry(journal_root=tmp_path)
+    registry = Registry(journal_root=tmp_path, targets=TargetStore(tmp_path / "t.json"))
+    card = registry.targets.add_odoosh("1", "h")
     with pytest.raises(ValueError, match="17.0"):
-        await registry.open(kind="odoosh", build="1", host="h")
+        await registry.open(target_id=card["id"])
     assert "argv" not in captured, "nothing may be spawned for a refused target"
 
 
 @pytest.mark.asyncio
-async def test_opening_an_odoosh_build_needs_a_build_and_a_host(tmp_path):
-    registry = Registry(journal_root=tmp_path)
-    with pytest.raises(ValueError, match="build"):
-        await registry.open(kind="odoosh", host="h")
+async def test_opening_a_card_nobody_wrote_is_a_key_error(tmp_path):
+    """The API turns this into a 404; it must not turn into a probe of
+    whatever the id happens to spell."""
+    registry = Registry(journal_root=tmp_path, targets=TargetStore(tmp_path / "t.json"))
+    with pytest.raises(KeyError):
+        await registry.open(target_id="odoosh-99")
+
+
+@pytest.mark.asyncio
+async def test_a_card_names_the_whole_target(tmp_path):
+    registry = Registry(journal_root=tmp_path, targets=TargetStore(tmp_path / "t.json"))
+    card = registry.targets.add_odoosh("1", "h")
+    for extra in ({"container": "c"}, {"database": "d"}, {"odoo_bin": "/b"}):
+        with pytest.raises(ValueError, match="target_id"):
+            await registry.open(target_id=card["id"], **extra)
 
 
 # --- odoo_bin is found, not asked for ------------------------------------
@@ -565,7 +579,7 @@ async def test_replacing_a_lost_session_stays_local_only(tmp_path, monkeypatch):
         lambda session_id: {"container": "36887345", "database": "db", "odoo_bin": None},
     )
     with pytest.raises(ValueError):
-        await registry.open(replace="gone", kind="odoosh")
+        await registry.open(replace="gone", target_id="odoosh-1")
 
 
 async def test_replacing_a_remote_session_says_it_is_not_yours_to_open(tmp_path, monkeypatch):

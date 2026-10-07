@@ -5,6 +5,33 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — 1.9.0
+
+Built in steps; each step is a commit, and the version is cut when the last one
+lands. Breaking changes are here as they happen.
+
+### Remote instances are cards a human wrote down — **breaking**
+
+An odoo.sh build is no longer named in the request that opens a session.
+`build`, `host` and `kind` are gone from the body of `POST /api/sessions`: a
+session opens a card by `target_id` (`odoosh-<build>`), with no compatibility
+shim — the only known third-party client opens local containers only. And
+`POST /api/probe/odoosh`, which took any build and host from anyone who could
+reach the port, is gone: probing runs on a card, behind the admin key, as
+`POST /api/targets/probe`.
+
+The cards live in the daemon, in `~/.odoo-sheller/targets.json` (one JSON file,
+one key per kind of target, written atomically, mode 0600, left untouched when
+it cannot be read), where the page used to keep them in `localStorage` — which
+a desktop-app frame does not reliably keep. `GET /api/targets` lists them with
+no key, since they are names and not secrets; `POST`, `PUT` and `DELETE
+/api/targets` and the probe need the admin key, because a card is an instruction
+to this machine to open an ssh connection somewhere, and only a human gives one.
+The UI asks for the key the first time one of those is refused, and moves what
+the browser had kept to the daemon, once, when the odoo.sh list is first
+opened. A card that has not been probed since the page loaded can still be
+opened: the daemon asks the instance on the way in and refuses there if it must.
+
 ## [1.8.4] — 2026-10-07
 
 ### The daemon answers only requests addressed to this machine
