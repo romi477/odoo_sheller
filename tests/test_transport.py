@@ -234,7 +234,6 @@ def test_the_destination_follows_a_double_dash():
 def ssh_target(
     access="ssh -i /k/key.pem ubuntu@srv.example.com sudo -n -u odoo -H",
     launch="/opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf",
-    database=None,
     stage="production",
 ):
     from odoo_sheller.recipe import parse_access, parse_launch
@@ -244,7 +243,7 @@ def ssh_target(
         kind="ssh",
         label="acme-prod",
         access=parsed,
-        launch=parse_launch(launch, database=database),
+        launch=parse_launch(launch),
         host=parsed.host,
         stage=stage,
     )
@@ -291,11 +290,16 @@ def test_the_launch_is_run_exactly_as_written():
         assert added not in script
 
 
-def test_a_database_on_the_card_is_the_one_thing_appended():
+def test_a_database_the_launch_names_is_run_as_written_and_nothing_is_appended():
     import shlex
 
-    script = shlex.split(build_command(ssh_target(database="acme"), "pass")[-1])[7]
+    named = ssh_target(
+        launch="/opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf -d acme"
+    )
+    script = shlex.split(build_command(named, "pass")[-1])[7]
     assert "odoo-bin shell -c /opt/odoo/odoo.conf -d acme <<" in script
+    bare = shlex.split(build_command(ssh_target(), "pass")[-1])[7]
+    assert " -d " not in bare, "no database is chosen for a launch that does not choose one"
 
 
 def test_an_ssh_target_without_a_become_has_no_prefix():

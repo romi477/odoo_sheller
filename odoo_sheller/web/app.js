@@ -637,7 +637,6 @@ function serverFields() {
     name: form.querySelector('.ssh-name').value.trim(),
     access: form.querySelector('.ssh-access').value.trim(),
     launch: form.querySelector('.ssh-launch').value.trim(),
-    database: form.querySelector('.ssh-database').value.trim() || null,
     stage: form.querySelector('.ssh-stage').value,
   };
 }
@@ -693,12 +692,8 @@ function renderBreakdown(breakdown) {
     {text: breakdown.launch.argv.join(' '), mono: true},
     ...(breakdown.launch.config ? [' — config ', {text: breakdown.launch.config}] : []),
   ));
-  const where = {
-    field: 'from the Database field',
-    launch: 'written in the launch',
-  }[breakdown.database_source];
   lines.push(breakdown.database
-    ? breakdownLine('Database ', {text: breakdown.database}, ` (${where})`)
+    ? breakdownLine('Database ', {text: breakdown.database}, ' (-d in the launch)')
     : breakdownLine("Database: the server's own — whatever db_name its config says"));
   breakdown.warnings.forEach((warning) => {
     const line = breakdownLine(warning);
@@ -741,7 +736,7 @@ function scheduleServerParse() {
 // The decoded form of what is typed, as it is typed. A stale answer is dropped:
 // the last keystroke is the one that is being asked about.
 async function parseServerForm() {
-  const {access, launch, database} = serverFields();
+  const {access, launch} = serverFields();
   const breakdown = serverFormElement().querySelector('.ssh-breakdown');
   const serial = (serverParseSerial += 1);
   if (!access && !launch) {
@@ -752,7 +747,7 @@ async function parseServerForm() {
   }
   try {
     const result = await request(
-      () => api.post('/api/targets/parse', {access, launch, database}, adminHeaders()),
+      () => api.post('/api/targets/parse', {access, launch}, adminHeaders()),
     );
     if (serial !== serverParseSerial) {
 
@@ -802,7 +797,7 @@ function describeServerProbe(probe) {
 }
 
 async function probeServerForm() {
-  const {access, launch, database} = serverFields();
+  const {access, launch} = serverFields();
   if (!access || !launch) {
     showFieldErrors({access: access ? '' : 'Write how to arrive first.', launch: launch ? '' : 'Write what to run first.'});
 
@@ -811,7 +806,7 @@ async function probeServerForm() {
   showServerProbe('probing server…');
   try {
     const probe = await withAdminRetry(() => api.post(
-      '/api/targets/probe', {kind: 'ssh', access, launch, database}, adminHeaders(),
+      '/api/targets/probe', {kind: 'ssh', access, launch}, adminHeaders(),
     ));
     if (probe.ok && probe.supported) {
       showServerProbe(describeServerProbe(probe));
@@ -915,7 +910,6 @@ function resetServerForm() {
   form.querySelector('.ssh-name').value = '';
   form.querySelector('.ssh-access').value = '';
   form.querySelector('.ssh-launch').value = '';
-  form.querySelector('.ssh-database').value = '';
   form.querySelector('.ssh-stage').value = 'production';
   form.querySelector('.ssh-save').textContent = 'Save';
   form.querySelector('.ssh-cancel').hidden = true;
@@ -935,7 +929,6 @@ function editServer(entry) {
   form.querySelector('.ssh-name').value = entry.name;
   form.querySelector('.ssh-access').value = entry.access;
   form.querySelector('.ssh-launch').value = entry.launch;
-  form.querySelector('.ssh-database').value = entry.database || '';
   form.querySelector('.ssh-stage').value = entry.stage;
   form.querySelector('.ssh-save').textContent = 'Save changes';
   form.querySelector('.ssh-cancel').hidden = false;
@@ -1064,7 +1057,7 @@ async function probeServer(entry) {
   renderServers();
   try {
     const probe = await withAdminRetry(() => api.post('/api/targets/probe', {
-      kind: 'ssh', access: entry.access, launch: entry.launch, database: entry.database,
+      kind: 'ssh', access: entry.access, launch: entry.launch,
     }, adminHeaders()));
     patchServer(entry.id, {probe, probing: false});
   } catch (error) {
@@ -4118,7 +4111,7 @@ document.querySelectorAll('#connect-modes [data-connect-mode]').forEach((button)
   const form = serverFormElement();
   // Enter in a field must not submit the page; Save is the button.
   form.addEventListener('submit', (event) => event.preventDefault());
-  ['.ssh-access', '.ssh-launch', '.ssh-database'].forEach((selector) => {
+  ['.ssh-access', '.ssh-launch'].forEach((selector) => {
     form.querySelector(selector).addEventListener('input', scheduleServerParse);
   });
   form.querySelector('.ssh-name').addEventListener('input', () => showFieldErrors({}));

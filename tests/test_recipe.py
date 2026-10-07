@@ -422,42 +422,29 @@ def test_a_lone_operator_is_refused_even_in_quotes_and_the_message_says_so():
     assert ";" in parse_launch("/x/odoo-bin shell -c '/etc/a;b.conf'").argv[-1]
 
 
-# --- Database: one place ---------------------------------------------------
+# --- Database: written in the Launch, nowhere else -------------------------
 
 
-def test_a_database_is_appended_to_the_launch_not_written_into_it():
-    launch = parse_launch(LAUNCH, database="acme")
-    assert launch.argv[-2:] == ("-d", "acme")
-    assert launch.database == "acme"
+def test_a_launch_is_never_given_a_database_it_does_not_say():
+    """The card has no Database field: `-d` in the Launch is the one place, and a
+    Launch without it leaves the choice to the server's own config."""
+    launch = parse_launch(LAUNCH)
+    assert launch.argv == tuple(shlex.split(LAUNCH))
+    assert launch.database is None
 
 
-def test_no_database_leaves_the_launch_alone():
-    assert parse_launch(LAUNCH, database=None).argv == tuple(shlex.split(LAUNCH))
-    assert parse_launch(LAUNCH, database="").argv == tuple(shlex.split(LAUNCH))
-
-
-@pytest.mark.parametrize("flag", ["-d x", "-dx", "--database x", "--database=x"])
-def test_a_database_written_in_both_places_is_an_error(flag):
-    with pytest.raises(RecipeError, match="one place|twice|both"):
-        parse_launch(f"{LAUNCH} {flag}", database="acme")
-
-
-@pytest.mark.parametrize("flag", ["-d x", "-dx", "--database x", "--database=x"])
-def test_a_database_in_the_launch_alone_is_fine_and_is_read(flag):
+@pytest.mark.parametrize(
+    "flag", ["-d x", "-dx", "--database x", "--database=x"]
+)
+def test_a_database_in_the_launch_is_read_and_the_launch_is_unchanged(flag):
     launch = parse_launch(f"{LAUNCH} {flag}")
-    assert launch.database_in_launch == "x"
+    assert launch.database == "x"
     assert launch.argv == tuple(shlex.split(f"{LAUNCH} {flag}"))
 
 
-@pytest.mark.parametrize("name", ["-oops", "a\nb", "a\x00b", "x" * 64, "a;b" * 30])
-def test_a_database_name_that_cannot_be_one(name):
-    with pytest.raises(RecipeError, match="database"):
-        parse_launch(LAUNCH, database=name)
-
-
-@pytest.mark.parametrize("name", ["acme", "integra_db_19", "a-b.c", "integra_db_19ś", "x" * 63])
-def test_ordinary_database_names(name):
-    assert parse_launch(LAUNCH, database=name).database == name
+def test_the_function_no_longer_takes_a_database():
+    with pytest.raises(TypeError):
+        parse_launch(LAUNCH, database="acme")
 
 
 # --- the decoded breakdown a human reads before saving ---------------------
@@ -465,13 +452,14 @@ def test_ordinary_database_names(name):
 
 def test_the_breakdown_says_who_where_and_what(key):
     access = parse_access(f"ssh -i {key} -p 2200 ubuntu@h.example.com sudo -n -u odoo -H")
-    breakdown = describe(access, parse_launch(LAUNCH + " --no-http", database="acme"))
+    breakdown = describe(access, parse_launch(LAUNCH + " --no-http -d acme"))
     assert breakdown["login"] == {"user": "ubuntu", "host": "h.example.com", "port": 2200}
     assert breakdown["become"] == {"user": "odoo", "home": True}
     assert breakdown["runs_as"] == "odoo"
     assert breakdown["launch"]["executable"] == "/opt/odoo/13.0/env/bin/python"
     assert breakdown["launch"]["config"] == "/opt/odoo/13.0/odoo.conf"
     assert breakdown["database"] == "acme"
+    assert "database_source" not in breakdown, "there is one place it can come from"
     assert breakdown["warnings"] == []
     assert breakdown["keys"] == [key]
 

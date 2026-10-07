@@ -215,18 +215,18 @@ def ssh_store(tmp_path):
 
 
 def add_ssh(store, name="acme prod", **overrides):
-    fields = {"access": ACCESS, "launch": LAUNCH, "database": None, "stage": "production"}
+    fields = {"access": ACCESS, "launch": LAUNCH, "stage": "production"}
     fields.update(overrides)
 
     return store.add_ssh(name, **fields)
 
 
 def test_an_ssh_card_is_what_the_person_wrote(ssh_store):
-    card = add_ssh(ssh_store, database="acme")
+    card = add_ssh(ssh_store)
     assert card["id"].startswith("ssh-")
     assert {k: v for k, v in card.items() if k != "id"} == {
         "kind": "ssh", "name": "acme prod", "access": ACCESS, "launch": LAUNCH,
-        "database": "acme", "stage": "production",
+        "stage": "production",
     }
     assert ssh_store.get(card["id"]) == card
     assert on_disk(ssh_store)["ssh"] == [{k: v for k, v in card.items() if k != "kind"}]
@@ -243,7 +243,7 @@ def test_the_default_stage_is_production(ssh_store):
     the direction that matters. A human says otherwise, on the card."""
     card = ssh_store.add_ssh("x", access=ACCESS, launch=LAUNCH)
     assert card["stage"] == "production"
-    assert card["database"] is None
+    assert "database" not in card, "the Launch is the one place a database is written"
 
 
 @pytest.mark.parametrize("stage", ["production", "staging"])
@@ -304,8 +304,6 @@ def test_a_recipe_the_grammar_refuses_is_never_written(ssh_store):
         {"access": "ssh -o ProxyCommand=x u@h"},
         {"access": "ssh u@h sudo su"},
         {"launch": "odoo-bin shell"},
-        {"launch": LAUNCH + " -d x", "database": "y"},
-        {"database": "-oops"},
     ):
         with pytest.raises(ValueError):
             add_ssh(ssh_store, **fields)
@@ -336,8 +334,6 @@ def test_an_ssh_card_is_changed_field_by_field_and_rechecked_whole(ssh_store):
     assert changed["access"] == ACCESS
     with pytest.raises(ValueError):
         ssh_store.update(card["id"], {"access": "ssh -o ProxyCommand=x u@h"})
-    with pytest.raises(ValueError, match="one place|both"):
-        ssh_store.update(card["id"], {"database": "acme", "launch": LAUNCH + " -d x"})
     assert ssh_store.get(card["id"]) == changed, "a refused change changes nothing"
 
 
@@ -396,20 +392,61 @@ def test_two_ssh_cards_never_share_an_id(ssh_store):
 
 
 def test_the_recipe_of_a_card_is_parsed_where_it_is_used(ssh_store):
-    card = add_ssh(ssh_store, database="acme")
+    card = add_ssh(ssh_store, launch=LAUNCH + " -d acme")
     access, launch = ssh_store.recipe(card["id"])
     assert access.destination == "ubuntu@srv.example.com"
     assert launch.argv[-2:] == ("-d", "acme")
+    assert launch.database == "acme"
     ssh_store.add_odoosh("1", "h")
     with pytest.raises(KeyError):
         ssh_store.recipe("odoosh-1")
 
 
-def test_a_hand_written_card_without_a_database_reads_as_none(ssh_store):
-    ssh_store.path.write_text(
-        json.dumps({"version": 1, "odoosh": [], "ssh": [
-            {"id": "ssh-1", "name": "n", "access": ACCESS, "launch": LAUNCH, "stage": "staging"}
-        ]}),
+def test_a_card_has_no_database_field_to_fill(ssh_store):
+    with pytest.raises(TypeError):
+        add_ssh(ssh_store, database="acme")
+    card = add_ssh(ssh_store, name="other")
+    with pytest.raises(ValueError, match="database"):
+        ssh_store.update(card["id"], {"database": "acme"})
+
+
+def write_old_card(store, **entry):
+    store.path.write_text(
+        json.dumps({"version": 1, "odoosh": [], "ssh": [{
+            "id": "ssh-1", "name": "n", "access": ACCESS, "launch": LAUNCH,
+            "stage": "staging", **entry,
+        }]}),
         encoding="utf-8",
     )
-    assert ssh_store.get("ssh-1")["database"] is None
+
+
+def test_a_card_that_had_a_database_field_keeps_its_database_in_the_launch(ssh_store):
+    """The field is gone, and the card must still open the database it opened.
+    Moving it into the Launch as `-d` is the same thing said in the one place
+    that is left."""
+    write_old_card(ssh_store, database="acme")
+    card = ssh_store.get("ssh-1")
+    assert card["launch"] == LAUNCH + " -d acme"
+    assert "database" not in card
+    assert ssh_store.recipe("ssh-1")[1].database == "acme"
+    ssh_store.add_odoosh("1", "a.example.com")
+    assert "database" not in on_disk(ssh_store)["ssh"][0]
+
+
+def test_a_database_that_needs_quoting_is_quoted_on_its_way_into_the_launch(ssh_store):
+    write_old_card(ssh_store, database="my db")
+    assert ssh_store.get("ssh-1")["launch"] == LAUNCH + " -d 'my db'"
+    assert ssh_store.recipe("ssh-1")[1].database == "my db"
+
+
+def test_an_old_cards_database_does_not_override_one_the_launch_already_has(ssh_store):
+    """The Launch is what ran. A card that carried both was refused when it was
+    written, so this is only a hand-edited file — and what ran wins."""
+    write_old_card(ssh_store, launch=LAUNCH + " -d from-launch", database="from-field")
+    assert ssh_store.get("ssh-1")["launch"] == LAUNCH + " -d from-launch"
+
+
+def test_a_card_that_never_had_a_database_reads_the_same(ssh_store):
+    write_old_card(ssh_store)
+    assert ssh_store.get("ssh-1")["launch"] == LAUNCH
+    assert "database" not in ssh_store.get("ssh-1")

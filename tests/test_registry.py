@@ -707,7 +707,7 @@ async def test_opening_an_ssh_card_opens_what_it_says(tmp_path, monkeypatch):
     captured = {}
     _stub_spawn_and_session(monkeypatch, captured)
     _ssh_probe(monkeypatch, captured)
-    registry, card = _ssh_registry(tmp_path, stage="staging", database="acme")
+    registry, card = _ssh_registry(tmp_path, stage="staging", launch=SSH_LAUNCH + " -d acme")
     await registry.open(target_id=card["id"])
 
     target = captured["target"]

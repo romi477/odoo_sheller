@@ -8,8 +8,8 @@ for nothing. One key per kind of target:
      "odoosh": [{"build": "36887345", "host": "build-36887345.dev.odoo.com"}],
      "ssh": [{"id": "ssh-3f9a01cc", "name": "acme prod",
               "access": "ssh -i ~/.ssh/acme.pem ubuntu@acme.example.com sudo -n -u odoo -H",
-              "launch": "/opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf",
-              "database": null, "stage": "production"}]}
+              "launch": "/opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf -d acme",
+              "stage": "production"}]}
 
 An ssh card holds what its author *wrote*, not what it parses to: they edit it
 later, and `~` is theirs. It is parsed (`recipe.py`) when it is saved, to refuse
@@ -34,13 +34,14 @@ import contextlib
 import json
 import os
 import secrets
+import shlex
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
 from odoo_sheller.journal import JOURNAL_ROOT
 from odoo_sheller.names import check_ssh_name
-from odoo_sheller.recipe import Access, Launch, parse_access, parse_launch
+from odoo_sheller.recipe import Access, Launch, RecipeError, parse_access, parse_launch
 
 TARGETS_PATH = JOURNAL_ROOT.parent / "targets.json"
 VERSION = 1
@@ -56,7 +57,7 @@ SSH_PREFIX = "ssh-"
 STAGES = ("production", "staging")
 DEFAULT_STAGE = "production"
 MAX_NAME = 60
-SSH_FIELDS = ("name", "access", "launch", "database", "stage")
+SSH_FIELDS = ("name", "access", "launch", "stage")
 
 
 class TargetsError(Exception):
@@ -75,6 +76,26 @@ def _card(entry: dict) -> dict:
     }
 
 
+def _launch_with(launch: object, database: object) -> object:
+    """A launch that names `database` with `-d`, for a card that had the field.
+
+    What the Launch already says wins: a card that carried both was refused when
+    it was written, so only a hand-edited file has them, and what ran is what
+    the Launch said.
+    """
+    if not isinstance(launch, str) or not isinstance(database, str) or not database.strip():
+
+        return launch
+    try:
+        if parse_launch(launch).database:
+
+            return launch
+    except RecipeError:
+        pass
+
+    return f"{launch} -d {shlex.quote(database.strip())}"
+
+
 def _ssh_card(entry: dict) -> dict:
 
     return {
@@ -83,7 +104,6 @@ def _ssh_card(entry: dict) -> dict:
         "name": entry["name"],
         "access": entry["access"],
         "launch": entry["launch"],
-        "database": entry["database"],
         "stage": entry["stage"],
     }
 
@@ -131,6 +151,10 @@ class TargetStore:
             ):
                 raise self._refuse("has an odoosh entry without a build and a host")
         for entry in data["ssh"]:
+            if isinstance(entry, dict) and "database" in entry:
+                # A card written when it had a Database field: the same choice,
+                # said in the one place left — `-d` in the Launch.
+                entry["launch"] = _launch_with(entry.get("launch"), entry.pop("database"))
             if isinstance(entry, dict) and entry.get("stage") == "development":
                 # A card written when there were three. It meant what staging
                 # means, and a stage unknown here would make the whole file
@@ -141,11 +165,9 @@ class TargetStore:
                 and isinstance(entry.get("id"), str)
                 and entry["id"].startswith(SSH_PREFIX)
                 and all(isinstance(entry.get(key), str) for key in ("name", "access", "launch"))
-                and (entry.get("database") is None or isinstance(entry["database"], str))
                 and entry.get("stage") in STAGES
             ):
                 raise self._refuse("has an ssh entry that is not a card")
-            entry.setdefault("database", None)
 
         return data
 
@@ -202,9 +224,9 @@ class TargetStore:
 
         return parse_access(text, is_file=self._is_file)
 
-    def parse_launch(self, text: str, database: str | None = None) -> Launch:
+    def parse_launch(self, text: str) -> Launch:
 
-        return parse_launch(text, database=database)
+        return parse_launch(text)
 
     def recipe(self, target_id: str) -> tuple[Access, Launch]:
         """An ssh card, parsed. A card that stopped parsing — a key file that
@@ -213,7 +235,7 @@ class TargetStore:
             raise KeyError(target_id)
         card = self.get(target_id)
 
-        return self.parse_access(card["access"]), self.parse_launch(card["launch"], card["database"])
+        return self.parse_access(card["access"]), self.parse_launch(card["launch"])
 
     def add_odoosh(self, build: str, host: str) -> dict:
         """Adds a build, or updates the one already there and moves it first."""
@@ -243,15 +265,13 @@ class TargetStore:
                 raise ValueError(f"a card named {other['name']!r} already exists")
         if fields["stage"] not in STAGES:
             raise ValueError(f"stage must be one of {', '.join(STAGES)}")
-        database = fields.get("database") or None
         self.parse_access(fields["access"])
-        self.parse_launch(fields["launch"], database)
+        self.parse_launch(fields["launch"])
 
         return {
             "name": name,
             "access": fields["access"],
             "launch": fields["launch"],
-            "database": database.strip() if isinstance(database, str) else None,
             "stage": fields["stage"],
         }
 
@@ -260,16 +280,12 @@ class TargetStore:
         name: str,
         access: str,
         launch: str,
-        database: str | None = None,
         stage: str = DEFAULT_STAGE,
     ) -> dict:
         data = self._read()
         fields = self._checked_ssh(
             data,
-            {
-                "name": name, "access": access, "launch": launch,
-                "database": database, "stage": stage,
-            },
+            {"name": name, "access": access, "launch": launch, "stage": stage},
             None,
         )
         entry = {"id": f"{SSH_PREFIX}{secrets.token_hex(4)}", **fields}

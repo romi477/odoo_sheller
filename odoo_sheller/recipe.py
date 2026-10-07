@@ -47,7 +47,6 @@ HOP_RE = re.compile(
     r"(?::(?P<port>[0-9]{1,5}))?"
 )
 OPERATORS = set("();<>|&")
-MAX_DATABASE = 63
 
 # The only `-o` keys, lowercase. Each is something ssh needs to *reach* the
 # server; none of them makes ssh do anything on this machine.
@@ -99,8 +98,8 @@ OTHER_BECOMES = ("su", "runuser", "doas", "pkexec", "machinectl", "sg", "newgrp"
 class RecipeError(ValueError):
     """A recipe that is not accepted, and why. The message is for the person.
 
-    `field` says which of the card's fields it is about — access, launch or
-    database — so a form can put the message beside the right one.
+    `field` says which of the card's fields it is about — access or launch — so a
+    form can put the message beside the right one.
     """
 
     def __init__(self, message: str, field: str | None = None):
@@ -161,8 +160,9 @@ class Access:
 @dataclass(frozen=True)
 class Launch:
     argv: tuple[str, ...]
+    # The `-d` the launch itself carries, if it does. There is no other place a
+    # database can be written on a card.
     database: str | None
-    database_in_launch: str | None
     config: str | None
     # The token just before `shell`: the script Odoo is started from, which is
     # where its own `odoo/release.py` is looked for.
@@ -551,23 +551,6 @@ def _port_flag(tokens: Sequence[str]) -> str | None:
     return None
 
 
-def check_database(name: str) -> str:
-    if (
-        len(name) > MAX_DATABASE
-        or name.startswith("-")
-        or "\x00" in name
-        or "\n" in name
-        or "\r" in name
-    ):
-        raise RecipeError(
-            f"database {name!r} cannot be a database name (at most {MAX_DATABASE} "
-            "characters, not starting with '-')",
-            field="database",
-        )
-
-    return name
-
-
 def _find_shell(tokens: list[str]) -> tuple[int, str] | None:
     """Where the `shell` subcommand is, and the script it follows.
 
@@ -591,21 +574,21 @@ def _find_shell(tokens: list[str]) -> tuple[int, str] | None:
     return None
 
 
-def parse_launch(text: str, database: str | None = None) -> Launch:
+def parse_launch(text: str) -> Launch:
     try:
 
-        return _parse_launch(text, database)
+        return _parse_launch(text)
     except RecipeError as exc:
         exc.field = exc.field or "launch"
         raise
 
 
-def _parse_launch(text: str, database: str | None) -> Launch:
-    """Parse the Launch field, and the optional Database that goes with it.
+def _parse_launch(text: str) -> Launch:
+    """Parse the Launch field.
 
     The Launch is taken as written: nothing is added — not `--no-http`, not
-    `-d`, not `--workers`. The one thing that is appended is `-d DATABASE`, and
-    only when the Database field is filled.
+    `-d`, not `--workers`. A database is chosen by writing `-d NAME` in it; one
+    left out is the server's own config's to name.
 
     Odoo's `shell` starts no HTTP server — when the config says `workers = 0`.
     With more, it takes the prefork path, which binds the HTTP port before the
@@ -628,24 +611,11 @@ def _parse_launch(text: str, database: str | None) -> Launch:
             "before it"
         )
     shell_at, odoo_bin = found
-    wanted = None
-    if isinstance(database, str) and database.strip():
-        wanted = check_database(database.strip())
-    in_launch = _database_flag(tokens[shell_at + 1 :])
-    if wanted and in_launch is not None:
-        raise RecipeError(
-            "the database is written in both places, -d in the launch and the "
-            "Database field: keep one place",
-            field="database",
-        )
-    argv = tuple(tokens) + (("-d", wanted) if wanted else ())
-
     after = tokens[shell_at + 1 :]
 
     return Launch(
-        argv=argv,
-        database=wanted or in_launch or None,
-        database_in_launch=in_launch or None,
+        argv=tuple(tokens),
+        database=_database_flag(after) or None,
         config=_config_flag(after),
         odoo_bin=odoo_bin,
         http_off=(
@@ -716,10 +686,6 @@ def describe(access: Access, launch: Launch) -> dict:
             "argv": list(launch.argv),
         },
         "database": launch.database,
-        "database_source": (
-            "field" if launch.database and not launch.database_in_launch
-            else "launch" if launch.database_in_launch else None
-        ),
         "warnings": warnings,
         "assembled": assembled,
     }

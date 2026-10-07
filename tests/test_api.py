@@ -1184,15 +1184,15 @@ def test_an_ssh_card_is_written_with_the_admin_key_and_defaults_to_production(cl
     assert written.status_code == 200
     card = written.json()
     assert card["id"].startswith("ssh-")
-    assert (card["kind"], card["name"], card["stage"], card["database"]) == (
-        "ssh", "acme prod", "production", None,
-    )
+    assert (card["kind"], card["name"], card["stage"]) == ("ssh", "acme prod", "production")
+    assert "database" not in card
     assert card["access"] == SSH["access"] and card["launch"] == SSH["launch"]
     assert client.get("/api/targets").json() == [card]
 
 
 def test_an_ssh_card_carries_a_summary_so_it_can_be_read_before_it_is_probed(client):
-    card = client.post("/api/targets", json={**SSH, "database": "acme"}, headers=ADMIN).json()
+    launch = SSH["launch"] + " -d acme"
+    card = client.post("/api/targets", json={**SSH, "launch": launch}, headers=ADMIN).json()
     assert card["summary"] == {
         "destination": "ubuntu@srv.example.com",
         "port": None,
@@ -1233,8 +1233,6 @@ def test_both_kinds_are_listed_together(client):
         ({"access": "ssh u@h\nsudo su"}, "access"),
         ({"launch": "odoo-bin shell"}, "launch"),
         ({"launch": "/x/odoo-bin -c /y"}, "launch"),
-        ({"database": "-oops"}, "database"),
-        ({"launch": SSH["launch"] + " -d x", "database": "y"}, "database"),
     ],
 )
 def test_a_recipe_the_grammar_refuses_is_a_422_that_names_the_field(client, change, field):
@@ -1268,15 +1266,40 @@ def test_an_ssh_card_is_changed_and_a_refused_change_changes_nothing(client):
     card = client.post("/api/targets", json=SSH, headers=ADMIN).json()
     url = f"/api/targets/{card['id']}"
     assert client.put(url, json={"stage": "staging"}).status_code == 403
-    changed = client.put(url, json={"stage": "staging", "database": "acme"}, headers=ADMIN)
+    changed = client.put(url, json={"stage": "staging"}, headers=ADMIN)
     assert changed.status_code == 200
-    assert (changed.json()["stage"], changed.json()["database"]) == ("staging", "acme")
+    assert changed.json()["stage"] == "staging"
     refused = client.put(url, json={"access": "ssh -o ProxyCommand=x u@h"}, headers=ADMIN)
     assert refused.status_code == 422
     assert refused.json()["detail"]["field"] == "access"
     assert client.get("/api/targets").json() == [changed.json()]
-    cleared = client.put(url, json={"database": None}, headers=ADMIN)
-    assert cleared.json()["database"] is None, "null clears it; leaving it out leaves it"
+
+
+@pytest.mark.parametrize(
+    ("method", "url"),
+    [
+        ("post", "/api/targets"),
+        ("post", "/api/targets/parse"),
+        ("post", "/api/targets/probe"),
+    ],
+)
+def test_a_database_sent_to_a_card_is_refused_in_words_not_dropped(client, method, url):
+    """The field is gone. A page or script that still sends one would otherwise
+    have it ignored, and open the server's default database instead of the one
+    it meant."""
+    body = {**SSH, "kind": "ssh", "database": "acme"}
+    response = getattr(client, method)(url, json=body, headers=ADMIN)
+    assert response.status_code == 422
+    assert "-d" in response.text and "Launch" in response.text
+    empty = getattr(client, method)(url, json={**body, "database": None}, headers=ADMIN)
+    assert empty.status_code != 422 or "-d" not in empty.text, "null is not a database"
+
+
+def test_a_database_sent_in_a_change_is_refused_in_words_too(client):
+    card = client.post("/api/targets", json=SSH, headers=ADMIN).json()
+    response = client.put(f"/api/targets/{card['id']}", json={"database": "acme"}, headers=ADMIN)
+    assert response.status_code == 422
+    assert "-d" in response.text and "Launch" in response.text
 
 
 def test_an_ssh_card_is_deleted(client):
@@ -1305,13 +1328,13 @@ def test_the_parse_decodes_what_the_person_wrote_without_touching_the_network(cl
 def test_the_parse_reports_every_field_that_is_wrong_at_once(client):
     response = client.post(
         "/api/targets/parse",
-        json={"access": "ssh -o ProxyCommand=x u@h", "launch": "odoo-bin shell", "database": "-x"},
+        json={"access": "ssh -o ProxyCommand=x u@h", "launch": "odoo-bin shell"},
         headers=ADMIN,
     )
     assert response.status_code == 200, "a form being typed is not an error"
     result = response.json()
     assert result["ok"] is False
-    assert set(result["errors"]) == {"access", "launch", "database"}
+    assert set(result["errors"]) == {"access", "launch"}
     assert "ProxyCommand" in result["errors"]["access"]
     assert "breakdown" not in result or result["breakdown"] is None
 

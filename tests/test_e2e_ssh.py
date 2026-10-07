@@ -51,7 +51,7 @@ BECOME = "sudo -n -u odoo -H"
 # something is listening on its HTTP port. A launch that does not turn HTTP off
 # dies binding that port — which is what the real server did, and what this was
 # written to reproduce.
-BARE = f"{PYTHON} {ODOO_BIN} shell -c {CONFIG}"
+BARE = f"{PYTHON} {ODOO_BIN} shell -c {CONFIG} -d {DATABASE}"
 LAUNCH = f"{BARE} --no-http"
 
 
@@ -88,7 +88,7 @@ def registry(tmp_path):
 
 
 async def open_card(registry, stage="production", name=None, **overrides):
-    fields = {"access": access(), "launch": LAUNCH, "database": DATABASE, "stage": stage}
+    fields = {"access": access(), "launch": LAUNCH, "stage": stage}
     fields.update(overrides)
     card = registry.targets.add_ssh(name or f"double-{stage}", **fields)
 
@@ -104,7 +104,7 @@ async def session(registry):
 
 
 async def test_probe_says_who_the_recipe_lands_as_and_which_odoo():
-    recipe = _parsed(access(), LAUNCH, DATABASE)
+    recipe = _parsed(access(), LAUNCH)
     result = await discovery.probe_ssh(*recipe)
     assert result["ok"] is True, result
     assert result["login_user"] == "ubuntu"
@@ -120,7 +120,7 @@ async def test_probe_says_who_the_recipe_lands_as_and_which_odoo():
 async def test_forgetting_the_become_is_named_the_way_the_real_server_would_show_it():
     """The config is readable only by `odoo`, so the login user cannot read it:
     the likely mistake, with its own words."""
-    result = await discovery.probe_ssh(*_parsed(access(become=""), LAUNCH, DATABASE))
+    result = await discovery.probe_ssh(*_parsed(access(become=""), LAUNCH))
     assert result["ok"] is False
     assert result["error_code"] == "config_unreadable"
     assert "ubuntu" in result["error"]
@@ -128,7 +128,7 @@ async def test_forgetting_the_become_is_named_the_way_the_real_server_would_show
 
 
 async def test_a_become_the_login_user_may_not_make_says_what_to_check():
-    recipe = _parsed(access(become="sudo -n -u root -H"), LAUNCH, DATABASE)
+    recipe = _parsed(access(become="sudo -n -u root -H"), LAUNCH)
     result = await discovery.probe_ssh(*recipe)
     assert result["ok"] is False
     assert result["error_code"] == "sudo"
@@ -147,7 +147,7 @@ async def test_a_host_key_nobody_trusted_is_a_failure_with_instructions(monkeypa
             options.append(option)
     options += ["-o", f"UserKnownHostsFile={tmp_path / 'empty'}"]
     monkeypatch.setattr(discovery, "SSH_OPTS", tuple(options))
-    result = await discovery.probe_ssh(*_parsed(access(), LAUNCH, DATABASE))
+    result = await discovery.probe_ssh(*_parsed(access(), LAUNCH))
     assert result["ok"] is False
     assert result["error_code"] == "host_key"
     assert "terminal" in result["error"]
@@ -230,17 +230,17 @@ async def test_a_launch_that_is_not_there_never_starts_a_session(registry):
         await open_card(registry, launch=f"/nonexistent/python {ODOO_BIN} shell -c {CONFIG}")
 
 
-def _parsed(access_text, launch_text, database):
+def _parsed(access_text, launch_text):
     from odoo_sheller.recipe import parse_access, parse_launch
 
-    return parse_access(access_text), parse_launch(launch_text, database)
+    return parse_access(access_text), parse_launch(launch_text)
 
 
 # --- a config with workers above 0 ------------------------------------------------
 
 
 async def test_the_probe_says_what_the_config_will_do_to_a_launch_that_leaves_http_alone():
-    result = await discovery.probe_ssh(*_parsed(access(), BARE, DATABASE))
+    result = await discovery.probe_ssh(*_parsed(access(), BARE))
     assert result["ok"] is True
     assert result["workers"] == 2
     assert "workers = 2" in result["launch_warning"]
@@ -287,5 +287,5 @@ async def test_moving_the_port_onto_the_services_own_dies_like_leaving_it_alone(
     onto_the_service = f"{BARE} --http-port 8069"
     with pytest.raises(SessionDead, match="Address already in use"):
         await open_card(registry, launch=onto_the_service, name="onto")
-    result = await discovery.probe_ssh(*_parsed(access(), onto_the_service, DATABASE))
+    result = await discovery.probe_ssh(*_parsed(access(), onto_the_service))
     assert "8069" in result["launch_warning"], "and the probe says so beforehand"

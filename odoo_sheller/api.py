@@ -21,7 +21,7 @@ from odoo_sheller import discovery, journal
 from odoo_sheller.guard import LoopbackOnly
 from odoo_sheller.names import check_ssh_name
 from odoo_sheller.paths import web_dir
-from odoo_sheller.recipe import RecipeError, check_database, describe
+from odoo_sheller.recipe import RecipeError, describe
 from odoo_sheller.registry import EVENT_BACKLOG, Registry, load_admin_key
 from odoo_sheller.session import (
     CommitForbidden,
@@ -139,7 +139,26 @@ class OdooshCardBody(BaseModel):
         return check_ssh_name(info.field_name, value)
 
 
-class SshCardBody(BaseModel):
+class NoDatabase(BaseModel):
+    """A card has no Database field: `-d NAME` in Launch is the one place.
+
+    A page or script that still sends one is told so, in words. Ignoring it
+    would open the server's default database instead of the one it meant.
+    """
+
+    database: str | None = None
+
+    @model_validator(mode="after")
+    def _is_gone(self):
+        if self.database:
+            raise ValueError(
+                "a card has no Database field any more: write -d NAME in Launch"
+            )
+
+        return self
+
+
+class SshCardBody(NoDatabase):
     """A server someone wrote down: how to arrive, and what to run there.
 
     Not checked here — the grammar in `recipe.py` is, and says which field."""
@@ -148,31 +167,28 @@ class SshCardBody(BaseModel):
     name: str
     access: str
     launch: str
-    database: str | None = None
     # Nothing on a plain server says what it is, so the default is the one
     # that refuses a commit outright, and a human says otherwise.
     stage: str = DEFAULT_STAGE
 
 
-class SshProbeBody(BaseModel):
+class SshProbeBody(NoDatabase):
     kind: Literal["ssh"]
     access: str
     launch: str
-    database: str | None = None
 
 
-class RecipeBody(BaseModel):
+class RecipeBody(NoDatabase):
     access: str
     launch: str
-    database: str | None = None
 
 
 CardBody = Annotated[OdooshCardBody | SshCardBody, Field(discriminator="kind")]
 ProbeTargetBody = Annotated[OdooshCardBody | SshProbeBody, Field(discriminator="kind")]
 
 
-class CardChangeBody(BaseModel):
-    """What may change. Only what is sent changes — `null` clears a database."""
+class CardChangeBody(NoDatabase):
+    """What may change. Only what is sent changes."""
 
     host: str | None = None
     # Accepted only so that asking for it can be refused in words: a card's
@@ -181,7 +197,6 @@ class CardChangeBody(BaseModel):
     name: str | None = None
     access: str | None = None
     launch: str | None = None
-    database: str | None = None
     stage: str | None = None
 
 
@@ -509,7 +524,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
             return card
         try:
             access = cards().parse_access(card["access"])
-            launch = cards().parse_launch(card["launch"], card["database"])
+            launch = cards().parse_launch(card["launch"])
         except RecipeError as exc:
 
             return {**card, "summary": {
@@ -574,7 +589,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
                 return cards().add_odoosh(body.build, body.host)
 
             return present(
-                cards().add_ssh(body.name, body.access, body.launch, body.database, body.stage)
+                cards().add_ssh(body.name, body.access, body.launch, body.stage)
             )
         except RecipeError as exc:
             raise recipe_refused(exc) from None
@@ -590,7 +605,9 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         require_admin(x_os_admin_key)
         try:
 
-            return present(cards().update(target_id, body.model_dump(exclude_unset=True)))
+            return present(
+                cards().update(target_id, body.model_dump(exclude_unset=True, exclude={"database"}))
+            )
         except KeyError:
             raise HTTPException(status_code=404, detail=f"no target {target_id!r}") from None
         except RecipeError as exc:
@@ -628,17 +645,8 @@ def create_app(registry: Registry | None = None) -> FastAPI:
             access = cards().parse_access(body.access)
         except RecipeError as exc:
             errors[exc.field or "access"] = str(exc)
-        database = (body.database or "").strip() or None
-        if database:
-            try:
-                check_database(database)
-            except RecipeError as exc:
-                errors["database"] = str(exc)
-                # Reported on its own, so that a launch which is also wrong
-                # still gets its message.
-                database = None
         try:
-            launch = cards().parse_launch(body.launch, database)
+            launch = cards().parse_launch(body.launch)
         except RecipeError as exc:
             errors[exc.field or "launch"] = str(exc)
         if errors:
@@ -665,7 +673,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
             return await discovery.probe_odoosh(body.build, body.host)
         try:
             access = cards().parse_access(body.access)
-            launch = cards().parse_launch(body.launch, body.database)
+            launch = cards().parse_launch(body.launch)
         except RecipeError as exc:
             raise recipe_refused(exc) from None
         probe = await discovery.probe_ssh(access, launch)

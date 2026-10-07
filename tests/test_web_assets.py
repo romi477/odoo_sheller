@@ -2857,7 +2857,7 @@ def test_connect_offers_a_third_place_and_it_is_a_form_and_a_list(markup):
     assert "ssh" in markup.ids and "ssh-servers" in markup.ids
     assert "ssh-card" in markup.ids
     for cls in (
-        "ssh-name", "ssh-access", "ssh-launch", "ssh-database", "ssh-stage",
+        "ssh-name", "ssh-access", "ssh-launch", "ssh-stage",
         "ssh-probe", "ssh-save", "ssh-cancel", "ssh-breakdown", "field-error",
     ):
         assert cls in markup.classes, cls
@@ -2937,7 +2937,7 @@ def test_nothing_a_card_says_is_ever_set_as_markup(app_js):
 def test_editing_a_server_puts_the_card_back_in_the_form_and_saves_over_it(app_js):
     edit = re.search(r"function editServer\(.*?\n\}", app_js, re.DOTALL)
     assert edit is not None
-    for field in ("name", "access", "launch", "database", "stage"):
+    for field in ("name", "access", "launch", "stage"):
         assert f"entry.{field}" in edit.group(0), field
     assert "state.serverEditing = entry.id" in edit.group(0)
     save = re.search(r"async function saveServerForm\(.*?\n\}", app_js, re.DOTALL)
@@ -3244,3 +3244,35 @@ def test_the_edit_key_on_a_server_card_reads_edit_with_a_capital():
     label = re.search(r'<button class="edit"[^>]*>([^<]*)</button>', template)
     assert label is not None
     assert label.group(1) == "Edit"
+
+
+# --- there is no Database field: -d in Launch is the one place ------------------------
+
+
+def test_the_server_form_has_no_database_field_and_launch_says_how_to_name_one(markup):
+    page = _page()
+    assert "ssh-database" not in page and "ssh-database-field" not in page
+    assert 'data-field="database"' not in page
+    launch = re.search(r'<input class="ssh-launch[^>]*>', page, re.DOTALL)
+    assert launch is not None
+    assert "-d " in launch.group(0), "the tooltip says where a database is named"
+    assert "db_name" in launch.group(0), "and what happens if none is"
+
+
+def test_nothing_in_the_page_reads_or_sends_a_database_for_a_server(app_js):
+    assert ".ssh-database" not in app_js
+    fields = re.search(r"function serverFields\(\) \{.*?\n\}", app_js, re.DOTALL)
+    assert fields is not None
+    assert "database" not in fields.group(0)
+    for name in ("parseServerForm", "probeServerForm"):
+        body = re.search(rf"async function {name}\(\) \{{.*?\n\}}", app_js, re.DOTALL)
+        assert body is not None, name
+        assert "database" not in body.group(0), name
+    probe = re.search(r"async function probeServer\(entry\) \{.*?\n\}", app_js, re.DOTALL)
+    assert probe is not None and "database" not in probe.group(0)
+    assert "database_source" not in app_js, "there is one place it can come from"
+
+
+def test_the_stylesheet_has_no_rule_for_a_field_that_is_gone():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert "ssh-database" not in css
