@@ -3236,3 +3236,11 @@ def test_the_probe_key_on_every_kind_of_card_reads_probe_with_a_capital():
     labels = re.findall(r'<button class="reprobe"[^>]*>([^<]*)</button>', page)
     assert len(labels) == 3, "a card for each kind"
     assert set(labels) == {"Probe"}, labels
+
+
+def test_the_edit_key_on_a_server_card_reads_edit_with_a_capital():
+    """Beside Open session and Probe, which are capitalised."""
+    template = _ssh_template()
+    label = re.search(r'<button class="edit"[^>]*>([^<]*)</button>', template)
+    assert label is not None
+    assert label.group(1) == "Edit"
