@@ -1765,3 +1765,30 @@ async def test_a_grant_survives_a_commit_asked_of_a_session_that_is_not_ready(tm
     spent = [r for r in session.journal.records() if r["kind"] == "policy_changed" and r["allow_commit"] is False]
     assert not spent
     await session.kill()
+
+
+async def test_a_commit_that_lands_late_on_production_is_journalled_with_its_stage(
+    tmp_path, monkeypatch
+):
+    """The one the record matters most for: a write to production after a
+    timeout, when nobody saw it happen."""
+
+    async def fake_signal(container, pid, name):
+        pass
+
+    monkeypatch.setattr("odoo_sheller.session.send_signal", fake_signal)
+    session = await make_session(
+        tmp_path, script=SLOW_BOUNDARY_FAKE, target=oosh_target("production")
+    )
+    await session.start()
+    try:
+        session.set_allow_commit(True, confirm="36887345")
+        with pytest.raises(TimeoutError):
+            await session.commit(timeout=0.05)
+        await wait_for_state(session, SessionState.READY)
+    finally:
+        await session.kill()
+
+    late = [r for r in session.journal.records() if r["kind"] == "commit" and r.get("late")]
+    assert len(late) == 1
+    assert late[0]["stage"] == "production"

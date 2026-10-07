@@ -873,7 +873,7 @@ class Session:
         elif kind in ("commit", "rollback"):
             self.journal.write(
                 kind, id=frame.get("id"), error=frame.get("error"),
-                actor=dict(self.owner), late=True,
+                actor=dict(self.owner), late=True, stage=self.target.stage,
             )
             if not frame.get("error"):
                 self.pending_commands = 0
