@@ -3052,7 +3052,7 @@ def test_the_form_and_the_saved_cards_are_two_regions_each_with_a_title(
     assert block is not None, mode
     body = block.group(1)
     write = re.search(
-        rf'<section class="composer"[^>]*aria-labelledby="{composer}"[^>]*>(.*?)</section>',
+        rf'<section class="composer[^"]*"[^>]*aria-labelledby="{composer}"[^>]*>(.*?)</section>',
         body, re.DOTALL,
     )
     keep = re.search(
@@ -3116,7 +3116,7 @@ def test_each_saved_list_counts_its_cards_and_the_composer_says_when_it_edits(ap
 def _ssh_composer() -> str:
     page = _page()
     block = re.search(
-        r'<section class="composer"[^>]*aria-labelledby="ssh-composer-title"[^>]*>(.*?)</section>',
+        r'<section class="composer[^"]*"[^>]*aria-labelledby="ssh-composer-title"[^>]*>(.*?)</section>',
         page, re.DOTALL,
     )
     assert block is not None
@@ -3132,9 +3132,9 @@ def test_the_server_form_has_a_header_that_is_a_button_with_an_arrow():
     assert toggle is not None
     opening = re.search(r'<button[^>]*class="region-toggle"[^>]*>', composer).group(0)
     assert 'type="button"' in opening, "it must not submit the form"
-    assert 'aria-expanded="true"' in opening
+    assert 'aria-expanded="false"' in opening, "it is folded until someone opens it"
     assert 'aria-controls="ssh-composer-body"' in opening
-    assert 'title="Collapse"' in opening
+    assert 'title="Expand"' in opening
     assert 'class="chevron"' in toggle.group(1) and 'aria-hidden="true"' in toggle.group(1)
     assert 'id="ssh-composer-title"' in toggle.group(1), "the title stays inside the button"
     heading = re.search(r'<h2 class="region-title"[^>]*>(.*?)</h2>', composer, re.DOTALL)
@@ -3143,8 +3143,11 @@ def test_the_server_form_has_a_header_that_is_a_button_with_an_arrow():
 
 def test_the_form_and_its_note_are_the_part_that_folds():
     composer = _ssh_composer()
-    body = re.search(r'<div class="composer-body" id="ssh-composer-body">(.*)</div>\s*$', composer, re.DOTALL)
-    assert body is not None
+    body = re.search(
+        r'<div class="composer-body" id="ssh-composer-body" hidden>(.*)</div>\s*$',
+        composer, re.DOTALL,
+    )
+    assert body is not None, "the page is served folded, so there is no flash of an open form"
     assert '<form class="ssh-form"' in body.group(1)
     assert 'class="odoosh-note"' in body.group(1)
     assert "region-title" not in body.group(1), "the header stays when the rest folds"
@@ -3189,3 +3192,21 @@ def test_the_fold_arrow_turns_and_the_header_has_no_button_chrome():
     assert re.search(r"button\.region-toggle:active:not\(:disabled\)\s*\{[^}]*transform:\s*none", css), (
         "a header that sinks like a push button when clicked reads as a button, not a title"
     )
+
+
+def test_the_server_form_is_folded_by_default_and_open_only_when_the_person_opened_it(app_js):
+    """Most visits are to open a card that is already written, not to write one.
+    Only an explicit choice to leave it open (`0`) is respected; no choice, or a
+    page that cannot remember one, is folded."""
+    page = _page()
+    assert re.search(r'<section class="composer collapsed"[^>]*ssh-composer-title', page)
+    fold = re.search(r"function composerWasCollapsed\(\) \{.*?\n\}", app_js, re.DOTALL)
+    assert fold is not None
+    body = fold.group(0)
+    assert "!== '0'" in body
+    assert "return true" in body, "a page that cannot read its storage is folded too"
+    assert "=== '1'" not in body
+
+
+def test_an_empty_server_list_points_at_the_folded_form(app_js):
+    assert "empty: 'No servers yet. Open New server above and write one.'" in app_js

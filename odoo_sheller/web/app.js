@@ -869,17 +869,19 @@ function composerEditing(name) {
   );
 }
 
-// The form folds to its header: someone whose cards are all written has no use
-// for a form a screen tall above them. The choice is theirs and is kept, but a
-// page that cannot keep it still folds. Changing a card unfolds the form for
-// as long as it takes, and does not overwrite the choice.
+// The form folds to its header, and is folded until someone opens it: most
+// visits are to open a card that is already written, and a form a screen tall
+// above the cards is in the way of that. Only an explicit choice to leave it
+// open is respected; a page that cannot keep a choice stays folded. Changing a
+// card unfolds the form for as long as it takes, and does not overwrite the
+// choice.
 function composerWasCollapsed() {
   try {
 
-    return localStorage.getItem('osComposerCollapsed') === '1';
+    return localStorage.getItem('osComposerCollapsed') !== '0';
   } catch (_error) {
 
-    return false;
+    return true;
   }
 }
 
@@ -1173,7 +1175,7 @@ const REMOTE_KINDS = {
     noun: 'server',
     entries: () => state.servers,
     error: () => state.serversError,
-    empty: 'No servers yet. Write one above.',
+    empty: 'No servers yet. Open New server above and write one.',
     probing: 'probing server…',
     // A human says what it is, on the card: nothing on a plain server does.
     stage: (entry) => entry.stage,
