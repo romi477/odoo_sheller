@@ -631,3 +631,14 @@ def test_markdown_keeps_an_error_that_has_no_traceback():
     ])
     assert "**TestRunnerRefused**: the container's Odoo config must have workers=0" in text
     assert "```\n\n```" not in text
+
+
+def test_journal_path_for_a_target_with_no_database_yet(tmp_path):
+    """A server card may leave the database to the server's own config, so at
+    open time there is nothing to name the file after — and a file name is not
+    worth refusing a session over."""
+    stamp = datetime(2026, 8, 15, 14, 30, 5, tzinfo=UTC)
+    path = journal.journal_path(tmp_path, "abc123", "acme", None, stamp)
+    assert path.parent == tmp_path
+    assert "acme" in path.name
+    assert path.name.endswith("-abc123.jsonl")

@@ -6,6 +6,7 @@ import re
 import secrets
 import time
 from collections import deque
+from dataclasses import replace
 from enum import Enum
 
 from odoo_sheller.journal import Journal
@@ -307,6 +308,12 @@ class Session:
             raise SessionDead("session did not start: " + self._stderr_text()) from None
         if self._closing or self._state in (SessionState.CLOSED, SessionState.DEAD):
             raise SessionDead("session is closed")
+        if not self.target.database and self.hello.get("db"):
+            # A server card may leave the database to the server's config. The
+            # shell knows which one it opened; until hello nothing did, and a
+            # session that cannot say what it is writing to is not one to
+            # commit in blind.
+            self.target = replace(self.target, database=self.hello["db"])
         self._set_state(SessionState.READY)
         self.journal.write(
             "session_open",

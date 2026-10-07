@@ -1582,3 +1582,28 @@ async def test_a_read_only_exec_is_journalled_but_not_pending(tmp_path):
     execs = [r for r in session.journal.records() if r["kind"] == "exec"]
     assert execs[0]["read_only"] is True
     assert "read_only" not in execs[1]
+
+
+async def test_the_database_the_shell_opened_is_read_from_hello(tmp_path):
+    """A server card may name no database: the shell takes it from the config.
+    Hello says which one it was, and from then on the session, its journal and
+    every screen that shows it say that rather than nothing."""
+    target = Target(
+        kind="ssh", label="acme", host="srv.example.com", stage="staging", database=None
+    )
+    session = await make_session(tmp_path, target=target)
+    await session.start()
+    assert session.describe()["database"] == "db"
+    opened = next(r for r in session.journal.records() if r["kind"] == "session_open")
+    assert opened["database"] == "db"
+    await session.close()
+
+
+async def test_a_database_the_card_named_is_not_replaced_by_hello(tmp_path):
+    session = await make_session(
+        tmp_path,
+        target=Target(container="c", database="the-card-said-so", odoo_bin="/odoo-bin"),
+    )
+    await session.start()
+    assert session.describe()["database"] == "the-card-said-so"
+    await session.close()

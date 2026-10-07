@@ -24,11 +24,14 @@ def _slug(text: str) -> str:
 
 
 def journal_path(
-    root: Path, session_id: str, container: str, database: str, opened_at: datetime
+    root: Path, session_id: str, container: str, database: str | None, opened_at: datetime
 ) -> Path:
     stamp = opened_at.strftime("%Y-%m-%dT%H-%M-%S")
+    # A server card may leave the database to the server's own config, so there
+    # can be nothing to name it after yet — the file still has to exist.
+    named = _slug(database) if database else "nodb"
 
-    return root / f"{stamp}-{_slug(container)}-{_slug(database)}-{session_id}.jsonl"
+    return root / f"{stamp}-{_slug(container)}-{named}-{session_id}.jsonl"
 
 
 class Journal:

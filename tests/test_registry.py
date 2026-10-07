@@ -863,3 +863,19 @@ async def test_other_deaths_are_not_given_that_advice(tmp_path, monkeypatch):
     with pytest.raises(SessionDead) as raised:
         await registry.open(target_id=card["id"])
     assert "--no-http" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_an_ssh_card_with_no_database_anywhere_still_opens(tmp_path, monkeypatch):
+    """The card leaves Database empty, Launch has no `-d`, and the server's own
+    config names no `db_name` either — several databases behind a dbfilter. The
+    spec allows exactly this, and the session is then opened on what the shell
+    picks; the daemon must not need a name just to make a journal file."""
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _ssh_probe(monkeypatch, captured, db_name=None)
+    registry, card = _ssh_registry(tmp_path)
+    session = await registry.open(target_id=card["id"])
+
+    assert captured["target"].database is None
+    assert session.id in registry.sessions
