@@ -660,15 +660,6 @@ button.region-toggle:active:not(:disabled) {
   min-width: 0;
 }
 
-/* Probe is the key that makes a card exist, and it is the only control on an
-   empty screen. `.primary` drops the border, which left it visible only under
-   the cursor. The outline is neutral: it says "button", the amber label says
-   which one. The element is in the selector on purpose: `.primary` sets the
-   transparent border and comes later in this file. */
-button.odoosh-add {
-  border-color: var(--border);
-}
-
 /* The server form: one field to a row, labels above, and an error under the
    field it is about. The breakdown beneath is what the recipe means — the part a
    person reads before saving, and the reason it is rendered as sentences. */

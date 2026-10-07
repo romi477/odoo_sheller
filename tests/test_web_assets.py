@@ -2338,18 +2338,24 @@ def test_a_busy_key_blurs_its_label_under_the_spinner():
     assert re.search(r"border-color:\s*(?!transparent)", start.group(1))
 
 
-def test_probe_carries_its_own_outline_at_rest():
-    """It is the key that makes a card exist; `.primary` alone left it edgeless."""
+def test_both_probe_keys_are_the_same_plain_key():
+    """Probe asks and writes nothing, so it is a plain key — a white label on the
+    ordinary outline — on the odoo.sh form as on the server form. Amber is for
+    the key that does the thing (Save, Open session), and Probe was the one
+    amber label that was not."""
+    page = (WEB / "index.html").read_text(encoding="utf-8")
+    classes = {}
+    for name, marker in (("build", "odoosh-add"), ("server", "ssh-probe")):
+        found = re.search(rf'<button[^>]*class="([^"]*\b{marker}\b[^"]*)"', page)
+        assert found is not None, name
+        classes[name] = set(found.group(1).split())
+    assert "primary" not in classes["build"]
+    assert "primary" not in classes["server"]
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    rule = re.search(r"\.odoosh-add\s*\{([^}]*)\}", css)
-    assert rule is not None, "Probe needs a rule of its own"
-    body = rule.group(1)
-    border = re.search(r"border-color:\s*([^;]+);", body)
-    assert border is not None
-    assert "transparent" not in border.group(1), "visible without hovering"
-    # Neutral, not amber or cyan: the outline says "button", the colour is the
-    # label's job.
-    assert "--border" in border.group(1)
+    # No rule of its own to make it look different, or to put an outline back
+    # that a plain button already has.
+    assert not re.search(r"\.odoosh-add\s*\{", css)
+    assert not re.search(r"\.ssh-probe\s*\{", css)
 
 
 def test_the_mode_keys_read_as_names(markup):
