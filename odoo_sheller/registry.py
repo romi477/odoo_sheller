@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from odoo_sheller.discovery import probe, probe_odoosh
+from odoo_sheller.discovery import probe, probe_odoosh, probe_ssh, version_refusal
 from odoo_sheller.journal import (
     JOURNAL_ROOT,
     Journal,
@@ -21,6 +21,7 @@ from odoo_sheller.targets import TargetStore
 from odoo_sheller.transport import (
     DOCKER,
     ODOOSH,
+    SSH,
     Target,
     bootstrap_source,
     build_command,
@@ -147,8 +148,36 @@ class Registry:
             card = self.targets.get(target_id)
         except KeyError:
             raise KeyError(f"no target {target_id!r}") from None
+        if card["kind"] == "ssh":
+
+            return await self._ssh_target(card)
 
         return await self._odoosh_target(card["build"], card["host"])
+
+    async def _ssh_target(self, card: dict) -> Target:
+        """A server someone wrote a card for: parse it, probe it, then open it.
+
+        The stage is the one the card declares — nothing on a plain server says
+        what it is, so a human did, and the probe has no say. The probe is the
+        card's own recipe run once to see who and where it lands; a refusal is
+        raised here, before anything is spawned.
+        """
+        access, launch = self.targets.recipe(card["id"])
+        probe = await probe_ssh(access, launch)
+        if not (probe.get("ok") and probe.get("supported")):
+            raise ValueError(probe.get("error") or f"{card['name']} is not usable")
+
+        return Target(
+            kind=SSH,
+            label=card["name"],
+            access=access,
+            launch=launch,
+            host=access.host,
+            stage=card["stage"],
+            # Informational, and the hello frame has the last word: it lets the
+            # session read right from the moment it is announced.
+            database=launch.database or probe.get("db_name"),
+        )
 
     async def _odoosh_target(self, build: str, host: str) -> Target:
         """Ask the build what it is before opening anything in it.
@@ -262,7 +291,10 @@ class Registry:
             # flowing, and POST /api/sessions still blocks on the registry.
             self._broadcast({"kind": "session_starting", "session": session.describe()})
             announced = True
-            await session.start()
+            hello = await session.start()
+            if target.kind == SSH and (refusal := version_refusal(hello.get("odoo"))):
+                # The probe could not read the version; now it is a fact.
+                raise ValueError(refusal)
         except BaseException as exc:
             if session is not None:
                 with contextlib.suppress(Exception):

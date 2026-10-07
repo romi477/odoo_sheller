@@ -6,7 +6,14 @@ for nothing. One key per kind of target:
 
     {"version": 1,
      "odoosh": [{"build": "36887345", "host": "build-36887345.dev.odoo.com"}],
-     "ssh": []}
+     "ssh": [{"id": "ssh-3f9a01cc", "name": "acme prod",
+              "access": "ssh -i ~/.ssh/acme.pem ubuntu@acme.example.com sudo -n -u odoo -H",
+              "launch": "/opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf",
+              "database": null, "stage": "production"}]}
+
+An ssh card holds what its author *wrote*, not what it parses to: they edit it
+later, and `~` is theirs. It is parsed (`recipe.py`) when it is saved, to refuse
+what the grammar refuses, and again wherever it is used.
 
 It holds no secrets: no key material, no passwords, not the admin key. It
 replaces what the UI used to keep in `localStorage`, which a desktop-app frame
@@ -26,16 +33,27 @@ loop a read-change-write cannot be interleaved with another.
 import contextlib
 import json
 import os
+import secrets
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 from odoo_sheller.journal import JOURNAL_ROOT
-from odoo_sheller.transport import check_ssh_name
+from odoo_sheller.names import check_ssh_name
+from odoo_sheller.recipe import Access, Launch, parse_access, parse_launch
 
 TARGETS_PATH = JOURNAL_ROOT.parent / "targets.json"
 VERSION = 1
 
 ODOOSH_PREFIX = "odoosh-"
+SSH_PREFIX = "ssh-"
+
+# What a human may declare a plain server to be. Nothing on one says what it
+# is, so the default is the dangerous one: production refuses a commit outright.
+STAGES = ("production", "staging", "development")
+DEFAULT_STAGE = "production"
+MAX_NAME = 60
+SSH_FIELDS = ("name", "access", "launch", "database", "stage")
 
 
 class TargetsError(Exception):
@@ -54,9 +72,25 @@ def _card(entry: dict) -> dict:
     }
 
 
+def _ssh_card(entry: dict) -> dict:
+
+    return {
+        "id": entry["id"],
+        "kind": "ssh",
+        "name": entry["name"],
+        "access": entry["access"],
+        "launch": entry["launch"],
+        "database": entry["database"],
+        "stage": entry["stage"],
+    }
+
+
 class TargetStore:
-    def __init__(self, path: Path = TARGETS_PATH):
+    def __init__(self, path: Path = TARGETS_PATH, is_file: Callable[[str], bool] = os.path.isfile):
         self.path = Path(path)
+        # Whether a key the card names exists: the one thing the grammar asks
+        # this machine, and so the one thing a test replaces.
+        self._is_file = is_file
 
     def _refuse(self, why: str) -> TargetsError:
 
@@ -93,6 +127,17 @@ class TargetStore:
                 and isinstance(entry.get("host"), str)
             ):
                 raise self._refuse("has an odoosh entry without a build and a host")
+        for entry in data["ssh"]:
+            if not (
+                isinstance(entry, dict)
+                and isinstance(entry.get("id"), str)
+                and entry["id"].startswith(SSH_PREFIX)
+                and all(isinstance(entry.get(key), str) for key in ("name", "access", "launch"))
+                and (entry.get("database") is None or isinstance(entry["database"], str))
+                and entry.get("stage") in STAGES
+            ):
+                raise self._refuse("has an ssh entry that is not a card")
+            entry.setdefault("database", None)
 
         return data
 
@@ -119,17 +164,44 @@ class TargetStore:
         return target_id[len(ODOOSH_PREFIX):]
 
     def list(self) -> list[dict]:
-        """Newest first. Reading never creates the file."""
+        """Every card — odoo.sh, then ssh — each kind newest first. Reading never
+        creates the file."""
+        data = self._read()
 
-        return [_card(entry) for entry in self._read()["odoosh"]]
+        return [_card(e) for e in data["odoosh"]] + [_ssh_card(e) for e in data["ssh"]]
 
     def get(self, target_id: str) -> dict:
+        data = self._read()
+        if target_id.startswith(SSH_PREFIX):
+            for entry in data["ssh"]:
+                if entry["id"] == target_id:
+
+                    return _ssh_card(entry)
+            raise KeyError(target_id)
         build = self._build_of(target_id)
-        for entry in self._read()["odoosh"]:
+        for entry in data["odoosh"]:
             if entry["build"] == build:
 
                 return _card(entry)
         raise KeyError(target_id)
+
+    def parse_access(self, text: str) -> Access:
+        """Parse an Access field, asking this machine whether the key is there."""
+
+        return parse_access(text, is_file=self._is_file)
+
+    def parse_launch(self, text: str, database: str | None = None) -> Launch:
+
+        return parse_launch(text, database=database)
+
+    def recipe(self, target_id: str) -> tuple[Access, Launch]:
+        """An ssh card, parsed. A card that stopped parsing — a key file that
+        has gone — says so here, when it is about to be used."""
+        if not target_id.startswith(SSH_PREFIX):
+            raise KeyError(target_id)
+        card = self.get(target_id)
+
+        return self.parse_access(card["access"]), self.parse_launch(card["launch"], card["database"])
 
     def add_odoosh(self, build: str, host: str) -> dict:
         """Adds a build, or updates the one already there and moves it first."""
@@ -144,11 +216,75 @@ class TargetStore:
 
         return _card(data["odoosh"][0])
 
-    def update(self, target_id: str, fields: dict) -> dict:
-        """The host of a build. The build is the card's identity: a different
-        build is a different card, so it is deleted and added, not renamed."""
-        build = self._build_of(target_id)
+    def _checked_ssh(self, data: dict, fields: dict, own_id: str | None) -> dict:
+        """The fields of an ssh card, or ValueError saying which is wrong."""
+        name = fields["name"]
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("an ssh card needs a name")
+        name = name.strip()
+        if len(name) > MAX_NAME or not name.isprintable():
+            raise ValueError(
+                f"the card's name is at most {MAX_NAME} printable characters, on one line"
+            )
+        for other in data["ssh"]:
+            if other["id"] != own_id and other["name"].casefold() == name.casefold():
+                raise ValueError(f"a card named {other['name']!r} already exists")
+        if fields["stage"] not in STAGES:
+            raise ValueError(f"stage must be one of {', '.join(STAGES)}")
+        database = fields.get("database") or None
+        self.parse_access(fields["access"])
+        self.parse_launch(fields["launch"], database)
+
+        return {
+            "name": name,
+            "access": fields["access"],
+            "launch": fields["launch"],
+            "database": database.strip() if isinstance(database, str) else None,
+            "stage": fields["stage"],
+        }
+
+    def add_ssh(
+        self,
+        name: str,
+        access: str,
+        launch: str,
+        database: str | None = None,
+        stage: str = DEFAULT_STAGE,
+    ) -> dict:
         data = self._read()
+        fields = self._checked_ssh(
+            data,
+            {
+                "name": name, "access": access, "launch": launch,
+                "database": database, "stage": stage,
+            },
+            None,
+        )
+        entry = {"id": f"{SSH_PREFIX}{secrets.token_hex(4)}", **fields}
+        data["ssh"] = [entry, *data["ssh"]]
+        self._write(data)
+
+        return _ssh_card(entry)
+
+    def update(self, target_id: str, fields: dict) -> dict:
+        """What can change on a card. An odoo.sh card's host; the build is its
+        identity, so a different build is a different card — deleted and added,
+        not renamed. An ssh card's fields, checked together afterwards: a
+        change that makes the whole recipe refused changes nothing."""
+        data = self._read()
+        if target_id.startswith(SSH_PREFIX):
+            entry = next((e for e in data["ssh"] if e["id"] == target_id), None)
+            if entry is None:
+                raise KeyError(target_id)
+            unknown = sorted(set(fields) - set(SSH_FIELDS))
+            if unknown:
+                raise ValueError(f"an ssh card has no {unknown[0]!r} to change")
+            merged = self._checked_ssh(data, {**entry, **fields}, target_id)
+            entry.update(merged)
+            self._write(data)
+
+            return _ssh_card(entry)
+        build = self._build_of(target_id)
         entry = next((e for e in data["odoosh"] if e["build"] == build), None)
         if entry is None:
             raise KeyError(target_id)
@@ -167,10 +303,16 @@ class TargetStore:
         return _card(entry)
 
     def delete(self, target_id: str) -> None:
-        build = self._build_of(target_id)
         data = self._read()
-        kept = [entry for entry in data["odoosh"] if entry["build"] != build]
-        if len(kept) == len(data["odoosh"]):
-            raise KeyError(target_id)
-        data["odoosh"] = kept
+        if target_id.startswith(SSH_PREFIX):
+            kept = [entry for entry in data["ssh"] if entry["id"] != target_id]
+            if len(kept) == len(data["ssh"]):
+                raise KeyError(target_id)
+            data["ssh"] = kept
+        else:
+            build = self._build_of(target_id)
+            kept = [entry for entry in data["odoosh"] if entry["build"] != build]
+            if len(kept) == len(data["odoosh"]):
+                raise KeyError(target_id)
+            data["odoosh"] = kept
         self._write(data)

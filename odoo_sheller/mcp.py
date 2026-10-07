@@ -1209,16 +1209,17 @@ async def os_list_tests(module: str, container: str | None = None) -> Any:
         if described.get("error"):
 
             return described
-        if described.get("kind") == "odoosh":
-            # The catalogue is read from a local container's disk; a build id
-            # in that slot would go to `docker exec` and fail obscurely.
+        if described.get("kind", "docker") != "docker":
+            # The catalogue is read from a local container's disk; a build id,
+            # or a card's name, in that slot would go to `docker exec` and fail
+            # obscurely.
 
             return {
                 "error": "not_a_container",
                 "session_id": session_id,
                 "recovery": (
                     "os_list_tests reads a local container's files; on a remote "
-                    f"build, list the module's tests with os_source(path='{module}/tests') "
+                    f"instance, list the module's tests with os_source(path='{module}/tests') "
                     "and read the file that holds the class"
                 ),
             }

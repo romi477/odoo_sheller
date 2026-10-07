@@ -194,7 +194,7 @@ class FakeRegistry:
 @pytest.fixture
 def client(tmp_path):
     registry = FakeRegistry()
-    registry.targets = TargetStore(tmp_path / "targets.json")
+    registry.targets = TargetStore(tmp_path / "targets.json", is_file=lambda path: True)
     app = create_app(registry=registry)
     with TestClient(app, headers={"X-OS-Session-Key": OWNER_KEY}, base_url=LOCAL) as test_client:
         test_client.registry = registry
@@ -1167,6 +1167,171 @@ def test_a_file_that_cannot_be_read_is_a_500_that_says_which_and_why(client):
     assert client.registry.targets.path.read_text(encoding="utf-8") == "{oops"
 
 
+# --- ssh cards: a server someone wrote down ----------------------------------
+
+SSH = {
+    "kind": "ssh",
+    "name": "acme prod",
+    "access": "ssh -i /k/key.pem ubuntu@srv.example.com sudo -n -u odoo -H",
+    "launch": "/opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf",
+}
+
+
+def test_an_ssh_card_is_written_with_the_admin_key_and_defaults_to_production(client):
+    assert client.post("/api/targets", json=SSH).status_code == 403
+    written = client.post("/api/targets", json=SSH, headers=ADMIN)
+    assert written.status_code == 200
+    card = written.json()
+    assert card["id"].startswith("ssh-")
+    assert (card["kind"], card["name"], card["stage"], card["database"]) == (
+        "ssh", "acme prod", "production", None,
+    )
+    assert card["access"] == SSH["access"] and card["launch"] == SSH["launch"]
+    assert client.get("/api/targets").json() == [card]
+
+
+def test_both_kinds_are_listed_together(client):
+    client.post("/api/targets", json=BUILD, headers=ADMIN)
+    client.post("/api/targets", json=SSH, headers=ADMIN)
+    assert [card["kind"] for card in client.get("/api/targets").json()] == ["odoosh", "ssh"]
+
+
+@pytest.mark.parametrize(
+    ("change", "field"),
+    [
+        ({"access": "ssh -o ProxyCommand=x u@h"}, "access"),
+        ({"access": "ssh u@h sudo su"}, "access"),
+        ({"access": "ssh u@h\nsudo su"}, "access"),
+        ({"launch": "odoo-bin shell"}, "launch"),
+        ({"launch": "/x/odoo-bin -c /y"}, "launch"),
+        ({"database": "-oops"}, "database"),
+        ({"launch": SSH["launch"] + " -d x", "database": "y"}, "database"),
+    ],
+)
+def test_a_recipe_the_grammar_refuses_is_a_422_that_names_the_field(client, change, field):
+    response = client.post("/api/targets", json={**SSH, **change}, headers=ADMIN)
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["error"] == "invalid_recipe"
+    assert detail["field"] == field
+    assert detail["message"]
+    assert client.get("/api/targets").json() == []
+
+
+@pytest.mark.parametrize("change", [{"stage": "prod"}, {"name": ""}, {"name": "x" * 99}])
+def test_a_stage_or_name_that_is_not_one_is_a_422(client, change):
+    assert client.post("/api/targets", json={**SSH, **change}, headers=ADMIN).status_code == 422
+
+
+def test_a_second_card_with_the_same_name_is_a_422(client):
+    client.post("/api/targets", json=SSH, headers=ADMIN)
+    response = client.post("/api/targets", json={**SSH, "name": "ACME PROD"}, headers=ADMIN)
+    assert response.status_code == 422
+    assert "already" in str(response.json()["detail"])
+
+
+def test_a_card_of_a_kind_nobody_knows_is_a_422(client):
+    assert client.post("/api/targets", json={**SSH, "kind": "telnet"}, headers=ADMIN).status_code == 422
+    assert client.post("/api/targets", json={"name": "x"}, headers=ADMIN).status_code == 422
+
+
+def test_an_ssh_card_is_changed_and_a_refused_change_changes_nothing(client):
+    card = client.post("/api/targets", json=SSH, headers=ADMIN).json()
+    url = f"/api/targets/{card['id']}"
+    assert client.put(url, json={"stage": "staging"}).status_code == 403
+    changed = client.put(url, json={"stage": "staging", "database": "acme"}, headers=ADMIN)
+    assert changed.status_code == 200
+    assert (changed.json()["stage"], changed.json()["database"]) == ("staging", "acme")
+    refused = client.put(url, json={"access": "ssh -o ProxyCommand=x u@h"}, headers=ADMIN)
+    assert refused.status_code == 422
+    assert refused.json()["detail"]["field"] == "access"
+    assert client.get("/api/targets").json() == [changed.json()]
+    cleared = client.put(url, json={"database": None}, headers=ADMIN)
+    assert cleared.json()["database"] is None, "null clears it; leaving it out leaves it"
+
+
+def test_an_ssh_card_is_deleted(client):
+    card = client.post("/api/targets", json=SSH, headers=ADMIN).json()
+    assert client.delete(f"/api/targets/{card['id']}").status_code == 403
+    assert client.delete(f"/api/targets/{card['id']}", headers=ADMIN).status_code == 200
+    assert client.get("/api/targets").json() == []
+
+
+def test_the_parse_decodes_what_the_person_wrote_without_touching_the_network(client, monkeypatch):
+    async def never(*args, **kwargs):
+        raise AssertionError("parsing must not reach the network")
+
+    monkeypatch.setattr("odoo_sheller.api.discovery.probe_ssh", never)
+    body = {k: SSH[k] for k in ("access", "launch")}
+    assert client.post("/api/targets/parse", json=body).status_code == 403
+    response = client.post("/api/targets/parse", json=body, headers=ADMIN)
+    assert response.status_code == 200
+    result = response.json()
+    assert result["ok"] is True
+    assert result["breakdown"]["login"]["host"] == "srv.example.com"
+    assert result["breakdown"]["runs_as"] == "odoo"
+    assert result["breakdown"]["assembled"].startswith("ssh -i /k/key.pem -- ubuntu@srv.example.com sudo -n -u odoo -H sh -c ")
+
+
+def test_the_parse_reports_every_field_that_is_wrong_at_once(client):
+    response = client.post(
+        "/api/targets/parse",
+        json={"access": "ssh -o ProxyCommand=x u@h", "launch": "odoo-bin shell", "database": "-x"},
+        headers=ADMIN,
+    )
+    assert response.status_code == 200, "a form being typed is not an error"
+    result = response.json()
+    assert result["ok"] is False
+    assert set(result["errors"]) == {"access", "launch", "database"}
+    assert "ProxyCommand" in result["errors"]["access"]
+    assert "breakdown" not in result or result["breakdown"] is None
+
+
+def test_probing_an_ssh_card_shows_what_it_means_and_what_the_server_said(client, monkeypatch):
+    seen = {}
+
+    async def fake_probe(access, launch, runner=None):
+        seen["destination"] = access.destination
+        seen["launch"] = launch.argv
+
+        return {"ok": True, "supported": True, "effective_user": "odoo", "odoo_version": "13.0"}
+
+    monkeypatch.setattr("odoo_sheller.api.discovery.probe_ssh", fake_probe)
+    body = {k: SSH[k] for k in ("kind", "access", "launch")}
+    assert client.post("/api/targets/probe", json=body).status_code == 403
+    result = client.post("/api/targets/probe", json=body, headers=ADMIN).json()
+    assert result["effective_user"] == "odoo"
+    assert result["breakdown"]["runs_as"] == "odoo"
+    assert seen["destination"] == "ubuntu@srv.example.com"
+    assert client.get("/api/targets").json() == [], "a probe stores nothing"
+
+
+def test_probing_a_recipe_the_grammar_refuses_never_reaches_the_network(client, monkeypatch):
+    async def never(*args, **kwargs):
+        raise AssertionError("a refused recipe must not be probed")
+
+    monkeypatch.setattr("odoo_sheller.api.discovery.probe_ssh", never)
+    response = client.post(
+        "/api/targets/probe",
+        json={"kind": "ssh", "access": "ssh -o ProxyCommand=x u@h", "launch": SSH["launch"]},
+        headers=ADMIN,
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["field"] == "access"
+
+
+def test_opening_a_card_that_no_longer_parses_is_422_with_the_field(client):
+    from odoo_sheller.recipe import RecipeError
+
+    async def refuse(**kwargs):
+        raise RecipeError("key file /k/key.pem does not exist, or is not a file", field="access")
+
+    client.registry.open = refuse
+    response = client.post("/api/sessions", json={"target_id": "ssh-1"})
+    assert response.status_code == 422
+    assert response.json()["detail"]["field"] == "access"
+
+
 # --- opening a session on a card -------------------------------------------
 
 
@@ -1207,6 +1372,20 @@ def test_opening_an_unusable_build_is_422_not_500(client):
     response = client.post("/api/sessions", json={"target_id": "odoosh-1"})
     assert response.status_code == 422
     assert "17.0" in str(response.json()["detail"])
+
+
+def test_revoking_commit_on_an_ssh_session_is_a_real_act_like_on_any_remote(client):
+    """The flag gates the human too on a remote target, so refusing the revocation
+    would be the lie: it is not an agent latch there."""
+    session = client.registry.session
+    session.owner = {"kind": "human", "label": "browser"}
+    session.describe = lambda: {"id": "s1", "kind": "ssh", "stage": "staging",
+                                "owner": dict(session.owner)}
+    response = client.post(
+        "/api/sessions/s1/policy", json={"allow_commit": False}, headers=ADMIN
+    )
+    assert response.status_code == 200
+    assert ("set_allow_commit", False) in session.calls
 
 
 def test_a_production_commit_is_refused_as_terminal_not_as_pending(client):

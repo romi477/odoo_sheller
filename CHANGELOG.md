@@ -32,6 +32,53 @@ the browser had kept to the daemon, once, when the odoo.sh list is first
 opened. A card that has not been probed since the page loaded can still be
 opened: the daemon asks the instance on the way in and refuses there if it must.
 
+### An Odoo installed on a server, reached by ssh
+
+A third kind of target next to a local container and an odoo.sh build: an Odoo
+installed directly on a server. The daemon cannot know which user runs it, which
+interpreter (a venv, usually), where `odoo-bin` and its config are, or which
+database — so it does not guess. The person who can log in writes a card, in
+two fields: **Access**, how to arrive as the right user, and **Launch**, what to
+run once there.
+
+    Access   ssh -i ~/.ssh/acme.pem ubuntu@acme.example.com sudo -n -u odoo -H
+    Launch   /opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf
+
+Access is a *prefix*, and has to be: `sudo` closes every file descriptor above
+2, and the transport rests on `exec 3<&0` keeping the command pipe alive, so
+the script that does it runs inside the user switch — checked on a real server,
+and by a test that puts a real `sudo` in the chain. Steps typed one after
+another into a terminal (`ssh`, then `sudo su`, then `su odoo`) nest; the
+equivalent is one line.
+
+Both fields are data, not code. They are tokenised, checked against a
+whitelist — not a blacklist — and every token is quoted again on the way out;
+nothing a person typed reaches a script or a local shell. Access accepts `-i`,
+`-p`, `-l`, `-J` and `-o` with `Port`, `IdentityFile`, `User`, `ProxyJump`,
+`ConnectTimeout` and `IdentitiesOnly`, and refuses what would make ssh do
+something on *this* machine (`ProxyCommand`, `LocalCommand`, forwarding, `-F`,
+a pty) and anything that would weaken host key checking, with a message that
+says why; options after the host are accepted and normalised. After the
+destination only `sudo -n [-u USER] [-H]` may follow — `su`, `runuser` and
+`doas` are refused until someone has checked that they keep fd 3. Launch is
+run exactly as written: nothing is appended but `-d DATABASE`, and only when
+the optional Database field is filled; writing it in both places is an error.
+
+Nothing on a plain server says what it is, so **stage is declared on the card**
+and defaults to `production`, which refuses a commit outright. `staging` and
+`development` behave like an odoo.sh staging build: commit is off until a human
+grants it, even for the owner. A probe (`POST /api/targets/probe`) shows who the
+recipe lands as, where, which interpreter, whether the executable and the config
+are readable by that user — a server's config is usually readable only by its
+Odoo user, so forgetting the `sudo` reads as exactly that — and which Odoo, read
+from `odoo/release.py` beside `odoo-bin`. When that file is not there the gate
+is applied when the session says its version. An ssh failure is reported with
+what to do: an untrusted host key is "connect once from a terminal", never
+accepted on the daemon's own.
+
+Tested against `tests/ssh_double/`: a container with `sshd`, `sudo` and Odoo 19
+installed in the system, started by `tests/ssh_double/up.sh`.
+
 ## [1.8.4] — 2026-10-07
 
 ### The daemon answers only requests addressed to this machine

@@ -575,3 +575,178 @@ async def test_an_odoosh_probe_without_ssh_says_what_is_missing(monkeypatch):
     assert probe["supported"] is False
     assert "ssh" in probe["error"]
     assert "not installed" in probe["error"]
+
+
+# --- a server reached by ssh ------------------------------------------------
+
+SSH_LAUNCH = "/opt/odoo/13.0/env/bin/python /opt/odoo/13.0/odoo/odoo-bin shell -c /opt/odoo/13.0/odoo.conf"
+SSH_FACTS = (
+    "effective_user=odoo\nlogin_user=ubuntu\nhost=srv-1\nexecutable_ok=1\n"
+    "interpreter=Python 3.6.9\nconfig_readable=1\ndb_name=acme\nodoo_version=13.0\n"
+)
+
+
+def ssh_recipe(access="ssh -i /k/key ubuntu@srv.example.com sudo -n -u odoo -H", launch=SSH_LAUNCH):
+    from odoo_sheller.recipe import parse_access, parse_launch
+
+    return parse_access(access, is_file=lambda path: True), parse_launch(launch)
+
+
+async def test_probe_ssh_goes_through_the_cards_prefix_and_passes_the_launch_as_data():
+    import shlex
+
+    access, launch = ssh_recipe()
+    runner = fake_runner([(0, SSH_FACTS, "")])
+    await discovery.probe_ssh(access, launch, runner=runner)
+    argv, stdin = runner.calls[0]
+    assert argv[0] == "ssh"
+    assert argv[argv.index("--") + 1] == "ubuntu@srv.example.com"
+    assert stdin is None
+    remote = shlex.split(argv[-1])
+    assert remote[:7] == ["sudo", "-n", "-u", "odoo", "-H", "sh", "-c"]
+    # The script is fixed text; what the card said arrives as arguments to it.
+    assert remote[8:] == [
+        "sh",
+        "/opt/odoo/13.0/env/bin/python",
+        "/opt/odoo/13.0/odoo.conf",
+        "/opt/odoo/13.0/odoo/odoo-bin",
+    ]
+    assert "/opt/odoo/13.0" not in remote[7]
+
+
+async def test_probe_ssh_says_who_where_and_what():
+    access, launch = ssh_recipe()
+    result = await discovery.probe_ssh(access, launch, runner=fake_runner([(0, SSH_FACTS, "")]))
+    assert result["ok"] is True
+    assert result["effective_user"] == "odoo"
+    assert result["login_user"] == "ubuntu"
+    assert result["host"] == "srv-1"
+    assert result["python"] == "3.6.9"
+    assert result["odoo_version"] == "13.0"
+    assert result["odoo_major"] == 13
+    assert result["db_name"] == "acme"
+    assert result["stage"] is None, "a plain server does not say what it is; the card does"
+
+
+async def test_a_config_the_user_cannot_read_is_named_in_terms_of_the_user():
+    """The real server's config is readable only by its own user. Forgetting the
+    sudo is the likely mistake, and this is how it should read."""
+    access, launch = ssh_recipe()
+    facts = SSH_FACTS.replace("effective_user=odoo", "effective_user=ubuntu").replace(
+        "config_readable=1", "config_readable=0"
+    )
+    result = await discovery.probe_ssh(access, launch, runner=fake_runner([(0, facts, "")]))
+    assert result["ok"] is False
+    assert "/opt/odoo/13.0/odoo.conf" in result["error"]
+    assert "ubuntu" in result["error"]
+    assert result["error_code"] == "config_unreadable"
+
+
+async def test_a_launch_that_is_not_an_executable_file_is_named():
+    access, launch = ssh_recipe()
+    facts = SSH_FACTS.replace("executable_ok=1", "executable_ok=0")
+    result = await discovery.probe_ssh(access, launch, runner=fake_runner([(0, facts, "")]))
+    assert result["ok"] is False
+    assert "/opt/odoo/13.0/env/bin/python" in result["error"]
+    assert result["error_code"] == "launch_not_executable"
+
+
+@pytest.mark.parametrize(
+    ("stderr", "code", "needle"),
+    [
+        ("Host key verification failed.", 255, "terminal"),
+        ("@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@", 255, "changed"),
+        ("ubuntu@h: Permission denied (publickey).", 255, "key"),
+        ("ssh: Could not resolve hostname nope: Name or service not known", 255, "host name"),
+        ("ssh: connect to host h port 22: Connection refused", 255, "reach"),
+        ("sudo: a password is required", 1, "NOPASSWD"),
+        ("sudo: sorry, you are not allowed to execute 'x' as odoo on h", 1, "sudo"),
+    ],
+)
+async def test_a_failure_before_the_script_says_what_to_do(stderr, code, needle):
+    access, launch = ssh_recipe()
+    result = await discovery.probe_ssh(access, launch, runner=fake_runner([(code, "", stderr)]))
+    assert result["ok"] is False
+    assert result["supported"] is False
+    assert needle in result["error"]
+    assert stderr.strip() in result["error_detail"]
+
+
+async def test_a_version_outside_the_gate_is_refused_like_any_other():
+    access, launch = ssh_recipe()
+    facts = SSH_FACTS.replace("odoo_version=13.0", "odoo_version=12.0")
+    result = await discovery.probe_ssh(access, launch, runner=fake_runner([(0, facts, "")]))
+    assert result["supported"] is False
+    assert "12.0" in result["error"]
+
+
+async def test_a_version_that_could_not_be_read_waits_for_the_session():
+    """Not every install has `odoo/release.py` beside `odoo-bin`. It is not a
+    refusal; the gate is applied again when the session says what it is."""
+    access, launch = ssh_recipe()
+    facts = SSH_FACTS.replace("odoo_version=13.0\n", "")
+    result = await discovery.probe_ssh(access, launch, runner=fake_runner([(0, facts, "")]))
+    assert result["ok"] is True
+    assert result["supported"] is True
+    assert result["version_known"] is False
+    assert result["odoo_version"] is None
+
+
+async def test_no_config_in_the_launch_is_not_a_missing_config():
+    access, launch = ssh_recipe(launch="/x/py /x/odoo-bin shell")
+    facts = "effective_user=odoo\nexecutable_ok=1\nodoo_version=19.0\n"
+    result = await discovery.probe_ssh(access, launch, runner=fake_runner([(0, facts, "")]))
+    assert result["ok"] is True
+    assert result["config"] is None
+
+
+async def test_an_ssh_probe_without_ssh_says_what_is_missing(monkeypatch):
+    monkeypatch.setenv("PATH", "/nonexistent")
+    access, launch = ssh_recipe()
+    result = await discovery.probe_ssh(access, launch)
+    assert result["ok"] is False
+    assert "ssh" in result["error"]
+
+
+def test_the_probe_script_reads_a_real_tree(tmp_path):
+    """Run for real, in a local sh: the facts a server would report."""
+    import subprocess
+
+    tree = tmp_path / "odoo13"
+    (tree / "odoo").mkdir(parents=True)
+    (tree / "odoo" / "release.py").write_text(
+        "version_info = (13, 0, 0, FINAL, 0, '')\nversion = '13.0'\n", encoding="utf-8"
+    )
+    (tree / "odoo-bin").write_text("#!/bin/sh\n", encoding="utf-8")
+    (tree / "odoo-bin").chmod(0o755)
+    conf = tmp_path / "odoo.conf"
+    conf.write_text("[options]\ndb_name = acme\ndb_host = x\n", encoding="utf-8")
+
+    def run(exe, config, odoo_bin):
+        out = subprocess.run(
+            ["sh", "-c", discovery.SSH_PROBE_SCRIPT, "sh", exe, config, odoo_bin],
+            capture_output=True, text=True, check=True,
+        ).stdout
+
+        return dict(line.split("=", 1) for line in out.splitlines())
+
+    facts = run(str(tree / "odoo-bin"), str(conf), str(tree / "odoo-bin"))
+    assert facts["executable_ok"] == "1"
+    assert facts["config_readable"] == "1"
+    assert facts["db_name"] == "acme"
+    assert facts["odoo_version"] == "13.0"
+    assert facts["effective_user"]
+
+    gone = run(str(tmp_path / "nope"), str(tmp_path / "nope.conf"), str(tmp_path / "nope" / "odoo-bin"))
+    assert gone["executable_ok"] == "0"
+    assert gone["config_readable"] == "0"
+    assert "odoo_version" not in gone
+
+    no_conf = run(str(tree / "odoo-bin"), "", str(tree / "odoo-bin"))
+    assert "config_readable" not in no_conf
+
+
+def test_the_probe_script_takes_its_arguments_as_data():
+    """Nothing the card said is spliced into it, and nothing in it evaluates."""
+    assert "eval" not in discovery.SSH_PROBE_SCRIPT
+    assert '"$1"' in discovery.SSH_PROBE_SCRIPT

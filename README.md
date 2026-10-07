@@ -607,10 +607,11 @@ answers `409` until that command's result finally arrives. Use `interrupt`, or
 | `GET` | `/health` | liveness and version; no session data, no admin key |
 | `GET` | `/api/containers` | running containers |
 | `POST` | `/api/probe` | probe one container |
-| `GET` | `/api/targets` | the cards — remote instances a human wrote down — newest first; names, not secrets, so no key |
-| `POST` | `/api/targets` | write an odoo.sh card down (`{"build", "host"}`), or update the one for that build. Admin key |
-| `PUT` / `DELETE` | `/api/targets/{id}` | change a card's host / delete it. Admin key |
-| `POST` | `/api/targets/probe` | ask an instance about itself (`{"build", "host"}`), storing nothing; answers `stage`, `db_name`, version. Admin key |
+| `GET` | `/api/targets` | the cards — remote instances a human wrote down — odoo.sh then ssh, each newest first. No key: opening a session on a card needs none either, so the text of a card is not what stands between a local caller and the server |
+| `POST` | `/api/targets` | write a card down. `{"kind": "odoosh", "build", "host"}`, or `{"kind": "ssh", "name", "access", "launch", "database"?, "stage"?}` — a server someone reaches by ssh: Access is how to arrive (`ssh -i KEY user@host sudo -n -u odoo -H`), Launch is what to run there (`/abs/python /abs/odoo-bin shell -c /abs/odoo.conf`), `stage` is `production` (the default; commit refused outright), `staging` or `development`. A recipe the grammar refuses is `422` with `field`. Admin key |
+| `PUT` / `DELETE` | `/api/targets/{id}` | change (only what is sent; `null` clears the database) / delete a card. Admin key |
+| `POST` | `/api/targets/parse` | what an ssh recipe means, decoded — who it logs in as, what it becomes, what it runs, the assembled form — or every field that is wrong, at once. Touches no network, stores nothing. Admin key |
+| `POST` | `/api/targets/probe` | ask an instance about itself, storing nothing. odoo.sh: `stage`, `db_name`, version. ssh: who the recipe lands as, where, which interpreter, whether the executable and the config are readable by that user, which Odoo — and the decoded `breakdown`. Admin key |
 | `GET` | `/api/containers/{container}/tests` | test classes/methods in one addon (`?module=`) |
 | `POST` | `/api/sessions` | open a session, wait for `hello`. A local container needs `container` and `database`; leave `odoo_bin` out and the daemon probes that container for it, refusing an unsupported one with a `422` before anything starts. `target_id` opens a card (`odoosh-<build>`) instead of a container; the instance dictates the database, and its stage is read from the instance itself, not from the request. Optional `client_token` is echoed back in the session description, so a client recognises its own `session_starting` among several. An `agent` owner with `allow_commit: true` is a `403 needs_a_human` without the admin key. A process that dies before `hello` is a `410 session_did_not_start` whose message ends with what Odoo logged |
 | `GET` | `/api/sessions` | live sessions |

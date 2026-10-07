@@ -226,3 +226,174 @@ def test_the_destination_follows_a_double_dash():
     dest = "36887345@build-36887345.dev.odoo.com"
     for argv in (build_command(OOSH, "pass"), signal_command(OOSH, 42, "INT")):
         assert argv[argv.index(dest) - 1] == "--"
+
+
+# --- an Odoo installed on a server, reached by ssh --------------------------
+
+
+def ssh_target(
+    access="ssh -i /k/key.pem ubuntu@srv.example.com sudo -n -u odoo -H",
+    launch="/opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf",
+    database=None,
+    stage="production",
+):
+    from odoo_sheller.recipe import parse_access, parse_launch
+
+    parsed = parse_access(access, is_file=lambda path: True)
+    return Target(
+        kind="ssh",
+        label="acme-prod",
+        access=parsed,
+        launch=parse_launch(launch, database=database),
+        host=parsed.host,
+        stage=stage,
+    )
+
+
+def test_an_ssh_target_is_identified_by_the_name_on_its_card():
+    target = ssh_target()
+    assert target.name == "acme-prod"
+    assert target.is_remote
+    assert target.host == "srv.example.com"
+
+
+def test_the_whole_command_is_the_cards_prefix_then_sh_c(tmp_path):
+    import shlex
+
+    argv = build_command(ssh_target(), "print('boot')")
+    assert argv[0] == "ssh"
+    dash = argv.index("--")
+    assert argv[dash + 1] == "ubuntu@srv.example.com"
+    assert argv[dash - 2 : dash] == ["-i", "/k/key.pem"], "the card's options sit before --"
+    assert len(argv) == dash + 3, "one remote command, quoted once, for ssh's own re-parse"
+    remote = shlex.split(argv[-1])
+    assert remote[:7] == ["sudo", "-n", "-u", "odoo", "-H", "sh", "-c"]
+    script = remote[7]
+    assert len(remote) == 8
+    assert script.index("exec 3<&0") < script.index("odoo-bin"), "the fd is kept before Odoo"
+    assert "print('boot')" in script
+    assert script.count(HEREDOC_MARKER) == 2
+
+
+def test_the_ssh_options_every_kind_of_remote_needs_are_still_there():
+    argv = build_command(ssh_target(), "pass")
+    flat = " ".join(argv)
+    assert "-T" in argv and "BatchMode=yes" in flat and "ServerAliveInterval" in flat
+    assert "ControlMaster" in flat and "ControlPersist" in flat
+
+
+def test_the_launch_is_run_exactly_as_written():
+    import shlex
+
+    script = shlex.split(build_command(ssh_target(), "pass")[-1])[7]
+    assert "odoo-bin shell -c /opt/odoo/odoo.conf <<" in script
+    for added in ("--no-http", " -d ", "--workers"):
+        assert added not in script
+
+
+def test_a_database_on_the_card_is_the_one_thing_appended():
+    import shlex
+
+    script = shlex.split(build_command(ssh_target(database="acme"), "pass")[-1])[7]
+    assert "odoo-bin shell -c /opt/odoo/odoo.conf -d acme <<" in script
+
+
+def test_an_ssh_target_without_a_become_has_no_prefix():
+    import shlex
+
+    target = ssh_target(access="ssh -i /k/key.pem ubuntu@srv.example.com")
+    assert shlex.split(build_command(target, "pass")[-1])[:2] == ["sh", "-c"]
+
+
+def test_an_interrupt_arrives_as_the_user_the_session_runs_as():
+    import shlex
+
+    argv = signal_command(ssh_target(), 4242, "INT")
+    assert argv[0] == "ssh"
+    assert argv[argv.index("--") + 1] == "ubuntu@srv.example.com"
+    assert shlex.split(argv[-1]) == ["sudo", "-n", "-u", "odoo", "-H", "kill", "-INT", "4242"]
+
+
+def test_an_ssh_bootstrap_that_would_close_the_heredoc_is_refused():
+    with pytest.raises(ValueError):
+        build_command(ssh_target(), f"x = 1\n{HEREDOC_MARKER}\n")
+
+
+def test_a_token_that_looks_like_shell_is_one_argument_to_odoo():
+    """Run for real, in a local `sh`: the launch is data, never code."""
+    import subprocess
+
+    from odoo_sheller.recipe import launch_script, parse_launch
+
+    launch = parse_launch("/bin/echo shell 'a;b' '$(id)' '`id`' '> /tmp/never'")
+    script = launch_script(launch, f"ignored\n{HEREDOC_MARKER}\n")
+    out = subprocess.run(["sh", "-c", script], capture_output=True, text=True, check=True).stdout
+    assert out == "shell a;b $(id) `id` > /tmp/never\n"
+
+
+# The ssh and sudo of the chain, as shims. They exist to make the unit test
+# honest about the one thing that matters: `sudo` closes every descriptor above
+# 2. The real `sudo` is exercised against a container in tests/test_e2e_ssh.py.
+
+FAKE_SSH = """#!/bin/sh
+# Skip our options, `--` and the destination; what is left is joined and
+# re-parsed by a shell, as the remote login shell would.
+while [ "$1" != "--" ]; do shift; done
+shift; shift
+exec sh -c "$*"
+"""
+
+FAKE_SUDO = """#!/bin/sh
+while [ $# -gt 0 ]; do
+  case "$1" in -n|-H) shift ;; -u) shift 2 ;; *) break ;; esac
+done
+for fd in 3 4 5 6 7 8 9; do eval "exec $fd>&-"; done
+exec "$@"
+"""
+
+FAKE_ODOO = """#!/bin/sh
+# Reads its stdin (the bootstrap, as a heredoc) to the end, then answers on
+# stdout whatever arrives on fd 3 — which only works if fd 3 is still there.
+cat > /dev/null
+cat <&3
+"""
+
+
+@pytest.fixture
+def shims(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, body in (("ssh", FAKE_SSH), ("sudo", FAKE_SUDO)):
+        (bin_dir / name).write_text(body, encoding="utf-8")
+        (bin_dir / name).chmod(0o755)
+    odoo = tmp_path / "odoo-bin"
+    odoo.write_text(FAKE_ODOO, encoding="utf-8")
+    odoo.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+
+    return str(odoo)
+
+
+async def test_the_command_pipe_survives_the_user_switch(shims):
+    """The whole chain, with a sudo that closes fd 3: the pipe is still there
+    because `exec 3<&0` runs after the switch, not before."""
+    target = ssh_target(launch=f"{shims} shell")
+    process = await spawn(build_command(target, "print('boot')"))
+    out, err = await process.communicate(b"ping\n")
+    assert out == b"ping\n", err.decode()
+
+
+async def test_the_shim_really_does_close_the_descriptor(shims):
+    """A control: the order the transport refuses to use fails here, so the
+    test above is not passing for want of a sudo that does anything."""
+    import asyncio
+
+    process = await asyncio.create_subprocess_exec(
+        "sh", "-c", "exec 3<&0; sudo -n -u odoo sh -c 'cat <&3'",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    out, err = await process.communicate(b"ping\n")
+    assert out == b""
+    assert b"Bad file descriptor" in err

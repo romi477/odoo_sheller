@@ -5,6 +5,7 @@ import contextlib
 import json
 import re
 
+from odoo_sheller.recipe import Access, Launch
 from odoo_sheller.transport import SSH_OPTS, docker_bin, ssh_destination
 
 # 15 through 20. Everything the bootstrap rests on is the same in all six:
@@ -418,6 +419,22 @@ def _unreadable(code: int, out: str, err: str) -> dict:
     }
 
 
+def version_refusal(version: str | None) -> str | None:
+    """Why an Odoo version is not one this tool runs on, or None.
+
+    For a version that is only known once a session says it — a server whose
+    probe could not read `odoo/release.py`. A version that cannot be read at
+    all is not a reason to refuse: nothing says it is wrong.
+    """
+    match = re.match(r"\D*(\d+)\.", version or "")
+    if match is None or int(match.group(1)) in SUPPORTED_MAJORS:
+
+        return None
+    supported = ", ".join(str(major) for major in SUPPORTED_MAJORS)
+
+    return f"Odoo {version} found; supported: {supported}"
+
+
 def _gate_on_version(payload: dict) -> dict:
     """Refuse an unsupported major here, not on the first command."""
     payload["supported"] = payload.get("odoo_major") in SUPPORTED_MAJORS
@@ -459,6 +476,205 @@ async def probe_odoosh(build: str, host: str, runner=None) -> dict:
     payload = _last_json_line(out)
 
     return _gate_on_version(payload) if payload else _unreadable(code, out, err)
+
+
+# What a server reached by ssh says about itself. Plain POSIX sh, because the
+# one thing every such server has is `sh`: the interpreter named in the card may
+# be a venv that is the very thing being checked, and the system's python3 may
+# not exist or may not be the one Odoo needs. What the card said arrives as
+# arguments ($1 the executable, $2 the config or empty, $3 odoo-bin) and is
+# only ever quoted expansions here: nothing is spliced in, nothing evaluates.
+SSH_PROBE_SCRIPT = r'''
+emit() { printf '%s=%s\n' "$1" "$2"; }
+emit effective_user "$(id -un 2>/dev/null)"
+emit login_user "${SUDO_USER:-}"
+emit host "$(hostname 2>/dev/null)"
+if [ -f "$1" ] && [ -x "$1" ]; then emit executable_ok 1; else emit executable_ok 0; fi
+case "${1##*/}" in
+  python*) emit interpreter "$("$1" --version 2>&1 | head -n 1)" ;;
+esac
+if [ -n "$2" ]; then
+  if [ -r "$2" ]; then
+    emit config_readable 1
+    emit db_name "$(sed -n 's/^[[:space:]]*db_name[[:space:]]*=[[:space:]]*//p' "$2" | head -n 1)"
+  else
+    emit config_readable 0
+  fi
+fi
+release="$(dirname "$3")/odoo/release.py"
+if [ -r "$release" ]; then
+  emit odoo_version "$(sed -n 's/^version_info *= *(\([0-9]*\), *\([0-9]*\).*/\1.\2/p' "$release" | head -n 1)"
+fi
+'''
+
+# What a failure of ssh or sudo says, and what to do about it. First match wins.
+_NEEDS_NOPASSWD = (
+    "sudo wants a password and there is nobody to type one: the login user needs "
+    "NOPASSWD sudo to that user (see `sudo -l` on the server)"
+)
+_SSH_HINTS = (
+    (
+        "REMOTE HOST IDENTIFICATION HAS CHANGED",
+        "host_key_changed",
+        (
+            "the server's host key has changed since it was trusted: that is either a "
+            "rebuilt server or someone in the way. Check which, then fix known_hosts by hand"
+        ),
+    ),
+    (
+        "Host key verification failed",
+        "host_key",
+        (
+            "this server's host key is not trusted yet: connect once from a terminal "
+            "(the same ssh, to the same destination) and accept it. The daemon does "
+            "not accept an unknown host key on its own"
+        ),
+    ),
+    (
+        "Permission denied (publickey",
+        "auth",
+        "the server refused the key: check the user and the -i key in Access",
+    ),
+    (
+        "Could not resolve hostname",
+        "unreachable",
+        "check the host name in Access — it did not resolve",
+    ),
+    (
+        "Connection refused",
+        "unreachable",
+        (
+            "this machine could not reach the server on that port: check the host, "
+            "the port and any firewall"
+        ),
+    ),
+    (
+        "Connection timed out",
+        "unreachable",
+        "this machine could not reach the server: it did not answer in time",
+    ),
+    (
+        "No route to host",
+        "unreachable",
+        "this machine could not reach the server: there is no route to it",
+    ),
+    ("a password is required", "sudo", _NEEDS_NOPASSWD),
+    ("no tty present", "sudo", _NEEDS_NOPASSWD),
+    ("unknown user", "sudo", "the user named after sudo -u does not exist on the server"),
+    (
+        "not allowed to execute",
+        "sudo",
+        "sudo does not let the login user become that user: see `sudo -l` on the server",
+    ),
+    ("not in the sudoers file", "sudo", "the login user is not in the server's sudoers"),
+)
+
+
+def _ssh_failure(code: int, out: str, err: str) -> dict:
+    raw = err.strip() or out.strip() or f"the probe failed with code {code}"
+    error, error_code = raw, None
+    for needle, hint_code, hint in _SSH_HINTS:
+        if needle in raw:
+            error, error_code = f"{raw.splitlines()[-1]} — {hint}", hint_code
+            break
+
+    return {
+        "ok": False, "supported": False, "version_known": False,
+        "odoo_bin": None, "odoo_version": None, "odoo_major": None,
+        "python": None, "config": None, "db_name": None, "databases": [],
+        "stage": None, "error_code": error_code, "error": error, "error_detail": raw,
+    }
+
+
+def _facts(out: str) -> dict:
+    facts = {}
+    for line in out.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.isidentifier():
+            facts[key] = value.strip()
+
+    return facts
+
+
+async def probe_ssh(access: Access, launch: Launch, runner=None) -> dict:
+    """What a server reached by ssh says about itself, before a session opens.
+
+    This runs the card's own Access — as the user it becomes — and reports what
+    the card is about to run as: who that is, where, which interpreter, whether
+    the executable and the config are there for that user, and which Odoo.
+    Nothing is started and no database is touched. Reading the version out of
+    `odoo/release.py` beside `odoo-bin` is a convenience, not a requirement:
+    when it is not there the answer says so and the gate is applied when the
+    session says what it is.
+    """
+    runner = runner or _docker
+    argv = access.ssh_argv(
+        [
+            "sh", "-c", SSH_PROBE_SCRIPT, "sh",
+            launch.argv[0], launch.config or "", launch.odoo_bin,
+        ],
+        base=SSH_OPTS,
+    )
+    code, out, err = await runner(argv, None)
+    facts = _facts(out)
+    if "effective_user" not in facts:
+
+        return _ssh_failure(code, out, err)
+
+    user = facts["effective_user"]
+    where = facts.get("host") or access.host
+    version = facts.get("odoo_version") or None
+    major = int(version.split(".")[0]) if version and version.split(".")[0].isdigit() else None
+    interpreter = (facts.get("interpreter") or "").split()
+    db_name = facts.get("db_name") or None
+    payload = {
+        "ok": True,
+        "effective_user": user,
+        "login_user": facts.get("login_user") or access.user,
+        "host": where,
+        "python": interpreter[1] if len(interpreter) > 1 and interpreter[0] == "Python" else None,
+        "executable": launch.argv[0],
+        "executable_ok": facts.get("executable_ok") == "1",
+        "config": launch.config,
+        "config_readable": (
+            None if not launch.config else facts.get("config_readable") == "1"
+        ),
+        "odoo_bin": launch.odoo_bin,
+        "odoo_version": version,
+        "odoo_major": major,
+        "db_name": None if db_name in (None, "False", "false") else db_name,
+        "databases": [],
+        "stage": None,
+        "error": None,
+        "error_code": None,
+        "error_detail": None,
+        "version_known": major is not None,
+    }
+    if not payload["executable_ok"]:
+        payload.update(
+            ok=False,
+            error_code="launch_not_executable",
+            error=(
+                f"{launch.argv[0]} is not an executable file on {where} for user {user}"
+            ),
+        )
+    elif launch.config and not payload["config_readable"]:
+        payload.update(
+            ok=False,
+            error_code="config_unreadable",
+            error=(
+                f"the config {launch.config} is not readable by {user} on {where}. "
+                "A server's config is usually readable only by its Odoo user: "
+                "if that is not who this is, Access has to become it "
+                "(sudo -n -u USER -H)"
+            ),
+        )
+    if major is None:
+        payload["supported"] = payload["ok"]
+
+        return payload
+
+    return _gate_on_version(payload)
 
 
 async def list_tests(container: str, module: str, runner=None) -> dict:

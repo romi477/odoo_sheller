@@ -9,7 +9,7 @@ import socket
 import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.openapi.docs import get_swagger_ui_html
@@ -19,7 +19,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from odoo_sheller import discovery, journal
 from odoo_sheller.guard import LoopbackOnly
+from odoo_sheller.names import check_ssh_name
 from odoo_sheller.paths import web_dir
+from odoo_sheller.recipe import RecipeError, check_database, describe
 from odoo_sheller.registry import EVENT_BACKLOG, Registry, load_admin_key
 from odoo_sheller.session import (
     CommitForbidden,
@@ -29,8 +31,7 @@ from odoo_sheller.session import (
     SessionNotReady,
     SessionState,
 )
-from odoo_sheller.targets import TargetsError
-from odoo_sheller.transport import check_ssh_name
+from odoo_sheller.targets import DEFAULT_STAGE, TargetsError
 
 WEB = web_dir()
 NO_STORE = {"Cache-Control": "no-store"}
@@ -125,23 +126,62 @@ class ProbeBody(BaseModel):
 class OdooshCardBody(BaseModel):
     """An odoo.sh build to write down, or to probe without writing it down."""
 
-    kind: Literal["odoosh"] = "odoosh"
+    kind: Literal["odoosh"]
     build: str
     host: str
 
     @field_validator("build", "host")
     @classmethod
     def _a_name_for_ssh(cls, value: str, info) -> str:
-        """Both end up in an ssh argument; see `transport.check_ssh_name`."""
+        """Both end up in an ssh argument; see `names.check_ssh_name`."""
 
         return check_ssh_name(info.field_name, value)
 
 
+class SshCardBody(BaseModel):
+    """A server someone wrote down: how to arrive, and what to run there.
+
+    Not checked here — the grammar in `recipe.py` is, and says which field."""
+
+    kind: Literal["ssh"]
+    name: str
+    access: str
+    launch: str
+    database: str | None = None
+    # Nothing on a plain server says what it is, so the default is the one
+    # that refuses a commit outright, and a human says otherwise.
+    stage: str = DEFAULT_STAGE
+
+
+class SshProbeBody(BaseModel):
+    kind: Literal["ssh"]
+    access: str
+    launch: str
+    database: str | None = None
+
+
+class RecipeBody(BaseModel):
+    access: str
+    launch: str
+    database: str | None = None
+
+
+CardBody = Annotated[OdooshCardBody | SshCardBody, Field(discriminator="kind")]
+ProbeTargetBody = Annotated[OdooshCardBody | SshProbeBody, Field(discriminator="kind")]
+
+
 class CardChangeBody(BaseModel):
+    """What may change. Only what is sent changes — `null` clears a database."""
+
     host: str | None = None
     # Accepted only so that asking for it can be refused in words: a card's
     # build is its identity.
     build: str | None = None
+    name: str | None = None
+    access: str | None = None
+    launch: str | None = None
+    database: str | None = None
+    stage: str | None = None
 
 
 class OwnerBody(BaseModel):
@@ -460,9 +500,17 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         except TargetsError as exc:
             raise unusable(exc) from None
 
+    def recipe_refused(exc: RecipeError) -> HTTPException:
+        """A recipe the grammar refuses, with the field it is about."""
+
+        return HTTPException(
+            status_code=422,
+            detail={"error": "invalid_recipe", "field": exc.field, "message": str(exc)},
+        )
+
     @app.post("/api/targets")
-    async def add_target(body: OdooshCardBody, x_os_admin_key: str | None = Header(None)):
-        """Write a card down, or update the one already there for that build.
+    async def add_target(body: CardBody, x_os_admin_key: str | None = Header(None)):
+        """Write a card down, or update the odoo.sh one already there.
 
         A card says where a remote instance is, and that is an instruction to
         this machine to open an ssh connection there: only a human writes one,
@@ -470,8 +518,17 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         """
         require_admin(x_os_admin_key)
         try:
+            if body.kind == "odoosh":
 
-            return cards().add_odoosh(body.build, body.host)
+                return cards().add_odoosh(body.build, body.host)
+
+            return cards().add_ssh(
+                body.name, body.access, body.launch, body.database, body.stage
+            )
+        except RecipeError as exc:
+            raise recipe_refused(exc) from None
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
         except TargetsError as exc:
             raise unusable(exc) from None
 
@@ -482,9 +539,11 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         require_admin(x_os_admin_key)
         try:
 
-            return cards().update(target_id, body.model_dump(exclude_none=True))
+            return cards().update(target_id, body.model_dump(exclude_unset=True))
         except KeyError:
             raise HTTPException(status_code=404, detail=f"no target {target_id!r}") from None
+        except RecipeError as exc:
+            raise recipe_refused(exc) from None
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
         except TargetsError as exc:
@@ -502,19 +561,65 @@ def create_app(registry: Registry | None = None) -> FastAPI:
 
         return {"deleted": target_id}
 
+    @app.post("/api/targets/parse")
+    async def parse_target(body: RecipeBody, x_os_admin_key: str | None = Header(None)):
+        """What a recipe means, decoded for the person about to save it.
+
+        Pure: it reaches no network, and nothing is stored. Every field that is
+        wrong is reported at once — a form being typed is not an error — and
+        it is the admin's act only because it asks this machine whether a named
+        key file exists.
+        """
+        require_admin(x_os_admin_key)
+        errors: dict[str, str] = {}
+        access = launch = None
+        try:
+            access = cards().parse_access(body.access)
+        except RecipeError as exc:
+            errors[exc.field or "access"] = str(exc)
+        database = (body.database or "").strip() or None
+        if database:
+            try:
+                check_database(database)
+            except RecipeError as exc:
+                errors["database"] = str(exc)
+                # Reported on its own, so that a launch which is also wrong
+                # still gets its message.
+                database = None
+        try:
+            launch = cards().parse_launch(body.launch, database)
+        except RecipeError as exc:
+            errors[exc.field or "launch"] = str(exc)
+        if errors:
+
+            return {"ok": False, "errors": errors}
+
+        return {"ok": True, "breakdown": describe(access, launch)}
+
     @app.post("/api/targets/probe")
-    async def probe_target(body: OdooshCardBody, x_os_admin_key: str | None = Header(None)):
+    async def probe_target(body: ProbeTargetBody, x_os_admin_key: str | None = Header(None)):
         """What an instance says it is, before anything is written or opened.
 
         There is no listing for odoo.sh — a build is entered, not discovered —
-        so this is the whole of target discovery for that kind. `stage` is the
-        field to read: it is what tells staging from production. Nothing is
-        stored. It is the admin's act because it makes this machine reach out
-        to a host somebody named.
+        and a plain server is whatever its card says, so this is the whole of
+        target discovery for both. For odoo.sh `stage` is the field to read; for
+        a server it is declared on the card, and what is probed is who the
+        recipe lands as, where, and which Odoo. Nothing is stored. It is the
+        admin's act because it makes this machine reach out to a host somebody
+        named.
         """
         require_admin(x_os_admin_key)
+        if body.kind == "odoosh":
 
-        return await discovery.probe_odoosh(body.build, body.host)
+            return await discovery.probe_odoosh(body.build, body.host)
+        try:
+            access = cards().parse_access(body.access)
+            launch = cards().parse_launch(body.launch, body.database)
+        except RecipeError as exc:
+            raise recipe_refused(exc) from None
+        probe = await discovery.probe_ssh(access, launch)
+
+        return {**probe, "breakdown": describe(access, launch)}
 
     @app.get("/api/containers/{container}/tests")
     async def container_tests(container: str, module: str | None = Query(None)):
@@ -591,6 +696,8 @@ def create_app(registry: Registry | None = None) -> FastAPI:
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from None
+        except RecipeError as exc:
+            raise recipe_refused(exc) from None
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
         except SessionDead as exc:
@@ -862,7 +969,8 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         # revocation is a real act and refusing it would be the lie instead.
         described = session.describe()
         local_human = (
-            session.owner.get("kind") == "human" and described.get("kind") != "odoosh"
+            session.owner.get("kind") == "human"
+            and described.get("kind", "docker") == "docker"
         )
         if not body.allow_commit and local_human:
             raise HTTPException(

@@ -384,7 +384,10 @@ def _stub_spawn_and_session(monkeypatch, captured):
 
         async def start(self, timeout=90.0):
 
-            return {"odoo": "19.0", "db": target_db(self.target), "pid": 1}
+            return {"odoo": captured.get("hello_odoo", "19.0"), "db": target_db(self.target), "pid": 1}
+
+        async def kill(self):
+            captured["killed"] = True
 
         def describe(self):
 
@@ -669,3 +672,127 @@ async def test_a_launcher_that_is_not_installed_is_a_refusal(tmp_path, monkeypat
     registry = Registry(journal_root=tmp_path)
     with pytest.raises(ValueError, match="docker is not installed"):
         await registry.open("integra19", "acme", "/odoo-bin")
+
+
+# --- a server reached by ssh --------------------------------------------------
+
+SSH_ACCESS = "ssh -i /k/key.pem ubuntu@srv.example.com sudo -n -u odoo -H"
+SSH_LAUNCH = "/opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf"
+
+
+def _ssh_registry(tmp_path, **card):
+    store = TargetStore(tmp_path / "t.json", is_file=lambda path: True)
+    registry = Registry(journal_root=tmp_path, targets=store)
+    fields = {"access": SSH_ACCESS, "launch": SSH_LAUNCH, "stage": "production"}
+    fields.update(card)
+    saved = store.add_ssh("acme", **fields)
+
+    return registry, saved
+
+
+def _ssh_probe(monkeypatch, captured, **payload):
+    async def fake_probe(access, launch, runner=None):
+        captured["probed"] = (access, launch)
+
+        return {
+            "ok": True, "supported": True, "version_known": True, "odoo_version": "19.0",
+            "db_name": "from-the-conf", "error": None, **payload,
+        }
+
+    monkeypatch.setattr("odoo_sheller.registry.probe_ssh", fake_probe)
+
+
+@pytest.mark.asyncio
+async def test_opening_an_ssh_card_opens_what_it_says(tmp_path, monkeypatch):
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _ssh_probe(monkeypatch, captured)
+    registry, card = _ssh_registry(tmp_path, stage="staging", database="acme")
+    await registry.open(target_id=card["id"])
+
+    target = captured["target"]
+    assert target.kind == "ssh"
+    assert target.name == "acme"
+    assert target.host == "srv.example.com"
+    assert target.is_remote
+    assert target.access.destination == "ubuntu@srv.example.com"
+    assert target.launch.argv[-2:] == ("-d", "acme")
+    assert captured["argv"][0] == "ssh"
+    assert captured["probed"][0] is target.access
+
+
+@pytest.mark.asyncio
+async def test_the_stage_of_a_plain_server_is_the_one_a_human_declared(tmp_path, monkeypatch):
+    """Not from a probe, and not from whoever asked to open it. This is what the
+    commit guard turns on, and nothing on a plain server says what it is."""
+    for declared in ("production", "staging", "development"):
+        captured = {}
+        _stub_spawn_and_session(monkeypatch, captured)
+        _ssh_probe(monkeypatch, captured, stage="staging")
+        registry, card = _ssh_registry(tmp_path, stage=declared)
+        await registry.open(target_id=card["id"])
+        assert captured["target"].stage == declared
+        registry.targets.delete(card["id"])
+
+
+@pytest.mark.asyncio
+async def test_a_database_the_server_names_is_shown_until_hello_says_otherwise(tmp_path, monkeypatch):
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _ssh_probe(monkeypatch, captured, db_name="from-the-conf")
+    registry, card = _ssh_registry(tmp_path)
+    await registry.open(target_id=card["id"])
+    assert captured["target"].database == "from-the-conf"
+
+
+@pytest.mark.asyncio
+async def test_a_refused_probe_spawns_nothing(tmp_path, monkeypatch):
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _ssh_probe(
+        monkeypatch, captured, ok=False, error="the config /x is not readable by ubuntu"
+    )
+    registry, card = _ssh_registry(tmp_path)
+    with pytest.raises(ValueError, match="not readable by ubuntu"):
+        await registry.open(target_id=card["id"])
+    assert "argv" not in captured
+
+
+@pytest.mark.asyncio
+async def test_an_unsupported_version_is_refused_before_anything_starts(tmp_path, monkeypatch):
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _ssh_probe(monkeypatch, captured, supported=False, error="Odoo 12.0 found; supported: 15")
+    registry, card = _ssh_registry(tmp_path)
+    with pytest.raises(ValueError, match="12.0"):
+        await registry.open(target_id=card["id"])
+    assert "argv" not in captured
+
+
+@pytest.mark.asyncio
+async def test_a_version_the_probe_could_not_read_is_gated_when_the_session_says_it(
+    tmp_path, monkeypatch
+):
+    """Not every install has `odoo/release.py` beside `odoo-bin`. The probe lets
+    it through; the hello frame is where the version is finally a fact."""
+    captured = {"hello_odoo": "12.0"}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _ssh_probe(monkeypatch, captured, version_known=False, odoo_version=None)
+    registry, card = _ssh_registry(tmp_path)
+    with pytest.raises(ValueError, match="12.0"):
+        await registry.open(target_id=card["id"])
+    assert captured["killed"] is True
+    assert registry.sessions == {}
+
+
+@pytest.mark.asyncio
+async def test_a_card_that_no_longer_parses_says_so_and_spawns_nothing(tmp_path, monkeypatch):
+    """A key file that has gone since the card was saved."""
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _ssh_probe(monkeypatch, captured)
+    registry, card = _ssh_registry(tmp_path)
+    registry.targets._is_file = lambda path: False
+    with pytest.raises(ValueError, match="key.pem"):
+        await registry.open(target_id=card["id"])
+    assert "argv" not in captured and "probed" not in captured

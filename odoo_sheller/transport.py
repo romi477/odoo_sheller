@@ -1,10 +1,11 @@
 """Spawning the process that runs the shell, and signalling it.
 
-Two kinds of place, one mechanism. Locally that is `docker exec -i` into a
-container; on odoo.sh it is `ssh -T` into a build. Everything above this
-module — the frame protocol, the session state machine, the bootstrap itself
-— is the same either way, because the design never depended on anything the
-two do differently.
+Three kinds of place, one mechanism. Locally that is `docker exec -i` into a
+container; on odoo.sh it is `ssh -T` into a build; on a server someone wrote a
+card for it is `ssh -T` with whatever that card says to become and to run.
+Everything above this module — the frame protocol, the session state machine,
+the bootstrap itself — is the same either way, because the design never
+depended on anything they do differently.
 
 Signals are the clearest case. Neither `docker exec -i` nor `ssh` without a
 tty forwards a signal to the far side, so an interrupt was never sent down
@@ -16,18 +17,18 @@ SSH unchanged.
 import asyncio
 import contextlib
 import os
-import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+from odoo_sheller.names import check_ssh_name
 from odoo_sheller.paths import bootstrap_path
 from odoo_sheller.protocol import FRAME_LINE_LIMIT
-
-HEREDOC_MARKER = "OSBOOT"
+from odoo_sheller.recipe import HEREDOC_MARKER, Access, Launch, launch_script
 
 DOCKER = "docker"
 ODOOSH = "odoosh"
+SSH = "ssh"
 
 
 def docker_bin() -> str:
@@ -43,24 +44,6 @@ def docker_bin() -> str:
 
 # What odoo.sh calls its instances. Only this one refuses a commit outright.
 PRODUCTION = "production"
-
-# What may stand for a build or a host by the time ssh sees it. ssh reads an
-# argument that begins with `-` as an option, and `-oProxyCommand=…` is an
-# option that runs a command on *this* machine — so a name begins with a letter
-# or a digit and holds nothing a shell or ssh would read as anything else.
-SSH_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-
-
-def check_ssh_name(label: str, value: object) -> str:
-    """The value, if it is a name; ValueError saying so if it is not."""
-    if not isinstance(value, str) or SSH_NAME_RE.fullmatch(value) is None:
-        raise ValueError(
-            f"{label} {value!r} is not a name: letters, digits, '.', '_' and '-', "
-            "starting with a letter or a digit"
-        )
-
-    return value
-
 
 def ssh_destination(build: object, host: object) -> str:
     """`build@host`, the one place either is allowed into an ssh argument."""
@@ -94,9 +77,11 @@ class Target:
     """Where a session runs.
 
     One identity slot, read differently by kind: a container name locally, a
-    build id on odoo.sh. `database` and `odoo_bin` are the local half's to
-    choose; on odoo.sh the instance dictates both and there is nothing to
-    pick.
+    build id on odoo.sh, the name on the card for a server reached by ssh.
+    `database` and `odoo_bin` are the local half's to choose; on odoo.sh the
+    instance dictates both and there is nothing to pick. An `ssh` target
+    carries what its card said — already parsed, so that an interrupt later
+    does not depend on a key file still being where it was.
     """
 
     kind: str = DOCKER
@@ -110,12 +95,22 @@ class Target:
     # differ by the digits in a build id, and this is what the commit guard
     # turns on.
     stage: str | None = None
+    # The `ssh` kind only: the card's name, and its two fields, parsed.
+    label: str | None = None
+    access: Access | None = None
+    launch: Launch | None = None
 
     @property
     def name(self) -> str | None:
-        """The identity slot — a container name, or a build id."""
+        """The identity slot — a container name, a build id, or a card's name."""
+        if self.kind == ODOOSH:
 
-        return self.build if self.kind == ODOOSH else self.container
+            return self.build
+        if self.kind == SSH:
+
+            return self.label
+
+        return self.container
 
     @property
     def is_remote(self) -> bool:
@@ -144,6 +139,11 @@ def _script(target: Target, source: str) -> str:
     """
     if any(line.strip() == HEREDOC_MARKER for line in source.splitlines()):
         raise ValueError(f"bootstrap source contains the heredoc marker {HEREDOC_MARKER}")
+    if target.kind == SSH:
+        # Taken as written, plus `-d` when the card names a database. The
+        # launch runs inside the card's own user switch, which is why the
+        # script is assembled here and not before it.
+        return launch_script(target.launch, f"{source}\n{HEREDOC_MARKER}\n")
     if target.kind == ODOOSH:
         # odoo.sh's own odoo-bin wrapper appends --database, --config,
         # --workers=0 and --no-http *after* whatever it is given, so a -d of
@@ -164,6 +164,9 @@ def _script(target: Target, source: str) -> str:
 
 def build_command(target: Target, source: str) -> list[str]:
     script = _script(target, source)
+    if target.kind == SSH:
+
+        return target.access.ssh_argv(["sh", "-c", script], base=SSH_OPTS)
     if target.kind == ODOOSH:
         # `docker exec … sh -c script` hands argv straight over, but `ssh host
         # a b c` joins its arguments and the remote login shell parses the
@@ -176,6 +179,11 @@ def build_command(target: Target, source: str) -> list[str]:
 
 def signal_command(target: Target, pid: int, signal_name: str) -> list[str]:
     signal = [f"-{signal_name}", str(pid)]
+    if target.kind == SSH:
+        # As the user the session runs as: a signal to another user's process
+        # is not delivered.
+
+        return target.access.ssh_argv(["kill", *signal], base=SSH_OPTS)
     if target.kind == ODOOSH:
 
         return ["ssh", *SSH_OPTS, "--", target.ssh_dest, "kill", *signal]
