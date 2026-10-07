@@ -50,10 +50,16 @@
           </div>
           <p id="connect-lede">Pick one to probe it and start a session.</p>
         </div>
-        <div id="connect-modes" class="segmented">
-          <button data-connect-mode="local" class="active" title="Running Docker containers on this machine. Found by docker ps — nothing to configure.">Local</button>
-          <button data-connect-mode="odoosh" title="An odoo.sh build, reached over SSH. There is no listing for these: a build is entered, not discovered.">Odoo.sh</button>
-          <button data-connect-mode="ssh" title="An Odoo installed directly on a server, reached over SSH. Nothing about it can be discovered: whoever can log in writes down how to arrive and what to run.">Server (SSH)</button>
+        <div id="connect-modes" role="radiogroup" aria-label="Where to connect">
+          <label title="Running Docker containers on this machine. Found by docker ps — nothing to configure.">
+            <input type="radio" name="connect-mode" value="local" data-connect-mode="local" checked><span>Local</span>
+          </label>
+          <label title="An odoo.sh build, reached over SSH. There is no listing for these: a build is entered, not discovered.">
+            <input type="radio" name="connect-mode" value="odoosh" data-connect-mode="odoosh"><span>Odoo.sh</span>
+          </label>
+          <label title="An Odoo installed directly on a server, reached over SSH. Nothing about it can be discovered: whoever can log in writes down how to arrive and what to run.">
+            <input type="radio" name="connect-mode" value="ssh" data-connect-mode="ssh"><span>Server (SSH)</span>
+          </label>
         </div>
       </header>
       <ul id="containers"></ul>

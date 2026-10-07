@@ -2360,8 +2360,59 @@ def test_both_probe_keys_are_the_same_plain_key():
 
 def test_the_mode_keys_read_as_names(markup):
     page = (WEB / "index.html").read_text(encoding="utf-8")
-    modes = dict(re.findall(r'data-connect-mode="(\w+)"[^>]*>([^<]+)</button>', page))
+    modes = dict(re.findall(r'data-connect-mode="(\w+)"[^>]*>\s*<span>([^<]+)</span>', page))
     assert modes == {"local": "Local", "odoosh": "Odoo.sh", "ssh": "Server (SSH)"}, modes
+
+
+def test_the_three_places_are_a_radio_group_and_not_three_buttons():
+    """One of three, chosen by a dot: it is what a radio is, so it is one — the
+    keyboard (arrows within the group, Tab out of it) and a screen reader get that
+    for nothing, which buttons restyled to look like it would not."""
+    page = (WEB / "index.html").read_text(encoding="utf-8")
+    group = re.search(r'<div id="connect-modes"[^>]*>(.*?)</div>', page, re.DOTALL)
+    assert group is not None
+    assert 'role="radiogroup"' in re.search(r'<div id="connect-modes"[^>]*>', page).group(0)
+    radios = re.findall(r"<input[^>]*>", group.group(1))
+    assert len(radios) == 3
+    for radio in radios:
+        assert 'type="radio"' in radio and 'name="connect-mode"' in radio
+        assert "data-connect-mode=" in radio
+    assert [("checked" in radio) for radio in radios] == [True, False, False], (
+        "Local until the page says otherwise"
+    )
+    assert "<button" not in group.group(1)
+    assert "segmented" not in page
+
+
+def test_a_radio_is_a_ring_and_the_chosen_one_is_a_cyan_dot():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert "segmented" not in css
+    ring = re.search(r"#connect-modes input\s*\{([^}]*)\}", css)
+    assert ring is not None
+    for declaration in ("appearance: none", "border-radius: 50%"):
+        assert declaration in ring.group(1), declaration
+    # The page gives every input a 220px minimum and padding of its own; left
+    # alone they turn a 13px ring into an ellipse across the header.
+    assert "min-width: 0" in ring.group(1)
+    assert "padding: 0" in ring.group(1)
+    chosen = re.search(r"#connect-modes input:checked\s*\{([^}]*)\}", css)
+    assert chosen is not None
+    assert "var(--cyan)" in chosen.group(1), "the brand colour, not green"
+    assert "green" not in chosen.group(1)
+    assert re.search(r"#connect-modes input:focus-visible\s*\{[^}]*var\(--cyan\)", css), (
+        "a control that can be reached with the keyboard shows where it is"
+    )
+
+
+def test_choosing_a_place_follows_the_radios_and_marks_the_one_that_is_set(app_js):
+    choose = re.search(r"function setConnectMode\(.*?\n\}", app_js, re.DOTALL)
+    assert choose is not None
+    assert ".checked = " in choose.group(0)
+    assert "classList.toggle('active'" not in choose.group(0)
+    assert re.search(
+        r"#connect-modes \[data-connect-mode\]'\)\.forEach\(\(radio\) => \{\s*radio\.addEventListener\('change'",
+        app_js,
+    ), "a radio is chosen by `change`, which the keyboard raises too"
 
 
 def test_every_spinner_turns_white():

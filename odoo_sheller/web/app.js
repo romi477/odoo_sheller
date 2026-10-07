@@ -1020,8 +1020,8 @@ function setConnectMode(mode) {
   }
   state.connectMode = mode;
   localStorage.setItem('osConnectMode', mode);
-  document.querySelectorAll('#connect-modes [data-connect-mode]').forEach((button) => {
-    button.classList.toggle('active', button.dataset.connectMode === mode);
+  document.querySelectorAll('#connect-modes [data-connect-mode]').forEach((radio) => {
+    radio.checked = radio.dataset.connectMode === mode;
   });
   document.querySelector('#containers').hidden = mode !== 'local';
   document.querySelector('#refresh').hidden = mode !== 'local';
@@ -4131,8 +4131,8 @@ function restoreScreen() {
   }
 }
 
-document.querySelectorAll('#connect-modes [data-connect-mode]').forEach((button) => {
-  button.addEventListener('click', () => setConnectMode(button.dataset.connectMode));
+document.querySelectorAll('#connect-modes [data-connect-mode]').forEach((radio) => {
+  radio.addEventListener('change', () => setConnectMode(radio.dataset.connectMode));
 });
 {
   const form = serverFormElement();

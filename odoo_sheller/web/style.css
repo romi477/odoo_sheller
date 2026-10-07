@@ -617,31 +617,59 @@ button.region-toggle:active:not(:disabled) {
 
 /* --- picking where to connect --- */
 
-.segmented {
+/* Where to connect is one of three, so it is a radio group: a ring each, and the
+   chosen one a cyan dot. Real inputs, so the arrows move within the group and a
+   screen reader is told it is one — buttons dressed as radios would not be. */
+#connect-modes {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px 20px;
   margin-left: auto;
 }
 
-.segmented button {
-  border-radius: 0;
-  margin-left: -1px;
+#connect-modes label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
-.segmented button:first-child {
-  border-top-left-radius: 4px;
-  border-bottom-left-radius: 4px;
-  margin-left: 0;
-}
-
-.segmented button:last-child {
-  border-top-right-radius: 4px;
-  border-bottom-right-radius: 4px;
-}
-
-.segmented button.active {
-  z-index: 1;
-  border-color: var(--cyan);
+#connect-modes label:hover {
   color: var(--cyan);
+}
+
+#connect-modes input {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: none;
+  /* Every input on the page has a 220px minimum and padding of its own. */
+  min-width: 0;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--muted-low);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+#connect-modes label:hover input {
+  border-color: var(--cyan);
+}
+
+#connect-modes input:checked {
+  border-color: var(--cyan);
+  background: radial-gradient(circle, var(--cyan) 0 40%, transparent 45%);
+}
+
+#connect-modes input:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
 }
 
 .odoosh-form {

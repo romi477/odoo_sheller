@@ -26,7 +26,7 @@ the way they do:
 
 ## Connect
 
-Three places, chosen with the segmented control in the header — Local, Odoo.sh,
+Three places, chosen with the radio group in the header — Local, Odoo.sh,
 Server (SSH) — because they differ in kind rather than in parameters: local
 containers are **discovered** (cards you did not ask for), an odoo.sh build and
 a server are **entered**. The mode you used last comes back on a reload, the way
