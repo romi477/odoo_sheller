@@ -5,6 +5,49 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.4] — 2026-10-07
+
+### The daemon answers only requests addressed to this machine
+
+The API has no authentication, and a page open in the user's browser can
+still send it requests. Nothing checked where a request said it was going.
+That left two ways a page could reach the daemon without the admin key. A
+WebSocket handshake is not subject to CORS, so a page on any site could open
+the event streams and read session state and Odoo's stderr, and only the
+server could refuse it. And a page on a domain of its own, re-pointed at
+`127.0.0.1` (DNS rebinding), is the daemon's own origin as far as the browser
+is concerned, so everything CORS would have stopped is open to it — opening a
+session included. Neither was seen being used; both are how a local service
+without a login gets reached, and the next change in this line makes a wrong
+answer here cost more (a recipe that names a command to run on the machine).
+
+Every HTTP route and both WebSocket routes now require the `Host` to be this
+machine — `127.0.0.1`, `localhost` or `[::1]`, on any port, since a `-p`
+mapping moves the port and never the name — and, when the request carries an
+`Origin`, that it be the daemon's own: the same authority as the `Host`, not
+merely some loopback one, because a dev server on another local port is a
+different page. `0.0.0.0` is refused, as is a missing or repeated `Host`.
+The UI, in a browser or in the desktop app's frame, is served by the daemon
+and satisfies this unchanged; the MCP server, the app's supervisor and `curl`
+send no `Origin`. A refusal is `403` with `foreign_host` or `foreign_origin`;
+a socket is refused at the handshake.
+
+A client that reaches the daemon by another name — `host.docker.internal`
+from a second container, a reverse proxy — now gets that `403`. The daemon
+was never meant to be reached that way (`docs/security.md`).
+
+### A build and a host are names
+
+`build` and `host` — the two fields that identify an odoo.sh instance — went
+into an `ssh` argument as typed. `ssh` reads an argument beginning with `-`
+as an option, and `-oProxyCommand=…@host` is an option that runs a command on
+the machine running the daemon. It did not run only because the next argument
+held a space and broke the hostname, which is luck, not a guard. Both are now
+letters, digits, `.`, `_` and `-`, beginning with a letter or a digit, or the
+request is `422` and nothing is started; the same check sits in
+`transport.py`, the one place either reaches `ssh`; and every `ssh` command
+now ends its options with `--` before the destination.
+
 ## [1.8.3] — 2026-10-03
 
 ### A whole module, and only what failed

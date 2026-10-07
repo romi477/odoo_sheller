@@ -495,6 +495,33 @@ async def test_probe_odoosh_goes_over_ssh_to_build_at_host():
     assert result["stage"] == "staging"
 
 
+async def test_probe_odoosh_ends_the_options_before_the_destination():
+    runner = fake_runner([(0, json.dumps({
+        "ok": True, "odoo_version": "19.0", "odoo_major": 19, "stage": "staging",
+        "db_name": "db", "databases": ["db"], "python": "3.12.3",
+        "odoo_bin": "/b", "config": None, "error": None,
+    }), "")])
+    await discovery.probe_odoosh("36887345", "build.dev.odoo.com", runner=runner)
+    argv = runner.calls[0][0]
+    assert argv[argv.index("36887345@build.dev.odoo.com") - 1] == "--"
+
+
+@pytest.mark.parametrize(
+    ("build", "host"),
+    [
+        ("-oProxyCommand=touch /tmp/x", "build.dev.odoo.com"),
+        ("36887345", "-oProxyCommand=x"),
+        ("a b", "h"),
+        ("1", "h;id"),
+    ],
+)
+async def test_probe_odoosh_refuses_a_build_or_host_that_is_not_a_name(build, host):
+    runner = fake_runner([])
+    with pytest.raises(ValueError):
+        await discovery.probe_odoosh(build, host, runner=runner)
+    assert runner.calls == []
+
+
 async def test_probe_odoosh_refuses_another_major_the_way_docker_does():
     runner = fake_runner([(0, json.dumps({
         "ok": True, "odoo_version": "14.0", "odoo_major": 14, "stage": "staging",

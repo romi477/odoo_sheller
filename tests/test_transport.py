@@ -174,3 +174,55 @@ async def test_a_signal_that_cannot_be_delivered_does_not_hang(monkeypatch):
     with pytest.raises(TimeoutError):
         await transport.send_signal(Target(container="c"), 42, "INT", timeout=0.2)
     assert time.monotonic() - started < 2
+
+
+# --- a build and a host are names, not arguments --------------------------
+
+BAD_NAMES = [
+    "-oProxyCommand=touch /tmp/x",
+    "-oProxyCommand=touch${IFS}/tmp/x",
+    "a b",
+    "a;b",
+    "$(id)",
+    "a/b",
+    "a@b",
+    "a\n",
+    "-1",
+    ".hidden",
+    "",
+]
+
+
+@pytest.mark.parametrize("bad", BAD_NAMES)
+def test_a_build_that_is_not_a_name_never_reaches_ssh(bad):
+    """`ssh -G -oProxyCommand=… host` shows ssh reads such an argument as an
+    option, and the option runs a command on this machine. What kept it from
+    happening was a space in a neighbouring argument, which is luck."""
+    target = Target(kind="odoosh", build=bad, host="build.dev.odoo.com")
+    with pytest.raises(ValueError, match="build"):
+        build_command(target, "pass")
+    with pytest.raises(ValueError, match="build"):
+        signal_command(target, 42, "INT")
+
+
+@pytest.mark.parametrize("bad", BAD_NAMES)
+def test_a_host_that_is_not_a_name_never_reaches_ssh(bad):
+    target = Target(kind="odoosh", build="36887345", host=bad)
+    with pytest.raises(ValueError, match="host"):
+        build_command(target, "pass")
+    with pytest.raises(ValueError, match="host"):
+        signal_command(target, 42, "INT")
+
+
+@pytest.mark.parametrize("build", ["36887345", "b-1", "a.b-c"])
+def test_an_ordinary_build_is_a_name(build):
+    argv = build_command(Target(kind="odoosh", build=build, host="h-1.dev.odoo.com"), "pass")
+    assert f"{build}@h-1.dev.odoo.com" in argv
+
+
+def test_the_destination_follows_a_double_dash():
+    """Belt over the braces above: whatever the name was, ssh is told that the
+    options are over."""
+    dest = "36887345@build-36887345.dev.odoo.com"
+    for argv in (build_command(OOSH, "pass"), signal_command(OOSH, 42, "INT")):
+        assert argv[argv.index(dest) - 1] == "--"

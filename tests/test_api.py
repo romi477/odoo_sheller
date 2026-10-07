@@ -19,6 +19,9 @@ from odoo_sheller.session import (
 
 OWNER_KEY = "write-key-s1"
 ADMIN_KEY = "admin-key"
+LOCAL = "http://127.0.0.1:8765"
+# The test client names `testserver` for a socket whatever base_url says.
+WS = "ws://127.0.0.1:8765"
 
 
 class FakeSession:
@@ -191,7 +194,7 @@ class FakeRegistry:
 def client():
     registry = FakeRegistry()
     app = create_app(registry=registry)
-    with TestClient(app, headers={"X-OS-Session-Key": OWNER_KEY}) as test_client:
+    with TestClient(app, headers={"X-OS-Session-Key": OWNER_KEY}, base_url=LOCAL) as test_client:
         test_client.registry = registry
         yield test_client
 
@@ -201,7 +204,7 @@ def test_health_answers_before_any_session():
     from importlib.metadata import version
 
     app = create_app(registry=Registry(admin_key=ADMIN_KEY))
-    with TestClient(app) as client:
+    with TestClient(app, base_url=LOCAL) as client:
         response = client.get("/health")
     assert response.status_code == 200
     body = response.json()
@@ -218,7 +221,7 @@ def test_health_survives_a_build_without_metadata(monkeypatch):
 
     monkeypatch.setattr("odoo_sheller.api.version", missing)
     app = create_app(registry=Registry(admin_key=ADMIN_KEY))
-    with TestClient(app) as client:
+    with TestClient(app, base_url=LOCAL) as client:
         response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["version"] == "unknown"
@@ -231,7 +234,7 @@ def test_health_reports_the_version_it_started_as(monkeypatch):
     monkeypatch.setattr("odoo_sheller.api.version", lambda _name: "1.0.0")
     app = create_app(registry=Registry(admin_key=ADMIN_KEY))
     monkeypatch.setattr("odoo_sheller.api.version", lambda _name: "9.9.9")
-    with TestClient(app) as client:
+    with TestClient(app, base_url=LOCAL) as client:
         response = client.get("/health")
     assert response.json()["version"] == "1.0.0"
 
@@ -406,7 +409,7 @@ def test_session_history_unknown_session_is_404(client):
 def test_session_history_reads_a_closed_journal(tmp_path):
     """The Journals tab and /history share an id; the session need not still be live."""
     _journal_with_records(tmp_path, session_id="d6227894a75c")
-    with TestClient(create_app(registry=Registry(journal_root=tmp_path))) as client:
+    with TestClient(create_app(registry=Registry(journal_root=tmp_path)), base_url=LOCAL) as client:
         response = client.get("/api/sessions/d6227894a75c/history")
     assert response.status_code == 200
     body = response.json()
@@ -479,14 +482,14 @@ def test_sessions_and_logs(client):
 
 
 def test_websocket_delivers_published_events(client):
-    with client.websocket_connect("/ws/sessions/s1") as socket:
+    with client.websocket_connect(WS + "/ws/sessions/s1") as socket:
         queue = client.registry.subscribers["s1"][0]
         queue.put_nowait({"kind": "state", "state": "busy"})
         assert socket.receive_json() == {"kind": "state", "state": "busy"}
 
 
 def test_websocket_unknown_session_fails_promptly(client):
-    with client.websocket_connect("/ws/sessions/nope") as socket:
+    with client.websocket_connect(WS + "/ws/sessions/nope") as socket:
         assert socket.receive_json() == {"error": "no session nope"}
 
 
@@ -502,7 +505,7 @@ def test_journals_use_registry_journal_root(tmp_path):
     journal.Journal(path).write("session_open", container="c", database="db", odoo="19.0")
 
     app = create_app(registry=Registry(journal_root=tmp_path))
-    with TestClient(app) as test_client:
+    with TestClient(app, base_url=LOCAL) as test_client:
         entries = test_client.get("/api/journals").json()
         assert len(entries) == 1
         assert entries[0]["session_id"] == session_id
@@ -568,7 +571,7 @@ def _journal_with_records(root, session_id="abc123"):
 
 def test_jsonl_export_leads_with_export_meta(tmp_path):
     _journal_with_records(tmp_path)
-    with TestClient(create_app(registry=Registry(journal_root=tmp_path))) as client:
+    with TestClient(create_app(registry=Registry(journal_root=tmp_path)), base_url=LOCAL) as client:
         response = client.get("/api/journals/abc123", params={"fmt": "jsonl"})
         assert response.status_code == 200
         lines = [json.loads(line) for line in response.text.splitlines() if line.strip()]
@@ -590,7 +593,7 @@ def test_jsonl_export_leads_with_export_meta(tmp_path):
 
 def test_markdown_export_states_the_session_up_front(tmp_path):
     _journal_with_records(tmp_path)
-    with TestClient(create_app(registry=Registry(journal_root=tmp_path))) as client:
+    with TestClient(create_app(registry=Registry(journal_root=tmp_path)), base_url=LOCAL) as client:
         text = client.get("/api/journals/abc123", params={"fmt": "markdown"}).text
 
     head = text.split("## ")[0]
@@ -603,7 +606,7 @@ def test_markdown_export_states_the_session_up_front(tmp_path):
 
 def test_exports_are_named_after_the_journal(tmp_path):
     path = _journal_with_records(tmp_path)
-    with TestClient(create_app(registry=Registry(journal_root=tmp_path))) as client:
+    with TestClient(create_app(registry=Registry(journal_root=tmp_path)), base_url=LOCAL) as client:
         for fmt, suffix in (("jsonl", "jsonl"), ("markdown", "md")):
             response = client.get("/api/journals/abc123", params={"fmt": fmt})
             assert f'filename="{path.stem}.{suffix}"' in response.headers["content-disposition"]
@@ -612,7 +615,7 @@ def test_exports_are_named_after_the_journal(tmp_path):
 def test_delete_journal_removes_the_file(tmp_path):
     path = _journal_with_records(tmp_path)
     registry = Registry(journal_root=tmp_path)
-    with TestClient(create_app(registry=registry)) as client:
+    with TestClient(create_app(registry=registry), base_url=LOCAL) as client:
         response = client.delete(
             "/api/journals/abc123", headers={"X-OS-Admin-Key": registry.admin_key}
         )
@@ -626,7 +629,7 @@ def test_delete_journal_needs_the_admin_key(tmp_path):
     """The only irreversible file operation in the API keeps the same guard."""
     path = _journal_with_records(tmp_path)
     registry = Registry(journal_root=tmp_path)
-    with TestClient(create_app(registry=registry)) as client:
+    with TestClient(create_app(registry=registry), base_url=LOCAL) as client:
         assert client.delete("/api/journals/abc123").status_code == 403
         wrong = client.delete(
             "/api/journals/abc123", headers={"X-OS-Admin-Key": "not-the-key"}
@@ -638,7 +641,7 @@ def test_delete_journal_needs_the_admin_key(tmp_path):
 
 def test_delete_journal_missing_is_404(tmp_path):
     registry = Registry(journal_root=tmp_path)
-    with TestClient(create_app(registry=registry)) as client:
+    with TestClient(create_app(registry=registry), base_url=LOCAL) as client:
         response = client.delete(
             "/api/journals/nope", headers={"X-OS-Admin-Key": registry.admin_key}
         )
@@ -650,7 +653,7 @@ def test_delete_journal_of_a_live_session_is_409(tmp_path):
     path = _journal_with_records(tmp_path, session_id="s1")
     registry = Registry(journal_root=tmp_path)
     registry.sessions["s1"] = object()
-    with TestClient(create_app(registry=registry)) as client:
+    with TestClient(create_app(registry=registry), base_url=LOCAL) as client:
         response = client.delete(
             "/api/journals/s1", headers={"X-OS-Admin-Key": registry.admin_key}
         )
@@ -663,7 +666,7 @@ def test_delete_journal_refuses_a_glob_instead_of_an_id(tmp_path):
     """`*` once matched every journal and unlinked whichever came first."""
     kept = _journal_with_records(tmp_path)
     registry = Registry(journal_root=tmp_path)
-    with TestClient(create_app(registry=registry)) as client:
+    with TestClient(create_app(registry=registry), base_url=LOCAL) as client:
         response = client.delete(
             "/api/journals/*", headers={"X-OS-Admin-Key": registry.admin_key}
         )
@@ -879,14 +882,14 @@ def test_sessions_never_leak_write_keys(client):
 
 def test_registry_socket_announces_sessions_coming_and_going(client):
     """A session opened by an agent must reach a watching browser without a reload."""
-    with client.websocket_connect("/ws/sessions") as socket:
+    with client.websocket_connect(WS + "/ws/sessions") as socket:
         queue = client.registry.watchers[0]
         queue.put_nowait({"kind": "session_opened", "session": {"id": "s2"}})
         assert socket.receive_json()["kind"] == "session_opened"
 
 
 def test_registry_watchers_are_dropped_when_the_socket_closes(client):
-    with client.websocket_connect("/ws/sessions"):
+    with client.websocket_connect(WS + "/ws/sessions"):
         assert len(client.registry.watchers) == 1
     assert client.registry.watchers == []
 
@@ -1052,6 +1055,34 @@ def test_probing_a_build_answers_what_the_instance_said(client, monkeypatch):
     assert body["db_name"] == "ventor-dev-36887345"
 
 
+@pytest.mark.parametrize(
+    ("build", "host"),
+    [
+        ("-oProxyCommand=touch /tmp/x", "build.dev.odoo.com"),
+        ("36887345", "-oProxyCommand=x"),
+        ("a b", "h"),
+        ("1", "h;id"),
+        ("", "h"),
+    ],
+)
+def test_a_build_or_host_that_is_not_a_name_is_422_before_anything_runs(
+    client, monkeypatch, build, host
+):
+    probed = []
+
+    async def fake_probe(build, host, runner=None):
+        probed.append((build, host))
+
+        return {}
+
+    monkeypatch.setattr("odoo_sheller.api.discovery.probe_odoosh", fake_probe)
+    assert client.post("/api/probe/odoosh", json={"build": build, "host": host}).status_code == 422
+    opened = client.post("/api/sessions", json={"kind": "odoosh", "build": build, "host": host})
+    assert opened.status_code == 422
+    assert probed == []
+    assert not hasattr(client.registry, "open_kwargs")
+
+
 def test_opening_an_unusable_build_is_422_not_500(client):
     async def refuse(**kwargs):
         raise ValueError("Odoo 17.0 found; only 19 is supported")
@@ -1132,7 +1163,7 @@ def test_health_says_how_to_reach_an_mcp_server_for_this_daemon():
     import sys
 
     app = create_app(registry=Registry(admin_key=ADMIN_KEY))
-    with TestClient(app) as client:
+    with TestClient(app, base_url=LOCAL) as client:
         body = client.get("/health").json()
     assert body["container"] is False
     assert body["mcp"] == {"command": sys.executable, "args": ["-m", "odoo_sheller.mcp"]}
@@ -1146,7 +1177,7 @@ def test_health_hands_out_a_docker_exec_when_containerized(monkeypatch):
     monkeypatch.setenv(IN_CONTAINER_ENV, "1")
     monkeypatch.setattr("odoo_sheller.api.socket.gethostname", lambda: "deadbeef1234")
     app = create_app(registry=Registry(admin_key=ADMIN_KEY))
-    with TestClient(app) as client:
+    with TestClient(app, base_url=LOCAL) as client:
         body = client.get("/health").json()
     assert body["container"] is True
     assert body["mcp"]["command"] == "docker"
@@ -1161,7 +1192,7 @@ def test_health_admits_it_cannot_say_rather_than_guessing(monkeypatch):
     monkeypatch.setattr("odoo_sheller.api.sys.frozen", True, raising=False)
     monkeypatch.setattr("odoo_sheller.api.sys.executable", "/nowhere/odoo-sheller/odoo-sheller")
     app = create_app(registry=Registry(admin_key=ADMIN_KEY))
-    with TestClient(app) as client:
+    with TestClient(app, base_url=LOCAL) as client:
         body = client.get("/health").json()
     assert body["mcp"] is None
 
@@ -1379,7 +1410,7 @@ def test_a_cut_line_does_not_take_the_journals_down_with_it(tmp_path):
     _journal_with_records(tmp_path, session_id="abc123")
     broken = _journal_with_records(tmp_path, session_id="def456")
     _truncate_last_line(broken)
-    with TestClient(create_app(registry=Registry(journal_root=tmp_path))) as client:
+    with TestClient(create_app(registry=Registry(journal_root=tmp_path)), base_url=LOCAL) as client:
         listing = client.get("/api/journals")
         assert listing.status_code == 200
         assert {entry["session_id"] for entry in listing.json()} == {"abc123", "def456"}
@@ -1404,7 +1435,7 @@ def test_a_closed_session_is_found_without_reading_the_others(tmp_path, monkeypa
         return original(self)
 
     monkeypatch.setattr(journal.Journal, "iter_records", tracking)
-    with TestClient(create_app(registry=Registry(journal_root=tmp_path))) as client:
+    with TestClient(create_app(registry=Registry(journal_root=tmp_path)), base_url=LOCAL) as client:
         assert client.get("/api/sessions/def456/history").status_code == 200
         assert client.get("/api/journals/def456", params={"fmt": "markdown"}).status_code == 200
     assert opened and all("def456" in name for name in opened), opened

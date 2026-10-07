@@ -16,6 +16,7 @@ SSH unchanged.
 import asyncio
 import contextlib
 import os
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,29 @@ def docker_bin() -> str:
 
 # What odoo.sh calls its instances. Only this one refuses a commit outright.
 PRODUCTION = "production"
+
+# What may stand for a build or a host by the time ssh sees it. ssh reads an
+# argument that begins with `-` as an option, and `-oProxyCommand=…` is an
+# option that runs a command on *this* machine — so a name begins with a letter
+# or a digit and holds nothing a shell or ssh would read as anything else.
+SSH_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def check_ssh_name(label: str, value: object) -> str:
+    """The value, if it is a name; ValueError saying so if it is not."""
+    if not isinstance(value, str) or SSH_NAME_RE.fullmatch(value) is None:
+        raise ValueError(
+            f"{label} {value!r} is not a name: letters, digits, '.', '_' and '-', "
+            "starting with a letter or a digit"
+        )
+
+    return value
+
+
+def ssh_destination(build: object, host: object) -> str:
+    """`build@host`, the one place either is allowed into an ssh argument."""
+
+    return f"{check_ssh_name('build', build)}@{check_ssh_name('host', host)}"
 
 # Multiplexed connections live here, beside the journals and the admin key.
 _SSH_CONTROL = Path.home() / ".odoo-sheller" / "ssh-%C"
@@ -103,7 +127,7 @@ class Target:
     def ssh_dest(self) -> str:
         """odoo.sh authenticates as the build; the host only routes there."""
 
-        return f"{self.build}@{self.host}"
+        return ssh_destination(self.build, self.host)
 
 
 def bootstrap_source() -> str:
@@ -145,7 +169,7 @@ def build_command(target: Target, source: str) -> list[str]:
         # a b c` joins its arguments and the remote login shell parses the
         # result again. Quote once, for that one extra parse — the heredoc
         # does not survive getting it wrong in either direction.
-        return ["ssh", *SSH_OPTS, target.ssh_dest, f"sh -c {shlex.quote(script)}"]
+        return ["ssh", *SSH_OPTS, "--", target.ssh_dest, f"sh -c {shlex.quote(script)}"]
 
     return [docker_bin(), "exec", "-i", target.container, "sh", "-c", script]
 
@@ -154,7 +178,7 @@ def signal_command(target: Target, pid: int, signal_name: str) -> list[str]:
     signal = [f"-{signal_name}", str(pid)]
     if target.kind == ODOOSH:
 
-        return ["ssh", *SSH_OPTS, target.ssh_dest, "kill", *signal]
+        return ["ssh", *SSH_OPTS, "--", target.ssh_dest, "kill", *signal]
 
     return [docker_bin(), "exec", target.container, "kill", *signal]
 

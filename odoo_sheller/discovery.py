@@ -5,7 +5,7 @@ import contextlib
 import json
 import re
 
-from odoo_sheller.transport import SSH_OPTS, docker_bin
+from odoo_sheller.transport import SSH_OPTS, docker_bin, ssh_destination
 
 # 15 through 20. Everything the bootstrap rests on is the same in all six:
 # the non-tty branch of `console()`, the names `env` and `self`, the rollback
@@ -454,7 +454,7 @@ async def probe_odoosh(build: str, host: str, runner=None) -> dict:
     environment variables rather than a search.
     """
     runner = runner or _docker
-    argv = ["ssh", *SSH_OPTS, f"{build}@{host}", "python3 -"]
+    argv = ["ssh", *SSH_OPTS, "--", ssh_destination(build, host), "python3 -"]
     code, out, err = await runner(argv, OOSH_PROBE_SOURCE)
     payload = _last_json_line(out)
 

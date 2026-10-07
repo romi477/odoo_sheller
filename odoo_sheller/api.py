@@ -15,9 +15,10 @@ from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketD
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from odoo_sheller import discovery, journal
+from odoo_sheller.guard import LoopbackOnly
 from odoo_sheller.paths import web_dir
 from odoo_sheller.registry import EVENT_BACKLOG, Registry, load_admin_key
 from odoo_sheller.session import (
@@ -28,6 +29,7 @@ from odoo_sheller.session import (
     SessionNotReady,
     SessionState,
 )
+from odoo_sheller.transport import check_ssh_name
 
 WEB = web_dir()
 NO_STORE = {"Cache-Control": "no-store"}
@@ -115,6 +117,13 @@ class OpenBody(BaseModel):
     build: str | None = None
     host: str | None = None
 
+    @field_validator("build", "host")
+    @classmethod
+    def _a_name_for_ssh(cls, value: str | None, info) -> str | None:
+        """Both end up in an ssh argument; see `transport.check_ssh_name`."""
+
+        return value if value is None else check_ssh_name(info.field_name, value)
+
 
 class ProbeBody(BaseModel):
     container: str
@@ -123,6 +132,12 @@ class ProbeBody(BaseModel):
 class ProbeOdooshBody(BaseModel):
     build: str
     host: str
+
+    @field_validator("build", "host")
+    @classmethod
+    def _a_name_for_ssh(cls, value: str, info) -> str:
+
+        return check_ssh_name(info.field_name, value)
 
 
 class OwnerBody(BaseModel):
@@ -243,6 +258,7 @@ async def lifespan(app: FastAPI):
 
 def create_app(registry: Registry | None = None) -> FastAPI:
     app = FastAPI(title="odoo-sheller", docs_url=None, lifespan=lifespan)
+    app.add_middleware(LoopbackOnly)
     app.state.registry = (
         registry if registry is not None else Registry(admin_key=load_admin_key())
     )

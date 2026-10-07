@@ -72,6 +72,42 @@ for screen steps. The app never creates the file: a key it invented would not
 match the one the daemon is holding. If the file is missing, the prompt is still
 there. The MCP server still does not read it.
 
+**The daemon answers only a request addressed to it.** Every HTTP route and
+both WebSocket routes check, before any route runs, where the request says it
+is going (`odoo_sheller/guard.py`):
+
+- the `Host` must be `127.0.0.1`, `localhost` or `[::1]`, on any port — a `-p`
+  mapping moves the port, never the name. Anything else is `foreign_host`
+  (`403`). That includes `0.0.0.0`, which a page can fetch and which reaches a
+  local service on some systems, and a request with no `Host` or two of them.
+  This is what a DNS-rebinding page gets wrong: it names its own domain.
+- an `Origin`, when there is one, must be the daemon's own — the same
+  authority as the `Host`, not merely a loopback one: a dev server on port
+  3000 is a different page. Anything else, `null` included, is
+  `foreign_origin`. A WebSocket handshake is not subject to CORS, so for the
+  event streams this check is the only thing between a page on another site
+  and the daemon; a socket is refused at the handshake.
+
+The UI — in a browser, or in the desktop app's frame — is served by the daemon
+and so always passes. A client that is not a browser sends no `Origin`: the MCP
+server, the app's supervisor, `curl`. What does not pass is a client that
+reaches the daemon by another name, such as `host.docker.internal` from a
+second container; that was never a supported way to reach it, and this makes
+it fail loudly rather than work by accident.
+
+This is a check on the *request*, not on the person, so it leaves everything
+above untouched: keys are still an accident guard, and anyone who can run a
+process on this machine can still send a request that passes. It is there for
+the page in the browser.
+
+**Anything that reaches `ssh` is a name first.** An odoo.sh `build` and `host`
+become an `ssh` argument, and `ssh` reads an argument beginning with `-` as an
+option — `-oProxyCommand=…` runs a command on the machine the daemon runs on.
+Both are letters, digits, `.`, `_` and `-`, beginning with a letter or a digit
+(`transport.check_ssh_name`), refused as `422` otherwise, and every `ssh`
+command ends its options with `--` before the destination. Before 1.8.4 the
+only thing in the way was a space in a neighbouring argument.
+
 ## What is deliberately *not* protected
 
 **The daemon has no authentication and binds `127.0.0.1` only.** Anyone who
@@ -244,6 +280,7 @@ the user. Guards that can be absent without anyone noticing are not guards.
 | Actor | Can do | Cannot do |
 |---|---|---|
 | Anyone on `127.0.0.1` | Open sessions, run arbitrary code, read/write the database (after Commit) | Anything requiring network access to the daemon — there isn't any |
+| A web page in your browser, on any site | Nothing: a request from it names another `Host`, or carries another `Origin`, and is refused as `foreign_host` or `foreign_origin` — a socket at the handshake | Reach the API or the event streams, or make the daemon run a command through an `ssh` argument |
 | A browser tab that isn't a session's owner | Watch that session's output live | Type into it, commit, or grant itself commit rights |
 | An agent with a session of its own | Run code, rollback, read journals it can reach | Commit, without a human granting it first — a grant, or a handover to a human, made with its own key is refused as `needs_a_human`; act on a session it wasn't opened in or handed |
 | An agent handed a remote session | Run code, run tests, rollback, read the instance | Open a remote target itself; commit until granted; commit at all on `production` |

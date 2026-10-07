@@ -22,6 +22,7 @@ from odoo_sheller.api import create_app
 
 WEB = Path(__file__).resolve().parent.parent / "odoo_sheller" / "web"
 UNMASKED_WARNING = "unmasked"
+LOCAL = "http://127.0.0.1:8765"
 
 
 class _Markup(HTMLParser):
@@ -814,7 +815,7 @@ def test_journal_transcript_is_outlined_in_cyan():
 
 
 def test_ui_assets_tell_the_browser_not_to_cache_them():
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(), base_url=LOCAL) as client:
         for path in ("/web", "/static/style.css", "/static/app.js"):
             assert client.get(path).headers["cache-control"] == "no-store"
 
@@ -1017,7 +1018,7 @@ def test_vendored_editor_is_present():
 
 
 def test_assets_are_served():
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(), base_url=LOCAL) as client:
         assert client.get("/web").status_code == 200
         assert client.get("/", follow_redirects=False).status_code == 307
         assert client.get("/static/app.js").status_code == 200

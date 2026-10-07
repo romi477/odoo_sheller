@@ -444,9 +444,11 @@ sessions close themselves and need no key to read back (`os_test_result` and
 workspace has to be handed over again by the human after a restart.
 
 By default the server talks to `http://127.0.0.1:8765`. If the daemon is
-running on a different host or port, set `ODOO_SHELLER_URL` (in the
+listening on a different port, set `ODOO_SHELLER_URL` (in the
 `mcpServers` entry's own `env`, or the shell that starts Desktop) rather than
-changing code.
+changing code. The name must stay a loopback one — `127.0.0.1`, `localhost` or
+`[::1]`: the daemon refuses a request addressed to any other, as `foreign_host`
+(see [security.md](security.md)).
 
 When the daemon isn't reachable at all, every tool returns the same shape
 instead of a raw transport error:
