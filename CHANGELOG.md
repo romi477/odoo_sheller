@@ -5,35 +5,6 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.9.1] — 2026-10-07
-
-### A server whose config has workers: "Address already in use"
-
-The first real server a card was written for — Odoo 13, `workers = 4`, the service
-running — answered a session with `OSError: [Errno 98] Address already in use` on
-port 8069, from the shell, before it had loaded anything; adding `--xmlrpc-port 8068`
-made it go away. 1.9.0 had said the opposite: that `shell` starts no HTTP server, so
-no `--no-http` was wanted. That was read from the source and was true only for
-`workers = 0`. With `workers` above 0, which a server that is in use usually has,
-Odoo takes the prefork path, and `PreforkServer.start` binds the HTTP port before the
-shell starts, then closes it again after the registry preload. Reproduced on that
-server with the card as written (`socket.bind` → `Address already in use`) and fixed
-by `--no-http` (exit 0, nothing left running, the service untouched).
-
-The launch is still run exactly as written, so what changes is what the person is
-told. The form warns, as the recipe is typed, when the Launch has neither `--no-http`
-nor `--workers=0` — and, when it only moves the port (`--xmlrpc-port`, `--http-port`,
-`-p`), that this works for as long as nothing listens on the new port, not that HTTP
-is off. Probe reads `workers` and `http_port` from the server's config and says what
-will happen to this launch, on the card and in the form; it does not refuse, since it
-cannot know the service is up. A session that dies on the port keeps Odoo's words and
-is told what to add. The Launch placeholder now carries `--no-http`.
-
-The double now has `workers = 2` and something listening on 8069, so the end-to-end
-tests fail the way the real server did; they cover leaving HTTP alone, both ways of
-turning it off, a free moved port (twice in a row), and a port moved onto the
-service's own.
-
 ## [1.9.0] — 2026-10-07
 
 An Odoo installed on a server becomes a third kind of target, written down on a
@@ -114,6 +85,32 @@ accepted on the daemon's own.
 
 Tested against `tests/ssh_double/`: a container with `sshd`, `sudo` and Odoo 19
 installed in the system, started by `tests/ssh_double/up.sh`.
+
+### A server whose config has workers: "Address already in use"
+
+The first real server a card was tried on — Odoo 13, `workers = 4`, the service
+running — answered a session with `OSError: [Errno 98] Address already in use` on
+port 8069, from the shell, before it had loaded anything; adding `--xmlrpc-port 8068`
+made it go away. The source had suggested the opposite: that `shell` starts no HTTP
+server, so no `--no-http` was wanted. That is true only for `workers = 0`. With
+`workers` above 0, which a server that is in use usually has, Odoo takes the prefork
+path, and `PreforkServer.start` binds the HTTP port before the shell starts, then
+closes it again after the registry preload. Reproduced on that server with the card as
+written (`socket.bind` → `Address already in use`) and fixed by `--no-http` (exit 0,
+nothing left running, the service untouched).
+
+The launch is still run exactly as written, so what the person is told is what
+changed. The form warns, as the recipe is typed, when the Launch has neither
+`--no-http` nor `--workers=0` — and, when it only moves the port (`--xmlrpc-port`,
+`--http-port`, `-p`), that this works for as long as nothing listens on the new port,
+not that HTTP is off. Probe reads `workers` and `http_port` from the server's config
+and says what will happen to this launch, on the card and in the form; it does not
+refuse, since it cannot know the service is up. A session that dies on the port keeps
+Odoo's words and is told what to add. The Launch placeholder carries `--no-http`.
+
+The double has `workers = 2` and something listening on 8069, so the end-to-end tests
+fail the way the real server did; they cover leaving HTTP alone, both ways of turning
+it off, a free moved port (twice in a row), and a port moved onto the service's own.
 
 ### Odoo 13 and 14 open, with a warning, and are not claimed
 
