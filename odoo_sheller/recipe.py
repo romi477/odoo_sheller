@@ -197,7 +197,9 @@ def _split(text: object, field: str) -> list[str]:
         if token and set(token) <= OPERATORS:
             raise RecipeError(
                 f"{field} is one command: {token!r} would start another, and "
-                "nothing here is run through a shell. Quote it if it is data"
+                "nothing here is run through a shell. A bare operator is refused "
+                "even in quotes; inside a longer argument (`'/etc/a;b.conf'`) it "
+                "is data"
             )
 
     return tokens

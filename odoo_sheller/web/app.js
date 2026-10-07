@@ -2971,7 +2971,7 @@ async function withAdminRetry(operation) {
 async function askForAdminKey() {
   const stored = adminKey();
   const entered = await promptDialog(
-    'Admin key — needed to act on a session you do not own, or to write, probe or remove an odoo.sh build.\n\n'
+    'Admin key — needed to act on a session you do not own, or to write, probe or remove an odoo.sh build or a server.\n\n'
     + (stored ? 'The daemon refused the key below. Correct it and try again.\n\n' : '')
     + 'The daemon printed it at startup, and keeps it here:\n'
     + '  ~/.odoo-sheller/admin.key\n\n'

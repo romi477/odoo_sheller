@@ -181,6 +181,24 @@ def test_a_write_that_fails_leaves_the_old_file_and_no_litter(store, monkeypatch
     assert sorted(path.name for path in store.path.parent.iterdir()) == ["targets.json"]
 
 
+def test_the_new_file_is_on_disk_before_it_replaces_the_old_one(store, monkeypatch):
+    """`os.replace` makes the swap atomic against a crash of this process. The
+    promise "either version" also has to hold when the power goes: a rename that
+    reaches the disk before the data does leaves an empty file with the real
+    name."""
+    order = []
+    real_fsync, real_replace = os.fsync, os.replace
+    monkeypatch.setattr(
+        "odoo_sheller.targets.os.fsync", lambda fd: (order.append("fsync"), real_fsync(fd))[1]
+    )
+    monkeypatch.setattr(
+        "odoo_sheller.targets.os.replace",
+        lambda *args: (order.append("replace"), real_replace(*args))[1],
+    )
+    store.add_odoosh("1", "a.example.com")
+    assert order == ["fsync", "replace"]
+
+
 # --- a server reached by ssh ------------------------------------------------
 
 ACCESS = "ssh -i /k/key.pem ubuntu@srv.example.com sudo -n -u odoo -H"

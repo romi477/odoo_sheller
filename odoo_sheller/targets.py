@@ -151,6 +151,10 @@ class TargetStore:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(data, handle, indent=2)
                 handle.write("\n")
+                # Data to disk before the name is swapped: a rename that gets
+                # there first, then a power cut, leaves an empty `targets.json`.
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(temporary, self.path)
         except BaseException:
             with contextlib.suppress(FileNotFoundError):

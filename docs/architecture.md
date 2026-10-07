@@ -449,9 +449,10 @@ sequence; here stdin is our pipe and they nest, so the equivalent is one line.
 fd 3.
 
 **Both fields are data, not code.** Each is tokenised with `shlex` (unquoted
-`; & | ( )` are refused as "this is one command", quoted ones are data), checked
-against a whitelist, and every token is quoted again on the way out; the spawn is
-`create_subprocess_exec`, with no local shell. Access accepts `-i -p -l -J` and
+`; & | ( )` are refused as "this is one command", and so is a lone one in quotes;
+inside a longer argument they are data), checked against a whitelist, and every
+token is quoted again on the way out; the spawn is `create_subprocess_exec`, with
+no local shell. Access accepts `-i -p -l -J` and
 `-o` with `Port IdentityFile User ProxyJump ConnectTimeout IdentitiesOnly`, in
 any of ssh's spellings, before or after the host, and normalises them (`-l
 ubuntu` becomes `ubuntu@host`, `~` is expanded here, a named key has to exist).

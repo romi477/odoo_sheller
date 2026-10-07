@@ -409,6 +409,19 @@ def test_shell_as_an_option_value_does_not_count():
         parse_launch("/opt/odoo-bin -c shell")
 
 
+def test_a_lone_operator_is_refused_even_in_quotes_and_the_message_says_so():
+    """Quotes are gone by the time the operator check runs, so `';'` is the same
+    token as `;` — "quote it if it is data" sent people to a fix that cannot
+    work. A longer argument that merely contains one is data, and is kept."""
+    with pytest.raises(RecipeError) as refused:
+        parse_launch("/x/odoo-bin shell -c ';'")
+    message = str(refused.value)
+    assert "Quote it" not in message
+    assert "even in quotes" in message
+    assert "longer" in message
+    assert ";" in parse_launch("/x/odoo-bin shell -c '/etc/a;b.conf'").argv[-1]
+
+
 # --- Database: one place ---------------------------------------------------
 
 

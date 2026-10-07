@@ -1486,6 +1486,15 @@ def test_the_admin_key_prompt_says_where_to_find_it(app_js):
     assert "cat ~/.odoo-sheller/admin.key" in body.group(0)
 
 
+def test_the_admin_key_prompt_names_every_card_it_guards(app_js):
+    """It was written when an odoo.sh build was the only card there was."""
+    body = re.search(r"async function askForAdminKey\(.*?\n\}", app_js, re.DOTALL)
+    assert body is not None
+    prompt = body.group(0)
+    assert "odoo.sh build" in prompt
+    assert "server" in prompt, "a server's card is written, probed and removed with it too"
+
+
 def test_a_refused_admin_key_is_offered_back_for_correction(app_js):
     """One typo must not be permanent: nothing else in the UI can clear it."""
     body = re.search(r"async function askForAdminKey\(.*?\n\}", app_js, re.DOTALL)
