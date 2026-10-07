@@ -285,6 +285,8 @@ class Session:
             "kind": self.target.kind,
             "host": self.target.host,
             "stage": self.target.stage,
+            # The card a remote session came from; None for a container.
+            "target_id": self.target.card_id,
             "odoo": (self.hello or {}).get("odoo"),
             "python": (self.hello or {}).get("python"),
             "pending_commands": self.pending_commands,

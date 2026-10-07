@@ -1999,10 +1999,11 @@ def test_a_second_session_on_a_remote_target_reopens_the_same_kind(app_js):
     )
     assert duplicate is not None, "the duplicate path moved; check this test"
     body = duplicate.group(1)
-    assert "odoosh" in body, "it must branch on the kind of target"
+    assert "record.info.target_id" in body, "a remote session names the card it came from"
     # The card says where the instance is; the session only names the card.
     assert "target_id" in body
     assert "host" not in body
+    assert "/api/probe" in body, "a container is still probed and rebuilt from its fields"
 
 
 def test_connect_offers_a_choice_of_where_to_open(markup):
@@ -2211,7 +2212,7 @@ def test_opening_a_build_shows_what_a_container_start_shows(app_js):
     assert "stopStartup(" in body
     render = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL)
     assert render is not None
-    branch = render.group(0).split("state.startups.get(entry.name)", 1)[1]
+    branch = render.group(0).split("state.startups.get(key)", 1)[1]
     assert "classList.toggle('busy'" in branch, "the button must say it is working"
     assert "aria-busy" in branch
     assert "well.hidden = false" in branch, "the build's own stderr is the progress"
@@ -2932,8 +2933,10 @@ def test_a_session_on_a_server_is_reopened_from_its_card(app_js):
     duplicate = re.search(r"record\.duplicating = true;(.*?)\n  \} catch", app_js, re.DOTALL)
     assert duplicate is not None
     body = duplicate.group(1)
-    assert "'ssh'" in body
     assert "state.servers" in body, "the card is what says where the server is"
+    assert "item.id === record.info.target_id" in body, (
+        "found by id: a card can be renamed under a live session"
+    )
 
 
 def test_the_connect_mode_remembers_ssh_too(app_js):
@@ -2964,3 +2967,47 @@ def test_what_the_config_will_do_to_the_launch_stays_on_the_card_and_in_the_prob
     css = (WEB / "style.css").read_text(encoding="utf-8")
     rule = re.search(r"\.probe-note\.caution\s*\{([^}]*)\}", css)
     assert rule is not None and "--amber" in rule.group(1)
+
+
+# --- a session belongs to its card by id, not by name -------------------------------
+
+
+def test_a_session_and_its_card_meet_by_the_cards_id_not_by_a_name(app_js):
+    """A card's name is free text: `acme` as a server and `acme` as a container
+    are both possible, and one lit the other's "connected" badge and closed its
+    sessions. A rename under a live session lost the link the same way."""
+    key = re.search(r"function targetKey\(info\) \{(.*?)\n\}", app_js, re.DOTALL)
+    assert key is not None
+    assert "info.target_id" in key.group(1)
+    assert "info.container" in key.group(1), "a container is still known by its name"
+    sessions = re.search(r"function sessionsForTarget\(.*?\n\}", app_js, re.DOTALL)
+    assert sessions is not None
+    assert "targetKey(record.info) === key" in sessions.group(0)
+    assert "info.container ===" not in sessions.group(0)
+
+
+def test_a_remote_card_asks_for_its_sessions_and_its_startup_by_its_key(app_js):
+    render = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL)
+    assert render is not None
+    body = render.group(0)
+    assert "const key = cardKey(entry.id)" in body
+    assert "sessionsForTarget(key)" in body
+    assert "closeSessionsForTarget(key)" in body
+    assert "state.startups.get(key)" in body
+    assert "entry.name)" not in body.replace("kind.start(entry)", ""), (
+        "a name no longer stands for the card here"
+    )
+
+
+def test_a_remote_startup_is_kept_and_found_under_the_cards_key(app_js):
+    start = re.search(r"async function startRemoteSession\(.*?\n\}", app_js, re.DOTALL)
+    assert start is not None
+    assert "const key = cardKey(targetId)" in start.group(0)
+    assert "state.startups.set(key," in start.group(0)
+    # The registry socket tells a page what it did not start itself, by what the
+    # session says it is — the same key, or the page would look under a name.
+    for name in ("watchStartupFromEvent", "startupOwns"):
+        function = re.search(rf"function {name}\(info\) \{{.*?\n\}}", app_js, re.DOTALL)
+        assert function is not None, name
+        assert "state.startups.get(targetKey(info))" in function.group(0), name
+    assert "connectStartupSocket(targetKey(info), info.id)" in app_js

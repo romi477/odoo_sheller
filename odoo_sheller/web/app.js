@@ -486,20 +486,37 @@ function sessionForContainer(container) {
   return [...state.sessions.values()].find((record) => record.info.container === container);
 }
 
-function sessionsForTarget(container) {
+// What a session and the card it belongs to share. A container is known by its
+// name; a remote card by its id. A card's name is free text, so it can equal a
+// container's (`acme` twice), and a card can be renamed under a live session —
+// matching by name lit the wrong card's "connected" and let Close sessions on
+// one close the other's. An id does neither, and a `:` cannot be in a Docker
+// name, so the two kinds of key never meet.
+function cardKey(id) {
 
-  return [...state.sessions.values()].filter((record) => record.info.container === container);
+  return `card:${id}`;
+}
+
+function targetKey(info) {
+
+  return info.target_id ? cardKey(info.target_id) : info.container;
+}
+
+function sessionsForTarget(key) {
+
+  return [...state.sessions.values()].filter((record) => targetKey(record.info) === key);
 }
 
 // A card on Connect stands for a target, not for one session, and a target can
 // hold several — another database locally, a second shell on the same build.
 // Closing them one click at a time made the card lie about what it was showing.
-async function closeSessionsForTarget(container) {
-  const records = sessionsForTarget(container);
+async function closeSessionsForTarget(key) {
+  const records = sessionsForTarget(key);
   if (!records.length) {
 
     return;
   }
+  const container = records[0].info.container;
   const dirty = records.filter((record) => (record.info.pending_commands || 0) > 0);
   if (dirty.length) {
     const what = records.length > 1
@@ -1008,15 +1025,15 @@ function patchServer(id, patch) {
 
 // Opening a remote target is the longest wait on this screen — ssh, then a
 // registry load — and the instance's own stderr is the only honest progress, so
-// it is the same record a container start uses. `name` is the identity slot the
-// daemon reports (a build id, or the name on a card); `targetId` is the card.
-async function startRemoteSession(name, targetId, render) {
-  const previous = state.startups.get(name);
+// it is the same record a container start uses, kept under the card's key.
+async function startRemoteSession(targetId, render) {
+  const key = cardKey(targetId);
+  const previous = state.startups.get(key);
   if (previous?.socket) {
     previous.socket.close();
   }
   const token = newClientToken();
-  state.startups.set(name, {
+  state.startups.set(key, {
     database: null,
     token,
     sessionId: null,
@@ -1032,17 +1049,17 @@ async function startRemoteSession(name, targetId, render) {
     scrollTop: 0,
   });
   render();
-  adoptStartingSession(name);
+  adoptStartingSession(key);
   try {
     const info = await request(() => api.post('/api/sessions', {
       target_id: targetId,
       client_token: token,
     }));
-    const opening = state.startups.get(name);
+    const opening = state.startups.get(key);
     const lines = opening
       ? (opening.lines.length ? opening.lines : opening.view)
       : [];
-    stopStartup(name);
+    stopStartup(key);
     if (info.write_key) {
       saveKey(info.id, info.write_key);
       delete info.write_key;
@@ -1058,7 +1075,7 @@ async function startRemoteSession(name, targetId, render) {
     state.activeSession = info.id;
     showScreen('sessions');
   } catch (error) {
-    const startup = state.startups.get(name);
+    const startup = state.startups.get(key);
     if (startup) {
       startup.failed = true;
       startup.error = error.message;
@@ -1073,12 +1090,12 @@ async function startRemoteSession(name, targetId, render) {
 
 function startOdooshSession(build) {
 
-  return startRemoteSession(build, `odoosh-${build}`, renderBuilds);
+  return startRemoteSession(`odoosh-${build}`, renderBuilds);
 }
 
 function startServerSession(entry) {
 
-  return startRemoteSession(entry.name, entry.id, renderServers);
+  return startRemoteSession(entry.id, renderServers);
 }
 
 // The two kinds of remote card draw alike — a name, a stage, a note from the
@@ -1205,7 +1222,8 @@ function renderRemoteCards(kind) {
     card.querySelector('.forget').addEventListener('click', () => kind.forget(entry));
     card.querySelector('.edit')?.addEventListener('click', () => editServer(entry));
 
-    const open = sessionsForTarget(entry.name);
+    const key = cardKey(entry.id);
+    const open = sessionsForTarget(key);
     const connected = card.querySelector('.connected');
     const close = card.querySelector('.close-connected');
     if (open.length) {
@@ -1216,7 +1234,7 @@ function renderRemoteCards(kind) {
       close.title = open.length > 1
         ? `Close every session on this ${kind.noun}. Uncommitted work is discarded.`
         : `Close the session on this ${kind.noun}. Uncommitted work is discarded.`;
-      close.addEventListener('click', () => closeSessionsForTarget(entry.name));
+      close.addEventListener('click', () => closeSessionsForTarget(key));
     }
 
     // Forgetting the card removes the only record of where this is on this
@@ -1227,7 +1245,7 @@ function renderRemoteCards(kind) {
       ? `Close ${open.length > 1 ? 'the sessions' : 'the session'} on this ${kind.noun} first — ${kind.forgetKept}`
       : `Remove this ${kind.noun} from the list. Nothing on the instance changes.`;
 
-    const startup = state.startups.get(entry.name);
+    const startup = state.startups.get(key);
     const start = card.querySelector('.start');
     if (startup) {
       const well = card.querySelector('.startup-log');
@@ -1794,7 +1812,7 @@ function connectStartupSocket(name, sessionId) {
 }
 
 function watchStartupFromEvent(info) {
-  const startup = state.startups.get(info.container);
+  const startup = state.startups.get(targetKey(info));
   if (!startup || startup.failed || startup.sessionId) {
 
     return;
@@ -1808,7 +1826,7 @@ function watchStartupFromEvent(info) {
     return;
   }
   startup.sessionId = info.id;
-  connectStartupSocket(info.container, info.id);
+  connectStartupSocket(targetKey(info), info.id);
 }
 
 async function adoptStartingSession(name) {
@@ -1861,7 +1879,7 @@ function failStartupById(sessionId, reason) {
 }
 
 function startupOwns(info) {
-  const startup = state.startups.get(info.container);
+  const startup = state.startups.get(targetKey(info));
 
   return Boolean(startup && startup.sessionId === info.id && !startup.failed);
 }
@@ -3156,14 +3174,13 @@ async function duplicateSession(id) {
   renderSessions();
   try {
     let opening;
-    if (record.info.kind === 'odoosh') {
+    if (record.info.target_id) {
       // A build needs no probe of ours to reopen: the daemon probes it on the
-      // way in, and the instance dictates the database either way. Its card
-      // is what says where it is.
-      opening = {target_id: `odoosh-${record.info.container}`};
-    } else if (record.info.kind === 'ssh') {
-      // The card is what says where the server is, and what to run there.
-      const card = state.servers.find((item) => item.name === record.info.container);
+      // way in, and the instance dictates the database either way. A server's
+      // card says where it is and what to run there. Either way it is the
+      // card that opens it, found by id — a rename does not lose it.
+      const card = [...state.builds, ...state.servers]
+        .find((item) => item.id === record.info.target_id);
       if (!card) {
         throw new Error(`The card for ${record.info.container} is gone — write it down again.`);
       }

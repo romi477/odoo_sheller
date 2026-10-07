@@ -5,6 +5,7 @@ import contextlib
 import os
 import secrets
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -171,10 +172,11 @@ class Registry:
         except KeyError:
             raise KeyError(f"no target {target_id!r}") from None
         if card["kind"] == "ssh":
+            target = await self._ssh_target(card)
+        else:
+            target = await self._odoosh_target(card["build"], card["host"])
 
-            return await self._ssh_target(card)
-
-        return await self._odoosh_target(card["build"], card["host"])
+        return replace(target, card_id=card["id"])
 
     async def _ssh_target(self, card: dict) -> Target:
         """A server someone wrote a card for: parse it, probe it, then open it.

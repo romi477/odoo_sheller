@@ -1607,3 +1607,24 @@ async def test_a_database_the_card_named_is_not_replaced_by_hello(tmp_path):
     await session.start()
     assert session.describe()["database"] == "the-card-said-so"
     await session.close()
+
+
+async def test_describe_names_the_card_a_remote_session_was_opened_from(tmp_path):
+    """The name on a card is free text and can equal a container's, so a screen
+    cannot tell whose session this is by name. The card's id can be told apart —
+    and survives a rename of the card."""
+    target = Target(
+        kind="ssh", label="acme", host="srv.example.com", stage="staging",
+        database="db", card_id="ssh-1a2b3c4d",
+    )
+    session = await make_session(tmp_path, target=target)
+    try:
+        assert session.describe()["target_id"] == "ssh-1a2b3c4d"
+    finally:
+        await session.kill()
+
+    local = await make_session(tmp_path)
+    try:
+        assert local.describe()["target_id"] is None
+    finally:
+        await local.kill()

@@ -99,6 +99,10 @@ class Target:
     label: str | None = None
     access: Access | None = None
     launch: Launch | None = None
+    # The id of the card a remote target was opened from. A card's name is free
+    # text and can be renamed under a live session; its id is neither, so this
+    # is what a screen matches a session to its card by.
+    card_id: str | None = None
 
     @property
     def name(self) -> str | None:

@@ -879,3 +879,27 @@ async def test_an_ssh_card_with_no_database_anywhere_still_opens(tmp_path, monke
 
     assert captured["target"].database is None
     assert session.id in registry.sessions
+
+
+@pytest.mark.asyncio
+async def test_a_remote_session_remembers_the_card_it_was_opened_from(tmp_path, monkeypatch):
+    """By id, not by name: a card can be renamed under a live session, and its
+    name can equal a container's. Both kinds of card."""
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _ssh_probe(monkeypatch, captured)
+    registry, card = _ssh_registry(tmp_path)
+    await registry.open(target_id=card["id"])
+    assert captured["target"].card_id == card["id"]
+
+    async def fake_probe(build, host, runner=None):
+
+        return {
+            "ok": True, "supported": True, "stage": "staging",
+            "db_name": "db-7", "odoo_version": "19.0", "error": None,
+        }
+
+    monkeypatch.setattr("odoo_sheller.registry.probe_odoosh", fake_probe)
+    build = registry.targets.add_odoosh("7", "build-7.dev.odoo.com")
+    await registry.open(target_id=build["id"])
+    assert captured["target"].card_id == build["id"] == "odoosh-7"
