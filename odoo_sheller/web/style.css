@@ -356,7 +356,8 @@ button.icon:hover:not(:disabled) {
 }
 
 #containers,
-#odoosh-builds {
+#odoosh-builds,
+#ssh-servers {
   display: grid;
   gap: 10px;
   margin: 0;
@@ -559,6 +560,100 @@ button.icon:hover:not(:disabled) {
    which one. The element is in the selector on purpose: `.primary` sets the
    transparent border and comes later in this file. */
 button.odoosh-add {
+  border-color: var(--border);
+}
+
+/* The server form: one field to a row, labels above, and an error under the
+   field it is about. The breakdown beneath is what the recipe means — the part a
+   person reads before saving, and the reason it is rendered as sentences. */
+.ssh-form {
+  display: grid;
+  gap: 10px;
+  max-width: 78ch;
+  margin-bottom: 12px;
+}
+
+.ssh-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ssh-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ssh-label .optional {
+  margin-left: 6px;
+  opacity: 0.7;
+}
+
+.ssh-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ssh-database-field {
+  flex: 1 1 24ch;
+}
+
+.ssh-stage-field {
+  flex: 1 1 28ch;
+}
+
+.field-error {
+  margin: 0;
+  color: var(--red);
+  font-size: 12px;
+}
+
+.ssh-field:has(.field-error:not([hidden])) input {
+  border-color: var(--red);
+}
+
+.ssh-breakdown {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  font-size: 12px;
+}
+
+.ssh-breakdown:empty {
+  display: none;
+}
+
+.ssh-breakdown .fact b {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ssh-breakdown .caution {
+  color: var(--amber);
+}
+
+.ssh-breakdown details {
+  color: var(--muted);
+}
+
+.ssh-breakdown pre {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.ssh-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+button.ssh-save {
   border-color: var(--border);
 }
 

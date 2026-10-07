@@ -53,6 +53,7 @@
         <div id="connect-modes" class="segmented">
           <button data-connect-mode="local" class="active" title="Running Docker containers on this machine. Found by docker ps — nothing to configure.">Local</button>
           <button data-connect-mode="odoosh" title="An odoo.sh build, reached over SSH. There is no listing for these: a build is entered, not discovered.">Odoo.sh</button>
+          <button data-connect-mode="ssh" title="An Odoo installed directly on a server, reached over SSH. Nothing about it can be discovered: whoever can log in writes down how to arrive and what to run.">Server (SSH)</button>
         </div>
       </header>
       <ul id="containers"></ul>
@@ -65,6 +66,78 @@
         <p class="odoosh-note">A build is entered, not discovered — there is no listing for odoo.sh. Probing only reads what the instance says about itself.</p>
         <ul id="odoosh-builds"></ul>
       </div>
+      <div id="ssh" hidden>
+        <form class="ssh-form" autocomplete="off" novalidate>
+          <label class="ssh-field">
+            <span class="ssh-label">Name</span>
+            <input class="ssh-name" placeholder="acme production" maxlength="60" spellcheck="false"
+                   title="What this card is called. It is also what the sessions on it are called.">
+            <p class="field-error" data-field="name" hidden></p>
+          </label>
+          <label class="ssh-field">
+            <span class="ssh-label">Access</span>
+            <input class="ssh-access mono" placeholder="ssh -i ~/.ssh/server.pem ubuntu@host sudo -n -u odoo -H" spellcheck="false"
+                   title="How to arrive as the user Odoo runs as. Not a command on its own: what to run goes after it, in Launch. Steps typed one after another into a terminal (ssh, sudo su, su odoo) become one line: ssh … sudo -n -u odoo -H.">
+            <p class="field-error" data-field="access" hidden></p>
+          </label>
+          <label class="ssh-field">
+            <span class="ssh-label">Launch</span>
+            <input class="ssh-launch mono" placeholder="/opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf" spellcheck="false"
+                   title="What to run once there: the absolute path of the interpreter and of odoo-bin, then shell and whatever options the server needs. It is run exactly as written.">
+            <p class="field-error" data-field="launch" hidden></p>
+          </label>
+          <div class="ssh-row">
+            <label class="ssh-field ssh-database-field">
+              <span class="ssh-label">Database <span class="optional">optional</span></span>
+              <input class="ssh-database mono" placeholder="the server's own default" spellcheck="false"
+                     title="Appended to Launch as -d. Leave it empty and the instance's own db_name decides — write it in one place, not both.">
+              <p class="field-error" data-field="database" hidden></p>
+            </label>
+            <label class="ssh-field ssh-stage-field">
+              <span class="ssh-label">Stage</span>
+              <select class="ssh-stage"
+                      title="Nothing on a plain server says what it is, so you do. Production refuses a commit outright; staging and development are closed to commit until you grant it.">
+                <option value="production" selected>production — commit refused</option>
+                <option value="staging">staging — commit off until granted</option>
+                <option value="development">development — commit off until granted</option>
+              </select>
+            </label>
+          </div>
+          <div class="ssh-breakdown" aria-live="polite"></div>
+          <div class="ssh-probe-result probe-note" aria-live="polite" hidden></div>
+          <div class="ssh-actions">
+            <button type="button" class="ssh-probe" title="Run the recipe once to see who it lands as, where, and which Odoo. Nothing is started and no database is touched.">Probe</button>
+            <button type="button" class="ssh-save primary" title="Write this card down.">Save</button>
+            <button type="button" class="ssh-cancel" hidden>Cancel</button>
+          </div>
+        </form>
+        <p class="odoosh-note">A server is written down by whoever can log in: <b>Access</b> is how to arrive as the right user, <b>Launch</b> is what to run once there. Access is a prefix — it ends where a command may follow, which is why steps become one line. Both are read as data and never run on this machine; an unknown host key is refused until you trust it once from a terminal.</p>
+        <ul id="ssh-servers"></ul>
+      </div>
+      <template id="ssh-card">
+        <li class="card">
+          <div class="row">
+            <div class="identity">
+              <span class="name-line">
+                <span class="name mono"></span>
+                <span class="badge stage" hidden></span>
+                <span class="badge untested" hidden>untested</span>
+                <span class="badge connected" hidden></span>
+              </span>
+            </div>
+            <button class="start primary" title="Open the session on this server. Odoo loads its registry over SSH, once; then commands are cheap.">Open session</button>
+            <button class="close-connected" hidden title="Close the session on this server. Uncommitted work is discarded.">Close session</button>
+            <button class="reprobe" title="Run the recipe once more to see who it lands as, where, and which Odoo.">probe</button>
+            <button class="edit" title="Change this card.">edit</button>
+            <button class="forget icon" aria-label="Forget this server" title="Remove this card. Nothing on the server changes."><span aria-hidden="true">×</span></button>
+          </div>
+          <div class="card-facts">
+            <span class="meta"></span>
+            <p class="probe-note">not probed yet</p>
+          </div>
+          <div class="startup-log" hidden></div>
+        </li>
+      </template>
       <template id="odoosh-card">
         <li class="card">
           <div class="row">

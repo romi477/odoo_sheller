@@ -26,10 +26,18 @@ the way they do:
 
 ## Connect
 
-Two halves, chosen with the segmented control in the header, because they
-differ in kind rather than in parameters: local containers are **discovered**
-(cards you did not ask for), an odoo.sh build is **entered**. The mode you
-used last comes back on a reload, the way the screen does.
+Three places, chosen with the segmented control in the header — Local, Odoo.sh,
+Server (SSH) — because they differ in kind rather than in parameters: local
+containers are **discovered** (cards you did not ask for), an odoo.sh build and
+a server are **entered**. The mode you used last comes back on a reload, the way
+the screen does.
+
+The cards of the two entered kinds are kept by the daemon, not by the page
+(`~/.odoo-sheller/targets.json`): a desktop-app frame does not keep
+`localStorage`. Writing, changing, deleting and probing one needs the admin key,
+asked for the first time one of those is refused; the list needs none. Cards that
+an earlier version kept in the browser move across once, when the odoo.sh list is
+first opened.
 
 ### Local
 
@@ -137,6 +145,47 @@ not your machine: **Grant commit** is enabled for you, not only for an agent,
 and until you press it **Commit** is disabled rather than offered and refused.
 On a `production` build the latch is disabled too and says why — nothing
 grants a commit there. Rollback and running code are untouched.
+
+### Server (SSH)
+
+An Odoo installed directly on a server. Nothing about one can be discovered —
+which user runs it, which interpreter, where `odoo-bin` and its config are — so
+whoever can log in writes it down, in two fields and a few more:
+
+- **Name** — what the card and its sessions are called.
+- **Access** — how to arrive as the right user: `ssh -i ~/.ssh/server.pem
+  ubuntu@host sudo -n -u odoo -H`. It is a *prefix*: it ends where a command may
+  follow, which is why steps typed one after another into a terminal (`ssh`, then
+  `sudo su`, then `su odoo`) become one line.
+- **Launch** — what to run once there: the absolute path of the interpreter and of
+  `odoo-bin`, then `shell` and whatever options the server needs. Run exactly as
+  written.
+- **Database** (optional) — appended to Launch as `-d`; empty means the server's
+  own `db_name`. Written in both places is an error.
+- **Stage** — `production` (the default: commit refused outright), `staging` or
+  `development` (commit off until you grant it). Nothing on a plain server says
+  what it is, so you do.
+
+Under the fields the form says, in sentences, what the recipe means as it is
+typed — who it logs in as, to where, with which key; which user it becomes; what
+it runs; which database — and a fold shows the command as it will be assembled.
+This is the part to read before saving, because the realistic way to get a wrong
+recipe is to paste one. A field the grammar refuses gets its reason under it, in
+red and specific ("-o ProxyCommand is not allowed: it runs a command on this
+machine", "launch starts with an absolute path…"). Nothing typed is ever run on
+this machine; the form shows the admin key's absence as one line with a button,
+never a dialog in the middle of typing.
+
+**Probe** runs the recipe once and says who it landed as, where, which Python and
+Odoo, and whether the config is readable by that user; **Save** writes the card.
+A card shows `user@host:port`, who it runs as, the stage, and an *untested* badge
+for Odoo 13 and 14. **edit** puts it back in the form; **×** removes it, disabled
+while a session is open on it. Opening one waits the same way an odoo.sh build
+does, with the server's own stderr as progress. An unknown host key is refused
+with what to do: connect once from a terminal and accept it.
+
+Odoo 13 and 14 open with a warning and are not claimed — see
+[architecture.md](architecture.md#target-discovery).
 
 ## Sessions
 

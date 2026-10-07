@@ -97,6 +97,20 @@ what would be let through. A server's version that the probe could not read is
 checked against the same gate when the session says it. The bootstrap is tested to
 parse as Python 3.6, the floor 13 declares.
 
+### The Connect screen learns about servers
+
+A third mode beside Local and Odoo.sh: **Server (SSH)**. A form with Name, Access,
+Launch, an optional Database and a Stage (default `production`), and under it what
+the recipe means, in sentences, as it is typed — decoded by the daemon
+(`POST /api/targets/parse`), so the page never interprets a recipe itself. A field
+the grammar refuses gets its reason beneath it; a form left without the admin key
+shows one line and a button rather than a dialog in the middle of typing. Probe
+runs the recipe once; Save writes the card; a card shows where it goes and who it
+runs as (`summary`, read from the recipe, so a card is recognisable before it is
+probed — and one whose key file has gone says so and stays listed, to be edited),
+its stage, and an *untested* badge for 13 and 14. The two kinds of remote card now
+draw from one function. Everything a card says is set as text, never as markup.
+
 ## [1.8.4] — 2026-10-07
 
 ### The daemon answers only requests addressed to this machine

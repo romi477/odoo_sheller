@@ -1973,7 +1973,7 @@ def test_a_remote_target_is_labelled_by_build_and_stage(app_js):
     label = re.search(r"function targetLabel\(([^)]*)\)\s*\{(.*?)\n\}", app_js, re.DOTALL)
     assert label is not None
     body = label.group(2)
-    assert "odoosh" in body
+    assert "isRemote(" in body, "any kind of remote target, not only odoo.sh"
     assert "stage" in body
 
 
@@ -2022,7 +2022,7 @@ def test_the_odoosh_mode_asks_for_a_build_and_a_host(markup):
 def test_a_remembered_build_is_a_card_like_a_container(app_js):
     """Typing a 40-character hostname twice is once too many, and it keeps the
     existing habit: click a card, press Start."""
-    assert "function loadBuilds(" in app_js
+    assert "function loadTargets(" in app_js
     assert "'/api/targets'" in app_js
 
 
@@ -2060,11 +2060,16 @@ def test_the_old_cards_are_moved_when_the_list_is_opened_not_at_load(app_js):
 
 def test_starting_a_build_opens_a_build_not_a_container(app_js):
     starter = re.search(
-        r"async function startOdooshSession\(([^)]*)\)\s*\{(.*?)\n\}", app_js, re.DOTALL
+        r"function startOdooshSession\(([^)]*)\)\s*\{(.*?)\n\}", app_js, re.DOTALL
     )
     assert starter is not None
-    body = starter.group(2)
-    assert "target_id" in body
+    assert "`odoosh-${build}`" in starter.group(2), "a card is named by its id, not by host"
+    generic = re.search(
+        r"async function startRemoteSession\(([^)]*)\)\s*\{(.*?)\n\}", app_js, re.DOTALL
+    )
+    assert generic is not None
+    body = generic.group(2)
+    assert "target_id: targetId" in body
     assert "kind: 'odoosh'" not in body, "a build and a host are no longer an open body"
     assert "host" not in body
 
@@ -2086,6 +2091,7 @@ def test_both_connect_lists_are_styled_as_lists_of_cards():
     rule = re.search(r"(#containers[^{]*)\{([^}]*)\}", css)
     assert rule is not None
     assert "#odoosh-builds" in rule.group(1)
+    assert "#ssh-servers" in rule.group(1)
     assert "list-style: none" in rule.group(2)
 
 
@@ -2196,16 +2202,16 @@ def _odoosh_template() -> str:
 
 def test_opening_a_build_shows_what_a_container_start_shows(app_js):
     """SSH plus a registry load is the longest wait on this screen; it must show."""
-    start = re.search(r"async function startOdooshSession\(.*?\n\}", app_js, re.DOTALL)
+    start = re.search(r"async function startRemoteSession\(.*?\n\}", app_js, re.DOTALL)
     assert start is not None
     body = start.group(0)
     assert "newClientToken(" in body, "the stream is adopted by token, not by target"
     assert "adoptStartingSession(" in body
     assert "pinned: true" in body
     assert "stopStartup(" in body
-    render = re.search(r"function renderBuilds\(.*?\n\}", app_js, re.DOTALL)
+    render = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL)
     assert render is not None
-    branch = render.group(0).split("state.startups.get(entry.build)", 1)[1]
+    branch = render.group(0).split("state.startups.get(entry.name)", 1)[1]
     assert "classList.toggle('busy'" in branch, "the button must say it is working"
     assert "aria-busy" in branch
     assert "well.hidden = false" in branch, "the build's own stderr is the progress"
@@ -2219,6 +2225,7 @@ def test_a_session_ending_updates_whichever_list_holds_its_target(app_js):
     assert targets is not None
     assert "renderContainers(" in targets.group(0)
     assert "renderBuilds(" in targets.group(0)
+    assert "renderServers(" in targets.group(0)
     attach = re.search(r"function attachSession\(.*?\n\}", app_js, re.DOTALL)
     assert attach is not None
     assert "renderTargets(" in attach.group(0)
@@ -2257,7 +2264,7 @@ def test_closing_from_a_card_closes_every_session_on_that_target(app_js):
     assert "confirmed: true" in body
     # Both lists route the card's key through it: the container card binds it
     # once where the card is built, the build card on each render.
-    for where in ("buildContainerCard", "renderBuilds"):
+    for where in ("buildContainerCard", "renderRemoteCards"):
         card = re.search(rf"function {where}\(.*?\n\}}", app_js, re.DOTALL)
         assert card is not None
         assert "closeSessionsForTarget(" in card.group(0), where
@@ -2277,7 +2284,7 @@ def test_a_card_says_how_many_sessions_it_holds(app_js):
     assert "sessions`" in key.group(0)
     assert "'Close session'" in key.group(0)
     # Both lists label their card from the same two helpers.
-    for render in ("renderContainers", "renderBuilds"):
+    for render in ("renderContainers", "renderRemoteCards"):
         body = re.search(rf"function {render}\(.*?\n\}}", app_js, re.DOTALL)
         assert body is not None
         assert "connectedLabel(" in body.group(0), render
@@ -2286,7 +2293,7 @@ def test_a_card_says_how_many_sessions_it_holds(app_js):
 
 def test_a_build_with_a_session_open_cannot_be_forgotten(app_js):
     """Forgetting the card drops the only record of the hostname on this machine."""
-    body = re.search(r"function renderBuilds\(.*?\n\}", app_js, re.DOTALL)
+    body = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL)
     assert body is not None
     text = body.group(0)
     forget = re.search(r"forget\.disabled = ([^;]+);", text)
@@ -2338,7 +2345,7 @@ def test_probe_carries_its_own_outline_at_rest():
 def test_the_mode_keys_read_as_names(markup):
     page = (WEB / "index.html").read_text(encoding="utf-8")
     modes = dict(re.findall(r'data-connect-mode="(\w+)"[^>]*>([^<]+)</button>', page))
-    assert modes == {"local": "Local", "odoosh": "Odoo.sh"}, modes
+    assert modes == {"local": "Local", "odoosh": "Odoo.sh", "ssh": "Server (SSH)"}, modes
 
 
 def test_every_spinner_turns_white():
@@ -2799,7 +2806,7 @@ def test_an_untested_version_has_a_badge_on_both_kinds_of_card(markup):
 
 def test_the_untested_badge_says_why_on_hover_and_is_not_an_error(app_js):
     container = re.search(r"function renderContainers\(.*?\n\}", app_js, re.DOTALL)
-    builds = re.search(r"function renderBuilds\(.*?\n\}", app_js, re.DOTALL)
+    builds = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL)
     for render in (container, builds):
         assert render is not None
         body = render.group(0)
@@ -2817,3 +2824,118 @@ def test_the_untested_badge_is_amber_like_a_warning_not_red_like_a_failure():
     rule = re.search(r"\.badge\.untested\s*\{([^}]*)\}", css)
     assert rule is not None
     assert "--amber" in rule.group(1)
+
+
+# --- servers reached by ssh ----------------------------------------------------
+
+
+def _ssh_template() -> str:
+    page = (WEB / "index.html").read_text(encoding="utf-8")
+    block = re.search(r'<template id="ssh-card">.*?</template>', page, re.DOTALL)
+    assert block is not None
+
+    return block.group(0)
+
+
+def test_connect_offers_a_third_place_and_it_is_a_form_and_a_list(markup):
+    assert "ssh" in markup.ids and "ssh-servers" in markup.ids
+    assert "ssh-card" in markup.ids
+    for cls in (
+        "ssh-name", "ssh-access", "ssh-launch", "ssh-database", "ssh-stage",
+        "ssh-probe", "ssh-save", "ssh-cancel", "ssh-breakdown", "field-error",
+    ):
+        assert cls in markup.classes, cls
+
+
+def test_the_stage_of_a_server_defaults_to_production_and_each_choice_says_what_it_means():
+    page = (WEB / "index.html").read_text(encoding="utf-8")
+    select = re.search(r'<select class="ssh-stage".*?</select>', page, re.DOTALL)
+    assert select is not None
+    options = re.findall(r'<option value="(\w+)"( selected)?>([^<]*)</option>', select.group(0))
+    assert [value for value, _, _ in options] == ["production", "staging", "development"]
+    assert options[0][1], "production is the default: nothing on a plain server says what it is"
+    assert "refused" in options[0][2]
+    assert all("commit" in text for _, _, text in options)
+
+
+def test_the_server_card_has_what_the_build_card_has_and_an_edit_button():
+    template = _ssh_template()
+    for cls in ("name", "stage", "untested", "connected", "start", "close-connected", "reprobe", "forget"):
+        assert f'class="{cls}' in template or f' {cls}"' in template or f' {cls} ' in template, cls
+    assert 'class="edit"' in template
+    start = re.search(r'<button class="start[^"]*"[^>]*>([^<]*)</button>', template)
+    assert start is not None and start.group(1) == "Open session"
+
+
+def test_the_recipe_is_decoded_as_it_is_typed_and_a_stale_answer_is_dropped(app_js):
+    parse = re.search(r"async function parseServerForm\(.*?\n\}", app_js, re.DOTALL)
+    assert parse is not None
+    body = parse.group(0)
+    assert "'/api/targets/parse'" in body
+    assert "serverParseSerial" in body, "the last keystroke is the one being asked about"
+    # Typing must never raise a dialog: a refusal is a line and a button.
+    assert "withAdminRetry" not in body
+    assert "renderBreakdownNeedsKey" in body
+    schedule = re.search(r"function scheduleServerParse\(.*?\n\}", app_js, re.DOTALL)
+    assert schedule is not None
+    assert "setTimeout" in schedule.group(0) and "clearTimeout" in schedule.group(0)
+
+
+def test_probing_saving_and_forgetting_a_server_go_through_the_admin_key(app_js):
+    for name in ("probeServerForm", "saveServerForm", "forgetServer", "probeServer"):
+        function = re.search(rf"async function {name}\(.*?\n\}}", app_js, re.DOTALL)
+        assert function is not None, name
+        assert "withAdminRetry(" in function.group(0), name
+        assert "adminHeaders()" in function.group(0), name
+
+
+def test_an_error_goes_under_the_field_it_is_about(app_js):
+    save = re.search(r"async function saveServerForm\(.*?\n\}", app_js, re.DOTALL)
+    assert save is not None
+    assert "detail.field" in save.group(0)
+    assert "invalid_recipe" in save.group(0)
+    show = re.search(r"function showFieldErrors\(.*?\n\}", app_js, re.DOTALL)
+    assert show is not None
+    assert "data-field" in show.group(0) or "dataset.field" in show.group(0)
+    # A field nobody has typed in is empty, not wrong.
+    assert "typed" in show.group(0)
+
+
+def test_pressing_enter_in_the_form_does_not_submit_the_page(app_js):
+    assert "form.addEventListener('submit', (event) => event.preventDefault())" in app_js
+
+
+def test_nothing_a_card_says_is_ever_set_as_markup(app_js):
+    """A name, an access line and a launch come from a file that anything able
+    to write it could fill: they are text, and only ever text."""
+    start = app_js.index("// --- servers reached by ssh")
+    end = app_js.index("// Builds used to be kept in this browser's localStorage.")
+    servers = app_js[start:end]
+    cards = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL)
+    for text in (servers, cards.group(0)):
+        assert "innerHTML" not in text
+        assert "insertAdjacentHTML" not in text
+        assert "outerHTML" not in text
+
+
+def test_editing_a_server_puts_the_card_back_in_the_form_and_saves_over_it(app_js):
+    edit = re.search(r"function editServer\(.*?\n\}", app_js, re.DOTALL)
+    assert edit is not None
+    for field in ("name", "access", "launch", "database", "stage"):
+        assert f"entry.{field}" in edit.group(0), field
+    assert "state.serverEditing = entry.id" in edit.group(0)
+    save = re.search(r"async function saveServerForm\(.*?\n\}", app_js, re.DOTALL)
+    assert "api.put(" in save.group(0) and "api.post(" in save.group(0)
+
+
+def test_a_session_on_a_server_is_reopened_from_its_card(app_js):
+    duplicate = re.search(r"record\.duplicating = true;(.*?)\n  \} catch", app_js, re.DOTALL)
+    assert duplicate is not None
+    body = duplicate.group(1)
+    assert "'ssh'" in body
+    assert "state.servers" in body, "the card is what says where the server is"
+
+
+def test_the_connect_mode_remembers_ssh_too(app_js):
+    assert "osConnectMode" in app_js
+    assert "ssh: [" in app_js, "the mode has a title and a line of its own"

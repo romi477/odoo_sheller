@@ -480,6 +480,34 @@ def create_app(registry: Registry | None = None) -> FastAPI:
 
         return app.state.registry.targets
 
+    def present(card: dict) -> dict:
+        """A card as the API shows it. An ssh card also says, in a few words,
+        where it goes and who it runs as — read from its recipe, so a card can be
+        recognised before anything has been probed. A recipe that has stopped
+        parsing (a key file that has gone) says so there and stays listed: the
+        card is how its owner finds out, and edits it."""
+        if card["kind"] != "ssh":
+
+            return card
+        try:
+            access = cards().parse_access(card["access"])
+            launch = cards().parse_launch(card["launch"], card["database"])
+        except RecipeError as exc:
+
+            return {**card, "summary": {
+                "destination": None, "port": None, "runs_as": None,
+                "database": None, "error": str(exc),
+            }}
+        runs_as = (access.become.user or "root") if access.become else access.user
+
+        return {**card, "summary": {
+            "destination": access.destination,
+            "port": access.port,
+            "runs_as": runs_as,
+            "database": launch.database,
+            "error": None,
+        }}
+
     def unusable(exc: TargetsError) -> HTTPException:
 
         return HTTPException(
@@ -493,10 +521,15 @@ def create_app(registry: Registry | None = None) -> FastAPI:
 
     @app.get("/api/targets")
     async def list_targets():
-        """Every card, newest first. Names, not secrets — so no key to read."""
+        """Every card, odoo.sh then ssh, each newest first.
+
+        No key to read: opening a session on a card needs none either, so the
+        text of a card is not what stands between a local caller and the
+        server. An ssh card carries a `summary` of where its recipe goes.
+        """
         try:
 
-            return cards().list()
+            return [present(card) for card in cards().list()]
         except TargetsError as exc:
             raise unusable(exc) from None
 
@@ -522,8 +555,8 @@ def create_app(registry: Registry | None = None) -> FastAPI:
 
                 return cards().add_odoosh(body.build, body.host)
 
-            return cards().add_ssh(
-                body.name, body.access, body.launch, body.database, body.stage
+            return present(
+                cards().add_ssh(body.name, body.access, body.launch, body.database, body.stage)
             )
         except RecipeError as exc:
             raise recipe_refused(exc) from None
@@ -539,7 +572,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         require_admin(x_os_admin_key)
         try:
 
-            return cards().update(target_id, body.model_dump(exclude_unset=True))
+            return present(cards().update(target_id, body.model_dump(exclude_unset=True)))
         except KeyError:
             raise HTTPException(status_code=404, detail=f"no target {target_id!r}") from None
         except RecipeError as exc:

@@ -1190,6 +1190,34 @@ def test_an_ssh_card_is_written_with_the_admin_key_and_defaults_to_production(cl
     assert client.get("/api/targets").json() == [card]
 
 
+def test_an_ssh_card_carries_a_summary_so_it_can_be_read_before_it_is_probed(client):
+    card = client.post("/api/targets", json={**SSH, "database": "acme"}, headers=ADMIN).json()
+    assert card["summary"] == {
+        "destination": "ubuntu@srv.example.com",
+        "port": None,
+        "runs_as": "odoo",
+        "database": "acme",
+        "error": None,
+    }
+    assert client.get("/api/targets").json() == [card]
+
+
+def test_a_card_that_no_longer_parses_says_so_in_the_list_and_is_still_listed(client):
+    """A key file that has gone since the card was written. The card has to stay
+    visible — it is how its owner finds out, and edits it."""
+    client.post("/api/targets", json=SSH, headers=ADMIN)
+    client.registry.targets._is_file = lambda path: False
+    listed = client.get("/api/targets").json()
+    assert len(listed) == 1
+    assert listed[0]["summary"]["error"]
+    assert "key.pem" in listed[0]["summary"]["error"]
+    assert listed[0]["summary"]["destination"] is None
+
+
+def test_an_odoosh_card_has_no_summary(client):
+    assert "summary" not in client.post("/api/targets", json=BUILD, headers=ADMIN).json()
+
+
 def test_both_kinds_are_listed_together(client):
     client.post("/api/targets", json=BUILD, headers=ADMIN)
     client.post("/api/targets", json=SSH, headers=ADMIN)

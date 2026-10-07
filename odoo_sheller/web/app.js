@@ -25,6 +25,9 @@ const state = {
   connectMode: 'local',
   builds: [],
   buildsError: null,
+  servers: [],
+  serversError: null,
+  serverEditing: null,
   containerCards: new Map(),
 };
 
@@ -451,19 +454,28 @@ function showScreen(screen) {
 // but a build id alone is opaque, and an odoo.sh database is the instance's
 // own 60-character name, so display needs its own answer.
 function targetLabel(info) {
-  if (info.kind === 'odoosh') {
+  if (isRemote(info)) {
 
-    return `${info.container} / ${info.stage || 'odoo.sh'}`;
+    return `${info.container} / ${info.stage || info.kind}`;
   }
 
   return `${info.container} / ${info.database}`;
 }
 
+// Anything that is not a local container: someone else's Odoo, so being the
+// owner is not enough to write to it. Sessions from before the kind was sent
+// have none, and are local.
+function isRemote(info) {
+
+  return Boolean(info.kind) && info.kind !== 'docker';
+}
+
 // What is about to be written to, for a confirmation that has to be read.
 function targetForConfirm(info) {
-  if (info.kind === 'odoosh') {
+  if (isRemote(info)) {
+    const noun = info.kind === 'odoosh' ? 'build' : 'server';
 
-    return `${info.database}\n\non ${info.stage} build ${info.container} (${info.host})`;
+    return `${info.database}\n\non ${info.stage} ${noun} ${info.container} (${info.host})`;
   }
 
   return info.database;
@@ -540,20 +552,27 @@ function patchBuild(build, patch) {
   state.builds = state.builds.map((item) => (item.build === build ? {...item, ...patch} : item));
 }
 
-async function loadBuilds() {
+async function loadTargets() {
   try {
     const cards = await request(() => api.get('/api/targets'));
-    const known = new Map(state.builds.map((item) => [item.id, item]));
-    state.builds = cards.map((card) => ({
+    // What a probe said is about now, not about the card: keep it across a
+    // reload of the list, and never store it.
+    const known = new Map([...state.builds, ...state.servers].map((item) => [item.id, item]));
+    const withProbe = (card) => ({
       ...card,
       probe: known.get(card.id)?.probe,
       probing: known.get(card.id)?.probing,
-    }));
+    });
+    state.builds = cards.filter((card) => card.kind === 'odoosh').map(withProbe);
+    state.servers = cards.filter((card) => card.kind === 'ssh').map(withProbe);
     state.buildsError = null;
+    state.serversError = null;
   } catch (error) {
     state.buildsError = error.message;
+    state.serversError = error.message;
   }
   renderBuilds();
+  renderServers();
 }
 
 async function addBuild(build, host) {
@@ -566,7 +585,7 @@ async function addBuild(build, host) {
 
     return;
   }
-  await loadBuilds();
+  await loadTargets();
   await probeBuild(build, host);
 }
 
@@ -578,7 +597,290 @@ async function forgetBuild(entry) {
 
     return;
   }
-  await loadBuilds();
+  await loadTargets();
+}
+
+// --- servers reached by ssh ----------------------------------------------
+//
+// A server is written down by whoever can log in, in two fields: Access, how to
+// arrive as the right user, and Launch, what to run once there. Neither is run
+// here: the daemon parses them against a whitelist, and what this form shows is
+// what that parse says they mean — in sentences, before anything is saved,
+// because the realistic way to get a wrong recipe is to paste one.
+
+function serverFormElement() {
+
+  return document.querySelector('#ssh .ssh-form');
+}
+
+function serverFields() {
+  const form = serverFormElement();
+
+  return {
+    name: form.querySelector('.ssh-name').value.trim(),
+    access: form.querySelector('.ssh-access').value.trim(),
+    launch: form.querySelector('.ssh-launch').value.trim(),
+    database: form.querySelector('.ssh-database').value.trim() || null,
+    stage: form.querySelector('.ssh-stage').value,
+  };
+}
+
+// An error belongs under the field it is about; a field nobody has typed in yet
+// is not wrong, just empty.
+function showFieldErrors(errors) {
+  const fields = serverFields();
+  serverFormElement().querySelectorAll('.field-error').forEach((element) => {
+    const message = errors[element.dataset.field];
+    const typed = Boolean(fields[element.dataset.field]);
+    element.hidden = !message || !typed;
+    element.textContent = message || '';
+  });
+}
+
+function breakdownLine(...pieces) {
+  const line = document.createElement('div');
+  line.className = 'fact';
+  pieces.forEach((piece) => {
+    if (typeof piece === 'string') {
+      line.append(piece);
+    } else {
+      const strong = document.createElement(piece.mono ? 'code' : 'b');
+      strong.textContent = piece.text;
+      line.append(strong);
+    }
+  });
+
+  return line;
+}
+
+function renderBreakdown(breakdown) {
+  const lines = [];
+  const login = breakdown.login;
+  lines.push(breakdownLine(
+    login.user ? 'Logs in as ' : 'Logs in to ',
+    ...(login.user ? [{text: login.user}, ' to '] : []),
+    {text: `${login.host}${login.port ? `:${login.port}` : ''}`},
+    ...(login.user ? [] : [", as ssh's default user"]),
+    ...(breakdown.keys.length ? [' with key ', {text: breakdown.keys.join(', '), mono: true}] : []),
+    ...(breakdown.jump ? [' through ', {text: breakdown.jump}] : []),
+  ));
+  lines.push(breakdown.become
+    ? breakdownLine(
+      'Then becomes ',
+      {text: breakdown.become.user || 'root'},
+      ' with sudo — no password, and its own home directory when -H is given',
+    )
+    : breakdownLine('Runs as the login user, ', {text: breakdown.runs_as || 'ssh\'s default'}));
+  lines.push(breakdownLine(
+    'Runs ',
+    {text: breakdown.launch.argv.join(' '), mono: true},
+    ...(breakdown.launch.config ? [' — config ', {text: breakdown.launch.config}] : []),
+  ));
+  const where = {
+    field: 'from the Database field',
+    launch: 'written in the launch',
+  }[breakdown.database_source];
+  lines.push(breakdown.database
+    ? breakdownLine('Database ', {text: breakdown.database}, ` (${where})`)
+    : breakdownLine("Database: the server's own — whatever db_name its config says"));
+  breakdown.warnings.forEach((warning) => {
+    const line = breakdownLine(warning);
+    line.classList.add('caution');
+    lines.push(line);
+  });
+  const details = document.createElement('details');
+  const summary = document.createElement('summary');
+  summary.textContent = 'The command, assembled';
+  const pre = document.createElement('pre');
+  pre.textContent = breakdown.assembled;
+  details.append(summary, pre);
+  lines.push(details);
+  serverFormElement().querySelector('.ssh-breakdown').replaceChildren(...lines);
+}
+
+function renderBreakdownNeedsKey() {
+  const line = breakdownLine('The admin key is needed to check a recipe. ');
+  line.classList.add('caution');
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = 'Enter admin key';
+  button.addEventListener('click', async () => {
+    if (await askForAdminKey()) {
+      parseServerForm();
+    }
+  });
+  line.append(button);
+  serverFormElement().querySelector('.ssh-breakdown').replaceChildren(line);
+}
+
+let serverParseTimer = 0;
+let serverParseSerial = 0;
+
+function scheduleServerParse() {
+  window.clearTimeout(serverParseTimer);
+  serverParseTimer = window.setTimeout(parseServerForm, 350);
+}
+
+// The decoded form of what is typed, as it is typed. A stale answer is dropped:
+// the last keystroke is the one that is being asked about.
+async function parseServerForm() {
+  const {access, launch, database} = serverFields();
+  const breakdown = serverFormElement().querySelector('.ssh-breakdown');
+  const serial = (serverParseSerial += 1);
+  if (!access && !launch) {
+    showFieldErrors({});
+    breakdown.replaceChildren();
+
+    return;
+  }
+  try {
+    const result = await request(
+      () => api.post('/api/targets/parse', {access, launch, database}, adminHeaders()),
+    );
+    if (serial !== serverParseSerial) {
+
+      return;
+    }
+    showFieldErrors(result.ok ? {} : result.errors);
+    if (result.ok) {
+      renderBreakdown(result.breakdown);
+    } else {
+      breakdown.replaceChildren();
+    }
+  } catch (error) {
+    if (serial !== serverParseSerial) {
+
+      return;
+    }
+    if (error.status === 403) {
+      renderBreakdownNeedsKey();
+    } else {
+      breakdown.replaceChildren(breakdownLine(`Could not check the recipe: ${error.message}`));
+    }
+  }
+}
+
+function showServerProbe(text, {error = false} = {}) {
+  const result = serverFormElement().querySelector('.ssh-probe-result');
+  result.hidden = !text;
+  result.textContent = text || '';
+  result.classList.toggle('error', error);
+}
+
+function describeServerProbe(probe) {
+  const parts = [
+    `Logs in as ${probe.login_user || '?'}, runs as ${probe.effective_user} on ${probe.host}`,
+    probe.python ? `Python ${probe.python}` : null,
+    probe.odoo_version ? `Odoo ${probe.odoo_version}` : 'Odoo version not readable here — checked when a session starts',
+    probe.config_readable ? 'config readable' : null,
+  ];
+  if (probe.warning) {
+    parts.push(probe.warning);
+  }
+
+  return parts.filter(Boolean).join(' · ');
+}
+
+async function probeServerForm() {
+  const {access, launch, database} = serverFields();
+  if (!access || !launch) {
+    showFieldErrors({access: access ? '' : 'Write how to arrive first.', launch: launch ? '' : 'Write what to run first.'});
+
+    return;
+  }
+  showServerProbe('probing server…');
+  try {
+    const probe = await withAdminRetry(() => api.post(
+      '/api/targets/probe', {kind: 'ssh', access, launch, database}, adminHeaders(),
+    ));
+    if (probe.ok && probe.supported) {
+      showServerProbe(describeServerProbe(probe));
+    } else {
+      showServerProbe(probe.error || 'The probe failed.', {error: true});
+    }
+  } catch (error) {
+    const detail = error.detail;
+    if (error.status === 422 && detail?.error === 'invalid_recipe') {
+      showServerProbe('');
+      showFieldErrors({[detail.field || 'access']: detail.message});
+    } else {
+      showServerProbe(error.message, {error: true});
+    }
+  }
+}
+
+async function saveServerForm() {
+  const fields = serverFields();
+  if (!fields.name) {
+    showFieldErrors({name: 'Give it a name.'});
+
+    return;
+  }
+  const editing = state.serverEditing;
+  try {
+    await withAdminRetry(() => (editing
+      ? api.put(`/api/targets/${editing}`, fields, adminHeaders())
+      : api.post('/api/targets', {kind: 'ssh', ...fields}, adminHeaders())));
+  } catch (error) {
+    const detail = error.detail;
+    if (error.status === 422 && detail?.error === 'invalid_recipe') {
+      showFieldErrors({[detail.field || 'access']: detail.message});
+    } else if (error.status === 422) {
+      // The name is the field that can clash; a stage is a select.
+      showFieldErrors({name: typeof detail === 'string' ? detail : error.message});
+    } else {
+      noticeDialog(`Could not save the server: ${error.message}`);
+    }
+
+    return;
+  }
+  resetServerForm();
+  await loadTargets();
+}
+
+function resetServerForm() {
+  const form = serverFormElement();
+  state.serverEditing = null;
+  form.querySelector('.ssh-name').value = '';
+  form.querySelector('.ssh-access').value = '';
+  form.querySelector('.ssh-launch').value = '';
+  form.querySelector('.ssh-database').value = '';
+  form.querySelector('.ssh-stage').value = 'production';
+  form.querySelector('.ssh-save').textContent = 'Save';
+  form.querySelector('.ssh-cancel').hidden = true;
+  serverParseSerial += 1;
+  showFieldErrors({});
+  showServerProbe('');
+  form.querySelector('.ssh-breakdown').replaceChildren();
+}
+
+function editServer(entry) {
+  const form = serverFormElement();
+  resetServerForm();
+  state.serverEditing = entry.id;
+  form.querySelector('.ssh-name').value = entry.name;
+  form.querySelector('.ssh-access').value = entry.access;
+  form.querySelector('.ssh-launch').value = entry.launch;
+  form.querySelector('.ssh-database').value = entry.database || '';
+  form.querySelector('.ssh-stage').value = entry.stage;
+  form.querySelector('.ssh-save').textContent = 'Save changes';
+  form.querySelector('.ssh-cancel').hidden = false;
+  form.scrollIntoView({block: 'nearest'});
+  parseServerForm();
+}
+
+async function forgetServer(entry) {
+  try {
+    await withAdminRetry(() => api.del(`/api/targets/${entry.id}`, adminHeaders()));
+  } catch (error) {
+    noticeDialog(`Could not remove the server: ${error.message}`);
+
+    return;
+  }
+  if (state.serverEditing === entry.id) {
+    resetServerForm();
+  }
+  await loadTargets();
 }
 
 // Builds used to be kept in this browser's localStorage. Moved to the daemon
@@ -623,35 +925,49 @@ async function migrateBuilds() {
     localStorage.removeItem('osBuilds');
   } finally {
     migratingBuilds = false;
-    await loadBuilds();
+    await loadTargets();
   }
 }
 
 function renderTargets() {
-  // A session lives on one of the two lists and its card is on whichever one
-  // is showing. Redrawing only the containers left a build's connected badge
+  // A session lives on one of three lists and its card is on whichever one is
+  // showing. Redrawing only the containers left a build's connected badge
   // standing after the session was closed.
   renderContainers();
   renderBuilds();
+  renderServers();
 }
 
+const CONNECT_COPY = {
+  local: ['Containers', 'Pick one to probe it and start a session.'],
+  odoosh: ['Odoo.sh builds', 'Enter a build id and its hostname. The instance decides the rest.'],
+  ssh: [
+    'Servers',
+    'Write down how to arrive and what to run there. Nothing about a server can be discovered.',
+  ],
+};
+
 function setConnectMode(mode) {
+  if (!CONNECT_COPY[mode]) {
+    mode = 'local';
+  }
   state.connectMode = mode;
   localStorage.setItem('osConnectMode', mode);
   document.querySelectorAll('#connect-modes [data-connect-mode]').forEach((button) => {
     button.classList.toggle('active', button.dataset.connectMode === mode);
   });
-  const local = mode === 'local';
-  document.querySelector('#containers').hidden = !local;
-  document.querySelector('#refresh').hidden = !local;
-  document.querySelector('#odoosh').hidden = local;
-  document.querySelector('#connect-title').textContent = local ? 'Containers' : 'Odoo.sh builds';
-  document.querySelector('#connect-lede').textContent = local
-    ? 'Pick one to probe it and start a session.'
-    : 'Enter a build id and its hostname. The instance decides the rest.';
-  if (!local) {
+  document.querySelector('#containers').hidden = mode !== 'local';
+  document.querySelector('#refresh').hidden = mode !== 'local';
+  document.querySelector('#odoosh').hidden = mode !== 'odoosh';
+  document.querySelector('#ssh').hidden = mode !== 'ssh';
+  document.querySelector('#connect-title').textContent = CONNECT_COPY[mode][0];
+  document.querySelector('#connect-lede').textContent = CONNECT_COPY[mode][1];
+  if (mode === 'odoosh') {
     renderBuilds();
     migrateBuilds();
+  }
+  if (mode === 'ssh') {
+    renderServers();
   }
 }
 
@@ -669,16 +985,35 @@ async function probeBuild(build, host) {
   renderBuilds();
 }
 
-async function startOdooshSession(build) {
-  const previous = state.startups.get(build);
+async function probeServer(entry) {
+  patchServer(entry.id, {probing: true});
+  renderServers();
+  try {
+    const probe = await withAdminRetry(() => api.post('/api/targets/probe', {
+      kind: 'ssh', access: entry.access, launch: entry.launch, database: entry.database,
+    }, adminHeaders()));
+    patchServer(entry.id, {probe, probing: false});
+  } catch (error) {
+    patchServer(entry.id, {probe: {ok: false, error: error.message}, probing: false});
+  }
+  renderServers();
+}
+
+function patchServer(id, patch) {
+  state.servers = state.servers.map((item) => (item.id === id ? {...item, ...patch} : item));
+}
+
+// Opening a remote target is the longest wait on this screen — ssh, then a
+// registry load — and the instance's own stderr is the only honest progress, so
+// it is the same record a container start uses. `name` is the identity slot the
+// daemon reports (a build id, or the name on a card); `targetId` is the card.
+async function startRemoteSession(name, targetId, render) {
+  const previous = state.startups.get(name);
   if (previous?.socket) {
     previous.socket.close();
   }
   const token = newClientToken();
-  // The same record a container start uses: SSH plus a registry load is the
-  // longest wait on this screen, and the build's own stderr is the only
-  // honest progress there is.
-  state.startups.set(build, {
+  state.startups.set(name, {
     database: null,
     token,
     sessionId: null,
@@ -693,18 +1028,18 @@ async function startOdooshSession(build) {
     pinned: true,
     scrollTop: 0,
   });
-  renderBuilds();
-  adoptStartingSession(build);
+  render();
+  adoptStartingSession(name);
   try {
     const info = await request(() => api.post('/api/sessions', {
-      target_id: `odoosh-${build}`,
+      target_id: targetId,
       client_token: token,
     }));
-    const opening = state.startups.get(build);
+    const opening = state.startups.get(name);
     const lines = opening
       ? (opening.lines.length ? opening.lines : opening.view)
       : [];
-    stopStartup(build);
+    stopStartup(name);
     if (info.write_key) {
       saveKey(info.id, info.write_key);
       delete info.write_key;
@@ -720,7 +1055,7 @@ async function startOdooshSession(build) {
     state.activeSession = info.id;
     showScreen('sessions');
   } catch (error) {
-    const startup = state.startups.get(build);
+    const startup = state.startups.get(name);
     if (startup) {
       startup.failed = true;
       startup.error = error.message;
@@ -729,36 +1064,107 @@ async function startOdooshSession(build) {
         startup.socket = null;
       }
     }
-    renderBuilds();
+    render();
   }
 }
 
+function startOdooshSession(build) {
+
+  return startRemoteSession(build, `odoosh-${build}`, renderBuilds);
+}
+
+function startServerSession(entry) {
+
+  return startRemoteSession(entry.name, entry.id, renderServers);
+}
+
+// The two kinds of remote card draw alike — a name, a stage, a note from the
+// last probe, an Open session that waits on the instance — and differ in what
+// they say about themselves and what their buttons do.
+const REMOTE_KINDS = {
+  odoosh: {
+    template: '#odoosh-card',
+    list: '#odoosh-builds',
+    noun: 'build',
+    entries: () => state.builds,
+    error: () => state.buildsError,
+    empty: 'No builds yet. Enter one above.',
+    probing: 'probing build…',
+    // The instance says what it is.
+    stage: (entry, probe) => probe.stage,
+    facts: (entry, probe) => [entry.host, ...(probe.ok ? [`Odoo ${probe.odoo_version}`, probe.db_name] : [])],
+    start: (entry) => startOdooshSession(entry.name),
+    reprobe: (entry) => probeBuild(entry.build, entry.host),
+    forget: (entry) => forgetBuild(entry),
+    forgetKept: 'this card is the only record of its hostname here.',
+    startHint: 'Open the session on this build. The instance chooses the database; there is nothing to pick.',
+  },
+  ssh: {
+    template: '#ssh-card',
+    list: '#ssh-servers',
+    noun: 'server',
+    entries: () => state.servers,
+    error: () => state.serversError,
+    empty: 'No servers yet. Write one above.',
+    probing: 'probing server…',
+    // A human says what it is, on the card: nothing on a plain server does.
+    stage: (entry) => entry.stage,
+    facts: (entry, probe) => serverFacts(entry, probe),
+    start: (entry) => startServerSession(entry),
+    reprobe: (entry) => probeServer(entry),
+    forget: (entry) => forgetServer(entry),
+    forgetKept: 'this card is the only record of how to reach it here.',
+    startHint: 'Open the session on this server. The card says which user and which database.',
+  },
+};
+
+function serverFacts(entry, probe) {
+  const summary = entry.summary || {};
+  const where = summary.destination
+    ? `${summary.destination}${summary.port ? `:${summary.port}` : ''}`
+    : null;
+  const as = summary.runs_as ? `as ${summary.runs_as}` : null;
+  const database = probe.ok ? (summary.database || probe.db_name) : summary.database;
+
+  return [where, as, probe.ok ? `Odoo ${probe.odoo_version}` : null, database];
+}
+
 function renderBuilds() {
-  const list = document.querySelector('#odoosh-builds');
+  renderRemoteCards(REMOTE_KINDS.odoosh);
+}
+
+function renderServers() {
+  renderRemoteCards(REMOTE_KINDS.ssh);
+}
+
+function renderRemoteCards(kind) {
+  const list = document.querySelector(kind.list);
+  const entries = kind.entries();
   list.replaceChildren();
-  if (!state.builds.length) {
+  if (!entries.length) {
     const empty = document.createElement('li');
     empty.className = 'empty';
-    empty.textContent = state.buildsError
-      ? `Could not read the saved builds: ${state.buildsError}`
-      : 'No builds yet. Enter one above.';
+    empty.textContent = kind.error()
+      ? `Could not read the saved ${kind.noun}s: ${kind.error()}`
+      : kind.empty;
     list.append(empty);
 
     return;
   }
-  state.builds.forEach((entry) => {
-    const fragment = document.querySelector('#odoosh-card').content.cloneNode(true);
+  entries.forEach((entry) => {
+    const fragment = document.querySelector(kind.template).content.cloneNode(true);
     const card = fragment.querySelector('.card');
     const probe = entry.probe || {};
-    card.dataset.container = entry.build;
-    card.querySelector('.name').textContent = entry.build;
+    card.dataset.container = entry.name;
+    card.querySelector('.name').textContent = entry.name;
 
     const stage = card.querySelector('.stage');
-    if (probe.stage) {
+    const stageName = kind.stage(entry, probe);
+    if (stageName) {
       stage.hidden = false;
-      stage.textContent = probe.stage;
+      stage.textContent = stageName;
       // Production is the one word on this screen worth interrupting for.
-      stage.classList.toggle('production', probe.stage === 'production');
+      stage.classList.toggle('production', stageName === 'production');
     }
 
     const untested = card.querySelector('.untested');
@@ -766,32 +1172,32 @@ function renderBuilds() {
     untested.title = probe.warning || '';
 
     const note = card.querySelector('.probe-note');
-    const facts = [entry.host];
-    if (probe.ok) {
-      facts.push(`Odoo ${probe.odoo_version}`, probe.db_name);
-    }
-    card.querySelector('.meta').textContent = facts.filter(Boolean).join(' · ');
+    card.querySelector('.meta').textContent = kind.facts(entry, probe).filter(Boolean).join(' · ');
+    // A recipe that no longer parses is the card's own fault, and said on it.
+    const broken = entry.summary?.error;
     if (entry.probing) {
-      note.textContent = 'probing build…';
+      note.textContent = kind.probing;
+    } else if (broken) {
+      note.textContent = broken;
+      note.classList.add('error');
     } else if (probe.ok && probe.supported) {
       note.hidden = true;
     } else {
       note.textContent = probe.error || 'not probed yet';
+      note.classList.toggle('error', Boolean(probe.error));
     }
 
     // A card nobody has probed this load is not a bad card: the daemon asks the
     // instance on the way in, and refuses there if it must.
-    card.querySelector('.start').disabled = Boolean(entry.probing)
+    card.querySelector('.start').disabled = Boolean(entry.probing) || Boolean(broken)
       || (Boolean(entry.probe) && !(probe.ok && probe.supported));
-    card.querySelector('.start').addEventListener(
-      'click', () => startOdooshSession(entry.build),
-    );
-    card.querySelector('.reprobe').addEventListener(
-      'click', () => probeBuild(entry.build, entry.host),
-    );
-    card.querySelector('.forget').addEventListener('click', () => forgetBuild(entry));
+    card.querySelector('.start').addEventListener('click', () => kind.start(entry));
+    card.querySelector('.reprobe').addEventListener('click', () => kind.reprobe(entry));
+    card.querySelector('.reprobe').disabled = Boolean(broken);
+    card.querySelector('.forget').addEventListener('click', () => kind.forget(entry));
+    card.querySelector('.edit')?.addEventListener('click', () => editServer(entry));
 
-    const open = sessionsForTarget(entry.build);
+    const open = sessionsForTarget(entry.name);
     const connected = card.querySelector('.connected');
     const close = card.querySelector('.close-connected');
     if (open.length) {
@@ -800,20 +1206,20 @@ function renderBuilds() {
       close.hidden = false;
       close.textContent = closeLabel(open);
       close.title = open.length > 1
-        ? 'Close every session on this build. Uncommitted work is discarded.'
-        : 'Close the session on this build. Uncommitted work is discarded.';
-      close.addEventListener('click', () => closeSessionsForTarget(entry.build));
+        ? `Close every session on this ${kind.noun}. Uncommitted work is discarded.`
+        : `Close the session on this ${kind.noun}. Uncommitted work is discarded.`;
+      close.addEventListener('click', () => closeSessionsForTarget(entry.name));
     }
 
-    // Forgetting the card removes the only record of this hostname on this
+    // Forgetting the card removes the only record of where this is on this
     // machine, and a live session would be left with nothing pointing at it.
     const forget = card.querySelector('.forget');
     forget.disabled = open.length > 0;
     forget.title = open.length
-      ? `Close ${open.length > 1 ? 'the sessions' : 'the session'} on this build first — this card is the only record of its hostname here.`
-      : 'Remove this build from the list. Nothing on the instance changes.';
+      ? `Close ${open.length > 1 ? 'the sessions' : 'the session'} on this ${kind.noun} first — ${kind.forgetKept}`
+      : `Remove this ${kind.noun} from the list. Nothing on the instance changes.`;
 
-    const startup = state.startups.get(entry.build);
+    const startup = state.startups.get(entry.name);
     const start = card.querySelector('.start');
     if (startup) {
       const well = card.querySelector('.startup-log');
@@ -821,7 +1227,7 @@ function renderBuilds() {
       start.classList.toggle('busy', !startup.failed);
       start.setAttribute('aria-busy', startup.failed ? 'false' : 'true');
       start.title = startup.failed
-        ? 'Open the session on this build. The instance chooses the database; there is nothing to pick.'
+        ? kind.startHint
         : 'Opening a session — over SSH, then Odoo loads its registry.';
       note.hidden = false;
       well.hidden = false;
@@ -1904,7 +2310,7 @@ function bindSessionPanel(panel, id, record) {
   // On someone else's instance the flag gates the human too — they grant it to
   // themselves the same way they grant it to an agent — and on production
   // nothing grants it at all.
-  const remote = record.info.kind === 'odoosh';
+  const remote = isRemote(record.info);
   const production = record.info.stage === 'production';
   grant.disabled = production || !(owner.kind === 'agent' || remote);
   grant.title = production
@@ -2747,6 +3153,13 @@ async function duplicateSession(id) {
       // way in, and the instance dictates the database either way. Its card
       // is what says where it is.
       opening = {target_id: `odoosh-${record.info.container}`};
+    } else if (record.info.kind === 'ssh') {
+      // The card is what says where the server is, and what to run there.
+      const card = state.servers.find((item) => item.name === record.info.container);
+      if (!card) {
+        throw new Error(`The card for ${record.info.container} is gone — write it down again.`);
+      }
+      opening = {target_id: card.id};
     } else {
       const container = state.containers.find((item) => item.name === record.info.container);
       const probe = container?.probe?.odoo_bin
@@ -3618,6 +4031,18 @@ function restoreScreen() {
 document.querySelectorAll('#connect-modes [data-connect-mode]').forEach((button) => {
   button.addEventListener('click', () => setConnectMode(button.dataset.connectMode));
 });
+{
+  const form = serverFormElement();
+  // Enter in a field must not submit the page; Save is the button.
+  form.addEventListener('submit', (event) => event.preventDefault());
+  ['.ssh-access', '.ssh-launch', '.ssh-database'].forEach((selector) => {
+    form.querySelector(selector).addEventListener('input', scheduleServerParse);
+  });
+  form.querySelector('.ssh-name').addEventListener('input', () => showFieldErrors({}));
+  form.querySelector('.ssh-probe').addEventListener('click', probeServerForm);
+  form.querySelector('.ssh-save').addEventListener('click', saveServerForm);
+  form.querySelector('.ssh-cancel').addEventListener('click', resetServerForm);
+}
 document.querySelector('.odoosh-add').addEventListener('click', () => {
   const build = document.querySelector('.odoosh-build').value.trim();
   const host = document.querySelector('.odoosh-host').value.trim();
@@ -3642,6 +4067,6 @@ if (new URLSearchParams(location.search).has('app')) {
 
 connectRegistrySocket();
 restoreScreen();
-setConnectMode(localStorage.getItem('osConnectMode') === 'odoosh' ? 'odoosh' : 'local');
+setConnectMode(localStorage.getItem('osConnectMode'));
 setInterval(tickSessionAges, 1000);
-Promise.allSettled([loadContainers(), reattachSessions(), loadBuilds()]);
+Promise.allSettled([loadContainers(), reattachSessions(), loadTargets()]);
