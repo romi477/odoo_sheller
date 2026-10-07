@@ -3227,3 +3227,12 @@ def test_a_form_is_folded_by_default_and_open_only_when_the_person_opened_it(app
 def test_an_empty_list_points_at_the_folded_form_above_it(app_js):
     assert "empty: 'No servers yet. Open New server above and write one.'" in app_js
     assert "empty: 'No builds yet. Open Add a build above and enter one.'" in app_js
+
+
+def test_the_probe_key_on_every_kind_of_card_reads_probe_with_a_capital():
+    """It is the same key on a container, a build and a server, and the one beside
+    it already reads "Open session"."""
+    page = _page()
+    labels = re.findall(r'<button class="reprobe"[^>]*>([^<]*)</button>', page)
+    assert len(labels) == 3, "a card for each kind"
+    assert set(labels) == {"Probe"}, labels
