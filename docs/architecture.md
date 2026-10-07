@@ -463,7 +463,8 @@ It refuses what would make ssh act on *this* machine — `ProxyCommand`,
 checking, each with a message that says why. Launch is an absolute path, a
 standalone `shell` token (the first argument after the script — Odoo allows
 only a leading `--addons-path=…` before it), and is **not modified**: nothing is
-appended but `-d DATABASE`, and only when the Database field is filled.
+appended: a database is named by writing `-d NAME` in it, and a card has no
+separate Database field.
 
 **What the server's config can do to `shell`.** `odoo-bin shell` calls
 `server.start(preload=[], stop=True)`. With `workers = 0` (the default) that is the
@@ -482,9 +483,9 @@ and `http_port` from the config and says what will happen, and a session that do
 die on the port is told what to add.
 
 **The stage is declared.** Nothing on a plain server says what it is, so the card
-carries a stage, defaulting to `production` (commit refused outright);
-`staging` and `development` are closed to commit until granted, like an odoo.sh
-staging build. For odoo.sh the stage is read from the instance and never stored,
+carries a stage, defaulting to `production` — which only a human writes to, once,
+after typing its name — or `staging`, closed to commit until granted like an
+odoo.sh staging build. For odoo.sh the stage is read from the instance and never stored,
 because a stored one would be a caller-named one and the commit guard would be
 decorative.
 

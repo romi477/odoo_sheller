@@ -150,17 +150,27 @@ whole of the remote safety story:
   the flag exists to gate an agent. Owning the session is not the same as
   being entitled to write to someone's instance, so there the flag gates the
   human too.
-- **On `production`, commit is refused outright.** Both the commit and the
-  attempt to grant the right raise `commit_forbidden` — a guard that can be
-  granted around is not a guard. Reading is untouched: `exec` and `rollback`
-  work, because inspecting a production instance is the legitimate case and
-  only writing is not.
+- **On `production`, only a human writes, once, by typing its name.** An agent is
+  refused with `commit_forbidden`, both at the commit and at the attempt to grant
+  it the right, whoever asks: it prepares in a transaction that rolls back, hands
+  the session over, and a human commits it — or does not. A human's grant takes
+  the target's name, typed by them and checked by the session, and is for one
+  commit: attempting one spends it (also when no answer came, since nobody knows
+  whether the write happened), and so does a rollback or a handover, which end
+  the transaction it was given for. The journal records the grant with the name
+  that was typed, its spending, and the stage of every commit. Reading is
+  untouched: `exec` and `rollback` work, because inspecting a production instance
+  is the legitimate case. This used to be refused outright, and on an ssh card
+  that was one mislabelled stage away from nothing: a fix that had to be
+  committed on a production server meant calling it "staging", and losing every
+  signal that it is not. A guard that cannot be passed honestly is passed
+  dishonestly.
 
 **A server reached over SSH has the same three guards, with a different source of
 truth, and one risk that is new.** Nothing on a plain server says what it is, so
 the stage is *declared* by the human who writes the card, and defaults to
-`production` — commit refused outright. `staging` and `development` are closed to
-commit until granted, like an odoo.sh staging build. A stage is stored for this
+`production`, where only a human commits, once. `staging` is closed to commit until
+granted, like an odoo.sh staging build. A stage is stored for this
 kind and read from the instance for odoo.sh; for odoo.sh a stored stage would be a
 caller-named one, which the guard must never trust. Only a human opens one:
 `os_open_session` has no host, no build and no card, and `os_open_session(replace=…)`
@@ -229,7 +239,8 @@ block: `~/.ssh/config` is yours, and nothing here writes to it.
 
 The refusal codes differ on purpose. `commit_not_allowed` means ask the human
 and then watch for the grant; `commit_forbidden` means nothing will ever
-grant it, and an agent that treated them alike would poll forever.
+grant it to that caller (an agent, on production), and an agent that treated them
+alike would poll forever.
 
 **The daemon still never listens anywhere but `127.0.0.1`.** Reaching *out*
 over SSH is not the same as being reachable: the connection is outbound, the
@@ -281,9 +292,9 @@ version.
 **A remote session's journal holds that instance's data, on your machine.**
 This was weighed and accepted rather than overlooked. The reasoning: this is
 a debugging tool pointed at our own staging builds, those instances and their
-data are ours, and production access is not expected to be granted to it at
-all — which is also why production refuses a commit rather than merely
-warning. Paying for meaning-aware masking to protect our own staging data is
+data are ours, and production access is not expected to be granted to it as a
+matter of course — which is also why a commit there takes a typed name and is for
+once, rather than a click. Paying for meaning-aware masking to protect our own staging data is
 not worth it today.
 
 Revisit that the moment this is pointed at an instance whose data is not
@@ -351,7 +362,7 @@ the user. Guards that can be absent without anyone noticing are not guards.
 | A web page in your browser, on any site | Nothing: a request from it names another `Host`, or carries another `Origin`, and is refused as `foreign_host` or `foreign_origin` — a socket at the handshake | Reach the API or the event streams, or make the daemon run a command through an `ssh` argument |
 | A browser tab that isn't a session's owner | Watch that session's output live | Type into it, commit, or grant itself commit rights |
 | An agent with a session of its own | Run code, rollback, read journals it can reach | Commit, without a human granting it first — a grant, or a handover to a human, made with its own key is refused as `needs_a_human`; act on a session it wasn't opened in or handed |
-| An agent handed a remote session | Run code, run tests, rollback, read the instance | Open a remote target itself; commit until granted; commit at all on `production` |
+| An agent handed a remote session | Run code, run tests, rollback, read the instance | Open a remote target itself; commit until granted; commit at all on `production`, whoever grants what |
 | Anyone holding the admin key | Act on any session or journal, including ones they don't own | Bypass Commit's requirement for a human confirmation on a human-owned session |
 | Anyone using the desktop terminal | Run anything `$SHELL -l` can run, as the user who launched the app | Nothing the same user couldn't run in Terminal.app |
 

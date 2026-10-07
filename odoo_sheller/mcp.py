@@ -118,9 +118,9 @@ truncation and are not negotiable:
   death discard it. End experiments with os_rollback.
 - Commit is a right the human grants. On `commit_not_allowed`: stop, say
   what you want to write and why, then poll os_session until allow_commit
-  is true, not os_commit. `commit_forbidden` is never granted: read what
-  you came for and roll back. Never env.cr.commit() or env.cr.rollback()
-  in code: each has a tool.
+  is true, not os_commit. `commit_forbidden` is never granted to you (an
+  agent does not write to production): read, roll back, say what to write.
+  Never env.cr.commit() or env.cr.rollback() in code: each has a tool.
 - Work only in a session you opened or were handed. `not_owner` means ask
   for a handover, not a second session; never use a key you were not given.
 - Never touch ~/.odoo-sheller/ and never call the daemon's admin endpoints.
@@ -263,11 +263,15 @@ Two things differ there, and os_session shows both as `kind` and `stage`:
   owner may commit at will because they confirm in the UI; on someone's own
   Odoo that is not enough, so they grant it there the same way they grant it
   to you.
-- On a `production` instance commit is refused outright, and the refusal is
+- On a `production` instance an agent never writes, and the refusal is
   `commit_forbidden` rather than `commit_not_allowed`. The difference matters:
   `commit_not_allowed` means ask the human and then poll os_session, while
-  `commit_forbidden` means nothing will ever grant it. Polling for that grant
-  is an endless loop. Read what you came to read and end with os_rollback.
+  `commit_forbidden` means nothing will ever grant it to you. Polling for that
+  grant is an endless loop. Do what you can without writing, end with
+  os_rollback, and say what should be written and why. A human may take the
+  session back and commit it themselves: they type the instance's name, and the
+  grant is for one commit — so the work you hand over is checked by someone who
+  commits it, or not at all.
 """,
     "limits": """\
 ## What you cannot do, and must not attempt

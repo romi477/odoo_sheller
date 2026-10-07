@@ -2062,3 +2062,17 @@ def test_the_log_guidance_matches_what_the_tools_now_do():
     assert "stderr_lines" in log and "module" in log
     assert "setUpModule" in server.HELP["tests"]
     assert "1800" in server.HELP["tests"]
+
+
+def test_the_guidance_says_an_agent_never_writes_to_production_and_a_human_may():
+    """The refusal used to read "nothing ever grants it", which was true of the
+    daemon and false of the person: a human may commit there, once, by typing
+    the instance's name. An agent told otherwise would stop at the wrong place —
+    or worse, go looking for a way to be granted what only the human may give."""
+    flat = " ".join(server.INSTRUCTIONS.split())
+    assert "does not write to production" in flat
+    remote = " ".join(server.HELP["remote_server"].split())
+    assert "never writes" in remote
+    assert "take the session back" in remote
+    assert "for one commit" in remote
+    assert "Polling for that grant is an endless loop" in remote

@@ -279,6 +279,8 @@ Rollback is the default everywhere; commit is always an explicit, confirmed act.
   there: only a human opens a remote target (no MCP tool takes a host, a build or
   a card, and the daemon refuses an open that does not come from its own page —
   a bare `curl` — unless it carries the admin key), commit is off until granted even for a human
-  owner, and on `production` it is refused outright, as `commit_forbidden`.
+  owner, and on `production` an agent never writes (`commit_forbidden`): only a
+  human owner commits there, after typing the target's name, and the grant is for
+  one commit.
   A remote session's journal holding that instance's data was weighed and
   accepted; see `docs/security.md`.

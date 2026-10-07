@@ -180,11 +180,12 @@ whoever can log in writes it down, in two fields and a few more:
   above 0 makes the shell bind its HTTP port first, and fails beside the running
   service with "Address already in use". The form warns when neither is there, and
   Probe says what the config will do.
-- **Database** (optional) — appended to Launch as `-d`; empty means the server's
-  own `db_name`. Written in both places is an error.
-- **Stage** — `production` (the default: commit refused outright), `staging` or
-  `development` (commit off until you grant it). Nothing on a plain server says
-  what it is, so you do.
+- **Stage** — `production` (the default: only you commit, one commit at a time,
+  after typing its name; an agent never writes there) or `staging` (commit off
+  until you grant it). Nothing on a plain server says what it is, so you do.
+
+There is no field for a database: name one with `-d NAME` in Launch, or leave it
+out and the server's own `db_name` decides.
 
 Under the fields the form says, in sentences, what the recipe means as it is
 typed — who it logs in as, to where, with which key; which user it becomes; what

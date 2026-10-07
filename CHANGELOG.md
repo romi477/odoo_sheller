@@ -88,13 +88,15 @@ a pty) and anything that would weaken host key checking, with a message that
 says why; options after the host are accepted and normalised. After the
 destination only `sudo -n [-u USER] [-H]` may follow — `su`, `runuser` and
 `doas` are refused until someone has checked that they keep fd 3. Launch is
-run exactly as written: nothing is appended but `-d DATABASE`, and only when
-the optional Database field is filled; writing it in both places is an error.
+run exactly as written, nothing appended: a database is named by writing `-d NAME`
+in it, and a card has no separate Database field (one place to look when something
+opens the wrong database). A client that still sends one is refused in words.
 
 Nothing on a plain server says what it is, so **stage is declared on the card**
-and defaults to `production`, which refuses a commit outright. `staging` and
-`development` behave like an odoo.sh staging build: commit is off until a human
-grants it, even for the owner. A probe (`POST /api/targets/probe`) shows who the
+and defaults to `production` (see below). The other is `staging`, which behaves
+like an odoo.sh staging build: commit is off until a human grants it, even for
+the owner. There were three stages, but `development` behaved exactly as
+`staging` did; a card written with it reads as `staging`. A probe (`POST /api/targets/probe`) shows who the
 recipe lands as, where, which interpreter, whether the executable and the config
 are readable by that user — a server's config is usually readable only by its
 Odoo user, so forgetting the `sudo` reads as exactly that — and which Odoo, read
@@ -132,6 +134,34 @@ The double has `workers = 2` and something listening on 8069, so the end-to-end 
 fail the way the real server did; they cover leaving HTTP alone, both ways of turning
 it off, a free moved port (twice in a row), and a port moved onto the service's own.
 
+### A human may write to production — once, by typing its name
+
+Production refused a commit outright, and on an ssh card that was one mislabelled
+stage away from nothing: the stage is declared by whoever writes the card, so a fix
+that had to be committed on a production server meant calling it "staging", and
+losing every signal that it is not. There was no honest way to do what a person
+sometimes has to.
+
+On production a commit is now refused until a human grants it, and the grant is
+narrow:
+
+- **Only a human.** An agent is refused with `commit_forbidden` whoever asks, both
+  at the commit and at the attempt to grant it the right. It prepares in a
+  transaction that rolls back and hands the session over; the human commits it —
+  a handover keeps the namespace and the open transaction — or does not.
+- **By typing the name.** `POST /api/sessions/{id}/policy` takes `confirm`, the
+  name of the target as the person typed it, and the session checks it (`422
+  confirm_target` otherwise). The UI asks for it in a dialog.
+- **For one commit.** Attempting a commit spends the grant — also when no answer
+  came, since nobody knows whether the write happened — and so does a rollback,
+  or a handover, which end the transaction it was given for.
+- **On the record.** The journal holds the grant with the name that was typed, its
+  spending, and the stage of every commit. The latch shows red while armed.
+
+Reading and rollback are untouched, and staging is as it was. The agent's help says
+what changed for it: it never writes to production, and may say what should be
+written and why.
+
 ### Odoo 13 and 14 open, with a warning, and are not claimed
 
 The one server this was tried against runs Odoo 13, and the gate refused it.
@@ -153,7 +183,7 @@ parse as Python 3.6, the floor 13 declares.
 ### The Connect screen learns about servers
 
 A third mode beside Local and Odoo.sh: **Server (SSH)**. A form with Name, Access,
-Launch, an optional Database and a Stage (default `production`), and under it what
+Launch and a Stage (default `production`), and under it what
 the recipe means, in sentences, as it is typed — decoded by the daemon
 (`POST /api/targets/parse`), so the page never interprets a recipe itself. A field
 the grammar refuses gets its reason beneath it; a form left without the admin key

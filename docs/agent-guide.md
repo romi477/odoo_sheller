@@ -324,12 +324,14 @@ and `stage`:
   the UI; owning a session is not the same as being entitled to write to
   someone's instance, so there the human grants it the same way they grant it
   to an agent. A handover resets the right in any case.
-- **On `production`, commit is refused outright**, as `commit_forbidden`
+- **On `production`, an agent never writes**: its commit is `commit_forbidden`
   rather than `commit_not_allowed`. The distinction is the point: the first
   means ask and then watch `allow_commit`, the second means nothing will ever
-  grant it. An agent that treated them alike would poll forever. `exec` and
-  `rollback` are untouched — reading a production instance is the legitimate
-  case.
+  grant it *to you*. An agent that treated them alike would poll forever. `exec`
+  and `rollback` are untouched — reading a production instance is the
+  legitimate case. A human may take the session back and commit it themselves:
+  they type the instance's name, and the grant is for one commit, so what you
+  prepared and handed over is written by someone who has looked at it.
 
 Tests are the usual reason to be handed a remote session, and
 `os_run_test(session_id=...)` runs in one rather than opening its own. That
