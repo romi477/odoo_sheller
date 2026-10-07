@@ -2385,15 +2385,20 @@ function bindSessionPanel(panel, id, record) {
   const interrupt = panel.querySelector('.interrupt');
   // Locally a human owner may commit at will, so this latch is an agent gate.
   // On someone else's instance the flag gates the human too — they grant it to
-  // themselves the same way they grant it to an agent — and on production
-  // nothing grants it at all.
+  // themselves the same way they grant it to an agent. On production it is a
+  // human's alone: they type the instance's name, and it is for one commit. An
+  // agent's session is handed back first, and the human commits.
   const remote = isRemote(record.info);
   const production = record.info.stage === 'production';
-  grant.disabled = production || !(owner.kind === 'agent' || remote);
+  const human = owner.kind === 'human';
+  grant.disabled = production ? !human : !(owner.kind === 'agent' || remote);
   grant.title = production
-    ? 'Grant commit — Refused on production. Read all you like; nothing writes.'
+    ? (human
+      ? 'Grant commit — Production. You will be asked to type its name, and the grant is for one commit.'
+      : 'Grant commit — An agent never writes to production. Take the session back, then grant it yourself.')
     : 'Grant commit — Let this session write to the database.';
   grant.setAttribute('aria-pressed', record.info.allow_commit ? 'true' : 'false');
+  panel.classList.toggle('production-grant', production && Boolean(record.info.allow_commit));
   access.setAttribute('aria-pressed', owner.kind === 'agent' ? 'true' : 'false');
   access.title = owner.kind === 'agent'
     ? 'Grant access — Take ownership back from the agent.'
@@ -2407,7 +2412,9 @@ function bindSessionPanel(panel, id, record) {
   // Offering a Commit the daemon will refuse is worse than not offering it.
   commit.disabled = !accepting || (remote && !record.info.allow_commit);
   commit.title = production
-    ? 'Commit — Refused on production.'
+    ? (record.info.allow_commit
+      ? 'Commit — Writes the open transaction to production. Once: the grant is spent.'
+      : 'Commit — Not granted. Use Grant commit and type the name; it is for one commit.')
     : remote && !record.info.allow_commit
       ? 'Commit — Not granted for this instance yet. Use Grant commit first.'
       : 'Commit — Write the open transaction to the database.';
@@ -2957,9 +2964,12 @@ async function transaction(id, kind) {
 
     return;
   }
+  const production = record.info.stage === 'production';
   if (kind === 'commit'
-    && !await confirmDialog(`Commit changes to ${targetForConfirm(record.info)}?`,
-                            'Commit')) {
+    && !await confirmDialog(
+      `${production ? 'WRITE TO PRODUCTION — commit' : 'Commit'} changes to ${targetForConfirm(record.info)}?`,
+      'Commit',
+    )) {
 
     return;
   }
@@ -2975,6 +2985,14 @@ async function transaction(id, kind) {
     renderSessions();
   } catch (error) {
     noticeDialog(`${kind} failed: ${error.message}`);
+  } finally {
+    // The daemon spends a production grant when a commit is attempted — also
+    // one that failed, since nobody knows what it wrote — and when a
+    // transaction ends. A latch left pressed would offer a commit it refuses.
+    if (record.info.stage === 'production') {
+      record.info.allow_commit = false;
+      renderSessions();
+    }
   }
 }
 
@@ -3122,8 +3140,25 @@ async function grantCommit(id, allowed) {
       + 'handing it over, would be written.'
     : 'This instance is not your machine. Everything uncommitted in the session '
       + 'would be written to it.';
-  if (allowed && !await confirmDialog(`${who} to ${targetForConfirm(record.info)}?\n\n${caveat}`,
-                                      'Allow')) {
+  let confirm;
+  if (allowed && record.info.stage === 'production') {
+    // Not a click that can be meant for something else: the name is typed, and
+    // the daemon checks it. The grant is for one commit, then it is gone.
+    const typed = await promptDialog(
+      `PRODUCTION — ${record.info.container} (${record.info.host})\n\n`
+        + 'This allows ONE commit. Everything uncommitted in the session would be '
+        + `written to a live instance.\n\nType its name to confirm: ${record.info.container}`,
+      '',
+      'Allow one commit',
+    );
+    if (typed === null || !typed.trim()) {
+      renderSessions();
+
+      return;
+    }
+    confirm = typed.trim();
+  } else if (allowed && !await confirmDialog(`${who} to ${targetForConfirm(record.info)}?\n\n${caveat}`,
+                                             'Allow')) {
     renderSessions();
 
     return;
@@ -3131,7 +3166,7 @@ async function grantCommit(id, allowed) {
   try {
     const result = await withAdminRetry(() => api.post(
       `/api/sessions/${id}/policy`,
-      {allow_commit: allowed},
+      {allow_commit: allowed, confirm},
       {...authHeaders(id, {admin: true}), 'X-OS-Session-Key': closeKeyFor(id)},
     ));
     record.info.allow_commit = result.allow_commit;

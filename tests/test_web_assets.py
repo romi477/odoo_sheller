@@ -3276,3 +3276,68 @@ def test_nothing_in_the_page_reads_or_sends_a_database_for_a_server(app_js):
 def test_the_stylesheet_has_no_rule_for_a_field_that_is_gone():
     css = (WEB / "style.css").read_text(encoding="utf-8")
     assert "ssh-database" not in css
+
+
+# --- writing to production: a human, once, by typing its name --------------------------
+
+
+def _session_keys(app_js: str) -> str:
+    keys = re.search(r"const grant = panel\.querySelector.*?neu\.setAttribute", app_js, re.DOTALL)
+    assert keys is not None, "the keyboard enablement moved; check this test"
+
+    return keys.group(0)
+
+
+def test_the_grant_key_is_open_to_a_human_on_production_and_shut_to_an_agents_session(app_js):
+    body = _session_keys(app_js)
+    assert "grant.disabled = production ||" not in body, "production is no longer closed outright"
+    assert "const human = owner.kind === 'human'" in body
+    assert re.search(r"grant\.disabled = production\s*\?\s*!human", body), (
+        "on production the key needs a human owner — an agent's session is handed back first"
+    )
+    assert "take the session back" in body.lower(), "the tooltip says what to do instead"
+    assert "type" in body and "one commit" in body, "and, when it is open, what it will ask"
+
+
+def test_commit_on_production_is_offered_once_granted_and_says_it_is_for_once(app_js):
+    body = _session_keys(app_js)
+    assert "Refused on production" not in body
+    commit = re.search(r"commit\.title = production(.*?)panel\.querySelector\('\.close'\)", body + "panel.querySelector('.close')", re.DOTALL)
+    assert commit is not None
+    assert "once" in commit.group(1).lower()
+    assert "commit.disabled = !accepting || (remote && !record.info.allow_commit)" in body, (
+        "the same rule as any remote instance: offered only when granted"
+    )
+
+
+def test_granting_on_production_asks_for_the_name_and_sends_what_was_typed(app_js):
+    grant = re.search(r"async function grantCommit\(.*?\n\}", app_js, re.DOTALL)
+    assert grant is not None
+    body = grant.group(0)
+    assert "stage === 'production'" in body
+    assert "promptDialog(" in body, "the name is typed, not clicked"
+    assert "record.info.container" in body, "the name asked for is the one the session reports"
+    assert "confirm" in body and "{allow_commit: allowed, confirm" in body.replace("\n", " ").replace("  ", " ")
+    assert "typed === null" in body or "!typed" in body, "cancelling asks nothing of the daemon"
+
+
+def test_the_grant_is_forgotten_on_this_side_as_soon_as_it_is_spent(app_js):
+    """The daemon spends it when a commit is attempted and when a transaction ends;
+    a latch still showing pressed afterwards would offer a commit that is refused."""
+    tx = re.search(r"async function transaction\(.*?\n\}", app_js, re.DOTALL)
+    assert tx is not None
+    body = tx.group(0)
+    assert "stage === 'production'" in body
+    assert "allow_commit = false" in body
+    assert "finally" in body, "a failed attempt spends it too"
+
+
+def test_an_armed_production_session_looks_armed(app_js):
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert "classList.toggle('production-grant'" in app_js
+    armed = re.search(
+        r"\.session\.production-grant\s+\.session-key\.grant-commit\[aria-pressed=\"true\"\]\s*\{([^}]*)\}",
+        css,
+    )
+    assert armed is not None
+    assert "var(--red)" in armed.group(1), "amber is for a grant to write somewhere that may be written to"
