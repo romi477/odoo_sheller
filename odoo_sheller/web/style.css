@@ -622,10 +622,23 @@ button.region-toggle:active:not(:disabled) {
    screen reader is told it is one — buttons dressed as radios would not be. */
 #connect-modes {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px 20px;
+  flex: none;
+  gap: 20px;
   margin-left: auto;
+}
+
+/* In the desktop app's compact width the heading's line of text would keep all
+   the room it asks for and the group beside it, allowed to shrink, split into two
+   rows. The group does not shrink and does not wrap: the text gives way instead,
+   and when there is truly no room the group goes under the heading as one. */
+#screen-connect .screen-head {
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+#screen-connect .screen-head > div:first-child {
+  flex: 1 1 14rem;
+  min-width: 0;
 }
 
 #connect-modes label {

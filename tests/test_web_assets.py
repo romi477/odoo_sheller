@@ -3419,3 +3419,21 @@ def test_an_armed_production_session_looks_armed(app_js):
     )
     assert armed is not None
     assert "var(--red)" in armed.group(1), "amber is for a grant to write somewhere that may be written to"
+
+
+def test_the_three_places_stay_on_one_row_however_narrow_the_window():
+    """In the desktop app's compact width (684px) the group broke into two rows:
+    it could shrink, so it wrapped, while the heading's long line of text kept all
+    the room it asked for. The group does not shrink; the text beside it does, and
+    when there is truly no room the whole group goes under the heading as one."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    group = re.search(r"\n#connect-modes\s*\{([^}]*)\}", css)
+    assert group is not None
+    assert "flex: none" in group.group(1)
+    assert "flex-wrap" not in group.group(1), "wrapping inside the group is what split it"
+    left = re.search(r"#screen-connect \.screen-head > div:first-child\s*\{([^}]*)\}", css)
+    assert left is not None
+    assert "min-width: 0" in left.group(1) and "flex: 1 1" in left.group(1)
+    head = re.search(r"#screen-connect \.screen-head\s*\{([^}]*)\}", css)
+    assert head is not None
+    assert "flex-wrap: wrap" in head.group(1), "the group moves as a unit, never in pieces"
