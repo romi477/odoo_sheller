@@ -3226,7 +3226,7 @@ def test_the_form_and_its_note_are_the_part_that_folds(mode):
         composer, re.DOTALL,
     )
     assert body is not None, "the page is served folded, so there is no flash of an open form"
-    assert 'class="odoosh-note"' in body.group(1)
+    assert 'class="composer-note"' in body.group(1)
     assert "region-title" not in body.group(1), "the header stays when the rest folds"
     page = _page()
     assert re.search(rf'<section class="composer collapsed"[^>]*{mode}-composer-title', page)
@@ -3477,3 +3477,22 @@ def test_placeholders_are_faint_enough_not_to_pass_for_typed_text():
     opacity = re.search(r"opacity:\s*([0-9.]+)", rule.group(1))
     assert opacity is not None, "set outright: browsers disagree about their own default"
     assert float(opacity.group(1)) <= 0.4
+
+
+def test_the_explanation_under_a_form_is_a_centred_filled_note_not_loose_text():
+    """The buttons above it are centred, and text that belongs to them hung off the
+    left edge. It is a note of its own — filled, centred — in both forms."""
+    page = _page()
+    assert "odoosh-note" not in page
+    assert page.count('<p class="composer-note">') == 2
+    for mode in ("odoosh", "ssh"):
+        assert 'class="composer-note"' in _composer(mode), mode
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert "odoosh-note" not in css
+    rule = re.search(r"\n\.composer-note\s*\{([^}]*)\}", css)
+    assert rule is not None
+    body = rule.group(1)
+    assert "text-align: center" in body
+    assert re.search(r"margin:\s*\d+px auto", body), "centred as a block, not only its words"
+    assert "background:" in body and "border-radius" in body
+    assert "dashed" not in body, "the card around it already is"

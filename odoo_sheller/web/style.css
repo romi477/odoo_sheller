@@ -790,11 +790,19 @@ button.ssh-save {
   border-color: var(--border);
 }
 
-.odoosh-note {
-  margin: 0 0 16px;
+/* What a form means, in a note of its own: filled, and centred under the
+   buttons it follows. Left-aligned loose text hung off the edge of a card whose
+   buttons are in the middle. A fill, not a dashed edge — the card has one. */
+.composer-note {
+  max-width: 68ch;
+  margin: 16px auto 0;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: var(--panel);
   color: var(--muted);
   font-size: 12px;
-  max-width: 68ch;
+  line-height: 1.55;
+  text-align: center;
 }
 
 .probe-note {
