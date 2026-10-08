@@ -378,14 +378,14 @@ both back.
 Every past session, kept as a file, grouped by container and database. A
 group currently holding a live session is marked `live`. Click a group
 heading to expand or collapse its rows (groups start collapsed). The
-heading reads `117 sessions · 99,756 / 30,761 KB · last …`: the size is the
-sum of its rows.
+heading reads `117 sessions · 99756 lines · 30761 KB · last …`: the size is the
+sum of its rows. Numbers are plain digits, never grouped by thousands.
 
 Each row: timestamp, owner (`human`, `agent`, or `human→agent` for a
 handover), session id, duration, command count, `committed` / `discarded`
 (`committed` only for a commit that went through — a failed one wrote
 nothing),
-size — `772 / 243 KB`, records in the journal file and its size on disk,
+size — `772 lines · 243 KB`, records in the journal file and its size on disk,
 never `0 KB` for a file with anything in it — and the row's own controls:
 `.jsonl`, `.md`, a two-sheet copy glyph, and a trash icon. A
 sticky header names every column; on a narrow window it's dropped and rows

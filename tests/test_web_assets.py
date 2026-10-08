@@ -2811,11 +2811,24 @@ def test_journal_size_column_follows_outcome(app_js):
     assert row.index("journal-status") < row.index("journal-size")
 
 
-def test_journal_size_reads_lines_slash_kilobytes(app_js):
+def test_journal_size_names_what_each_number_counts(app_js):
+    """`77,257 / 27,126 KB` could be 77 thousand or 77 and a quarter; the slash did
+    not say which number was lines and which was size. Each number carries its
+    unit, and the groups are the page's own plain digits."""
     body = re.search(r"function journalSize\(.*?\n\}", app_js, re.DOTALL).group(0)
     assert "/ 1024" in body
     assert "KB" in body
     assert "Math.max(1" in body, "a non-empty file is never 0 KB"
+    assert "line" in body and "lines === 1" in body, "a unit, with its plural"
+    assert "·" in body and "' / '" not in body and " / ${" not in body
+
+
+def test_no_number_on_the_page_is_grouped_by_thousands(app_js):
+    """A comma between digits reads as a decimal point in half the world, and in a
+    tool for programmers a point is the decimal point. Whoever wants the groups
+    can put them there."""
+    assert "toLocaleString" not in app_js
+    assert "Intl.NumberFormat" not in app_js
 
 
 def test_journal_group_meta_sums_the_size(app_js):

@@ -2104,7 +2104,7 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
 .journal-row,
 .journal-columns {
   display: grid;
-  grid-template-columns: 10.5rem 5.5rem 7.5rem 4.2rem 7.2rem 6.2rem 9rem auto 1.4rem;
+  grid-template-columns: 10.5rem 5.5rem 7.5rem 4.2rem 7.2rem 6.2rem 11rem auto 1.4rem;
   align-items: baseline;
   column-gap: 12px;
   padding: 1px 4px;

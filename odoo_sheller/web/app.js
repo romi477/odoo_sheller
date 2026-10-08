@@ -3645,11 +3645,13 @@ async function copyJournal(id, button) {
   }
 }
 
-// `12,840 / 1,532 KB`: records in the file, then its size on disk.
+// `12840 lines · 1532 KB`. Lines in the file, then its size on disk, each with its unit and in plain
+// digits: a slash between two bare numbers did not say which was which, and a
+// comma inside one reads as a decimal point to half the people looking at it.
 function journalSize(lines, bytes) {
   const kilobytes = bytes ? Math.max(1, Math.round(bytes / 1024)) : 0;
 
-  return `${lines.toLocaleString('en-US')} / ${kilobytes.toLocaleString('en-US')} KB`;
+  return `${lines} line${lines === 1 ? '' : 's'} · ${kilobytes} KB`;
 }
 
 // Six mono columns and a pile of export links say nothing about themselves.
