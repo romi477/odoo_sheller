@@ -3650,8 +3650,13 @@ async function copyJournal(id, button) {
 // comma inside one reads as a decimal point to half the people looking at it.
 function journalSize(lines, bytes) {
   const kilobytes = bytes ? Math.max(1, Math.round(bytes / 1024)) : 0;
+  // `27126 KB` is a sum to do in the head: from 1024 KB up it is megabytes, to
+  // one decimal and with a point. Below that, whole kilobytes.
+  const size = kilobytes >= 1024
+    ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    : `${kilobytes} KB`;
 
-  return `${lines} line${lines === 1 ? '' : 's'} · ${kilobytes} KB`;
+  return `${lines} line${lines === 1 ? '' : 's'} · ${size}`;
 }
 
 // Six mono columns and a pile of export links say nothing about themselves.

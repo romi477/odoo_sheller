@@ -378,8 +378,9 @@ both back.
 Every past session, kept as a file, grouped by container and database. A
 group currently holding a live session is marked `live`. Click a group
 heading to expand or collapse its rows (groups start collapsed). The
-heading reads `117 sessions · 99756 lines · 30761 KB · last …`: the size is the
-sum of its rows. Numbers are plain digits, never grouped by thousands.
+heading reads `117 sessions · 99756 lines · 30.0 MB · last …`: the size is the
+sum of its rows. Numbers are plain digits, never grouped by thousands; a size is in
+whole KB below 1024 KB and in MB, to one decimal and with a point, from there up.
 
 Each row: timestamp, owner (`human`, `agent`, or `human→agent` for a
 handover), session id, duration, command count, `committed` / `discarded`

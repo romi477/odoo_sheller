@@ -2823,6 +2823,16 @@ def test_journal_size_names_what_each_number_counts(app_js):
     assert "·" in body and "' / '" not in body and " / ${" not in body
 
 
+def test_a_journal_past_a_megabyte_is_shown_in_megabytes_with_one_decimal(app_js):
+    """`27126 KB` has to be divided in the head. From 1024 KB up the size is in MB,
+    to one decimal and with a point, and below that it stays in whole KB."""
+    body = re.search(r"function journalSize\(.*?\n\}", app_js, re.DOTALL).group(0)
+    assert "kilobytes >= 1024" in body
+    assert "(1024 * 1024)" in body and "toFixed(1)" in body and "MB" in body
+    assert "KB" in body, "small ones stay in whole kilobytes"
+    assert "Math.max(1" in body, "a non-empty file is never 0 KB"
+
+
 def test_no_number_on_the_page_is_grouped_by_thousands(app_js):
     """A comma between digits reads as a decimal point in half the world, and in a
     tool for programmers a point is the decimal point. Whoever wants the groups
