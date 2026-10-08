@@ -3437,3 +3437,43 @@ def test_the_three_places_stay_on_one_row_however_narrow_the_window():
     head = re.search(r"#screen-connect \.screen-head\s*\{([^}]*)\}", css)
     assert head is not None
     assert "flex-wrap: wrap" in head.group(1), "the group moves as a unit, never in pieces"
+
+
+# --- the server form's last touches ---------------------------------------------------
+
+
+def test_the_name_placeholder_is_an_example_of_a_name_not_of_somebodys_company():
+    """`acme production` told nobody what to write, only that someone called Acme had
+    a production. The other two placeholders are real command lines to copy from;
+    this one is what a person would call the server."""
+    page = _page()
+    found = re.search(r'<input class="ssh-name" placeholder="([^"]*)"', page)
+    assert found is not None
+    assert found.group(1).strip()
+    assert "acme" not in found.group(1).lower()
+
+
+def test_the_buttons_under_the_server_form_sit_apart_from_the_fields_and_in_the_middle():
+    """Probe and Save are acts, not another field: with the fields' own gap between
+    them they read as the next one, left-aligned like it."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    rule = re.search(r"\n\.ssh-actions\s*\{([^}]*)\}", css)
+    assert rule is not None
+    assert "justify-content: center" in rule.group(1)
+    margin = re.search(r"margin-top:\s*(\d+)px", rule.group(1))
+    assert margin is not None and int(margin.group(1)) >= 12
+    # The middle of the card is the middle of the form only if the form is as wide
+    # as the card: capped, the buttons sat under the left half of a wide one. A
+    # long Launch line is the better for the room too.
+    form = re.search(r"\n\.ssh-form\s*\{([^}]*)\}", css)
+    assert form is not None
+    assert "max-width" not in form.group(1)
+
+
+def test_placeholders_are_faint_enough_not_to_pass_for_typed_text():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    rule = re.search(r"(?m)^::placeholder\s*\{([^}]*)\}", css)
+    assert rule is not None, "one rule for every field on every screen"
+    opacity = re.search(r"opacity:\s*([0-9.]+)", rule.group(1))
+    assert opacity is not None, "set outright: browsers disagree about their own default"
+    assert float(opacity.group(1)) <= 0.4

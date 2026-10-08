@@ -707,7 +707,6 @@ button.region-toggle:active:not(:disabled) {
 .ssh-form {
   display: grid;
   gap: 10px;
-  max-width: 78ch;
   margin-bottom: 12px;
 }
 
@@ -777,10 +776,14 @@ button.region-toggle:active:not(:disabled) {
   font-size: 11px;
 }
 
+/* Probe and Save are acts, not another field: set apart from the fields above
+   and in the middle of the card, or they read as the next row. */
 .ssh-actions {
   display: flex;
+  justify-content: center;
   gap: 8px;
   align-items: center;
+  margin-top: 14px;
 }
 
 button.ssh-save {
@@ -880,6 +883,14 @@ button.ssh-save {
 
 .startup-log:not([hidden]) {
   display: block;
+}
+
+/* Faint, so that a hint is never mistaken for what was typed. Set outright:
+   browsers disagree about their own default, and the page's text colour is what
+   the default is made of. */
+::placeholder {
+  color: var(--text);
+  opacity: 0.3;
 }
 
 select,
