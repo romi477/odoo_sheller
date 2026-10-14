@@ -59,6 +59,7 @@ the same HTTP/WS API — there must never be a second API.
 | `registry.py` | sessions by id; opens a remote target by the id of its card |
 | `targets.py` | the cards a human wrote down, in `~/.odoo-sheller/targets.json` |
 | `recipe.py` | the grammar of an ssh card's two fields — parsed, whitelisted, never run |
+| `rules/` | what each Odoo major expects of Python and XML, handed to the agent with a session |
 | `names.py` | what may stand for a build or a host before ssh sees it |
 | `guard.py` | the daemon answers only requests addressed to this machine (Host, Origin) |
 | `journal.py` | append-only JSONL record of everything, per session |

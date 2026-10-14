@@ -22,6 +22,11 @@ def _datas(kind: str) -> list:
         # here, so collect_data_files skips it. Without this the app launches
         # and fails on the first session.
         datas.append((str(ROOT / "odoo_sheller" / "bootstrap.py"), "odoo_sheller"))
+    else:
+        # The rules an agent is handed with a session. Read from disk next to
+        # odoo_sheller/rules/__init__.py, so a build without them opens every
+        # session with "no rules for this version".
+        datas.append((str(ROOT / "odoo_sheller" / "rules" / "*.md"), "odoo_sheller/rules"))
 
     return datas
 

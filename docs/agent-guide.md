@@ -123,6 +123,35 @@ The topics: `sessions`, `ownership`, `commit`, `remote_server`, `limits`,
 the old name — or a transcript that recorded it — does not land on
 `no_such_topic`.
 
+### Rules for the Odoo major
+
+The same agent writes for 15 in the morning and for 19 after lunch, and what
+it remembers from one is an error on the other: `attrs` is gone in 17,
+`<tree>` in 18, `_sql_constraints` in 19. So each supported major has a file
+in `odoo_sheller/rules/` — `15.md` through `20.md`, each self-contained, each
+with a `## Python` and a `## XML` section — and `common.md` goes in front of
+it.
+
+They arrive without being asked for. `os_open_session` and
+`os_attach_session` read the major out of the session's `odoo` field
+(`17.0`, `17.0+e`, `saas~17.2` all read as 17) and add `rules` to the
+answer:
+
+- the first session on a major in this MCP server's life gets
+  `{"topic": "odoo_17", "text": ...}`, the whole of `common.md` and `17.md`;
+- every later one on the same major gets `{"topic": "odoo_17", "note": ...}`,
+  pointing at `os_help('odoo_17')` rather than spending the context again;
+- a major without a file (13, 14) gets `{"topic": null, "note": ...}`, which
+  says to check every name in the instance with `os_source`.
+
+`os_help('odoo_<major>')` answers with the same text at any time, and
+`os_help()` lists those topics after the others. `os_run_test` hands nothing
+over: it writes no code.
+
+A rule earns its place by changing a decision, and it is checked against that
+major's source before it is written. The message a version emits is quoted
+whole, because that string is what an agent matches in a log.
+
 In short, what the instructions and the topics between them say:
 
 - A commit on a session handed over with work already pending would write the

@@ -7,6 +7,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Rules for the Odoo major a session runs. The first session an agent opens
+  or adopts on 15 through 20 comes with `rules`: what that major expects of
+  Python and XML — `attrs` or Python modifiers, `<tree>` or `<list>`,
+  `_sql_constraints` or `models.Constraint`, `groups_id` or `group_ids`.
+  Later sessions on the same major point at `os_help('odoo_<major>')`
+  instead of repeating them.
+
 ### Fixed
 
 - A session id is never all digits. About one session in 280 got an id like

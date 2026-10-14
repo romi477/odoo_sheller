@@ -21,6 +21,8 @@ import httpx2 as httpx
 from mcp.server import MCPServer
 from mcp_types import ToolAnnotations
 
+from odoo_sheller import rules
+
 logger = logging.getLogger(__name__)
 
 def daemon_url() -> str:
@@ -89,8 +91,7 @@ odoo-sheller runs Python in a live Odoo shell. `env` and `self` are Odoo's
 own, and variables persist between commands: a session is a workspace, not a
 series of scripts.
 
-Hosts deliver only the first 2048 characters of this. The rest is behind
-os_help(topic), one cheap call:
+Hosts cut this at 2048 characters. The rest is behind os_help(topic):
 
   sessions       opening, closing, death, one at a time
   ownership      handover, whose session it is
@@ -105,9 +106,9 @@ os_help(topic), one cheap call:
   jobs           with_delay, run inline
   tests          a test, a class or a whole module
   watching       the human watches
+  odoo_<major>   Python and XML for that Odoo; os_open_session hands it over
 
-Read the topic before working around something. These rules survive
-truncation and are not negotiable:
+Read the topic before working around something. Not negotiable:
 
 - One command at a time per session; a second is `session_busy`, never
   queued. Wait, or stop it with os_interrupt.
@@ -617,6 +618,54 @@ mcp = MCPServer("odoo-sheller", instructions=INSTRUCTIONS)
 # session id -> write key, for the sessions this server may type into.
 _keys: dict[str, str] = {}
 
+# The majors whose rules this server has already handed over. One server is
+# one agent's conversation, so the second session on a major gets a pointer,
+# not the same few thousand characters again.
+_rules_given: set[int] = set()
+
+# os_help answers to these as well as to HELP; the text is in odoo_sheller/rules.
+RULES_TOPIC = "odoo_{}"
+
+
+def _rules_topic(topic: str) -> str | None:
+    prefix = RULES_TOPIC.format("")
+    if not topic.startswith(prefix) or not topic[len(prefix):].isdigit():
+
+        return None
+
+    return rules.for_major(int(topic[len(prefix):]))
+
+
+def _with_rules(described: dict) -> dict:
+    """Hand over the rules for the major this session runs, once per major."""
+    major = rules.major_of(described.get("odoo"))
+    text = rules.for_major(major)
+    if text is None:
+        described["rules"] = {
+            "topic": None,
+            "note": (
+                f"no rules for Odoo {described.get('odoo')}; check every name in "
+                "the instance with os_source before relying on it"
+            ),
+        }
+
+        return described
+    topic = RULES_TOPIC.format(major)
+    if major in _rules_given:
+        described["rules"] = {
+            "topic": topic,
+            "note": (
+                f"handed over with an earlier session; call os_help('{topic}') "
+                "if they are no longer in your context"
+            ),
+        }
+
+        return described
+    _rules_given.add(major)
+    described["rules"] = {"topic": topic, "text": text}
+
+    return described
+
 
 def _clip(text: str | None, limit: int) -> tuple[str | None, bool]:
     """Agent context is the scarce resource here; the journal keeps the rest."""
@@ -788,7 +837,7 @@ async def os_open_session(
         return opened
     _keys[opened["id"]] = opened.pop("write_key")
 
-    return opened
+    return _with_rules(opened)
 
 
 @mcp.tool(
@@ -841,7 +890,7 @@ async def os_attach_session(session_id: str, write_key: str) -> Any:
             ),
         }
 
-    return described
+    return _with_rules(described)
 
 
 @mcp.tool(
@@ -1155,14 +1204,20 @@ def _source_snippet(path, model, method, first, last, module=None) -> str:
     )
 
 
+def _topics() -> list[str]:
+
+    return list(HELP) + [RULES_TOPIC.format(major) for major in rules.majors()]
+
+
 @mcp.tool(
     description=(
         "The parts of this server's instructions a host did not deliver. "
         "Hosts cut server instructions at 2048 characters, which is a small "
         "fraction of what there is to say, so the rest is here by topic: "
         "sessions, ownership, commit, remote_server, limits, orm, code, "
-        "log, records, modules, jobs, tests, watching. Call with no topic for the "
-        "list. Read-only, no session, no side effects — cheaper than working "
+        "log, records, modules, jobs, tests, watching — and odoo_<major>, the "
+        "Python and XML that Odoo major expects (odoo_17, odoo_19). Call with "
+        "no topic for the list. Read-only, no session, no side effects — cheaper than working "
         "around a rule you were never shown."
     ),
     annotations=ToolAnnotations(read_only_hint=True),
@@ -1171,18 +1226,18 @@ async def os_help(topic: str | None = None) -> Any:
     if topic is None:
 
         return {
-            "topics": list(HELP),
+            "topics": _topics(),
             "instructions_truncated_at": INSTRUCTION_CAP,
             "recovery": "call os_help(topic) for one of these",
         }
     topic = HELP_ALIASES.get(topic, topic)
-    text = HELP.get(topic)
+    text = HELP.get(topic) or _rules_topic(topic)
     if text is None:
 
         return {
             "error": "no_such_topic",
             "topic": topic,
-            "topics": list(HELP),
+            "topics": _topics(),
             "recovery": "call os_help(topic) with one of these, or os_help() for the list",
         }
 

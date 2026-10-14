@@ -14,6 +14,7 @@ import httpx2 as httpx
 import pytest
 
 from odoo_sheller import mcp as server
+from odoo_sheller import rules
 from odoo_sheller.api import create_app
 
 MODULE = Path(__file__).resolve().parent.parent / "odoo_sheller" / "mcp.py"
@@ -172,6 +173,7 @@ def wired(monkeypatch):
 
     monkeypatch.setattr(server.httpx, "AsyncClient", Client)
     monkeypatch.setattr(server, "_keys", {"s1": "key-s1"})
+    monkeypatch.setattr(server, "_rules_given", set())
 
     return registry
 
@@ -1407,7 +1409,9 @@ def test_every_help_topic_is_named_in_the_instructions_and_answers():
 
 async def test_os_help_without_a_topic_lists_them():
     out = await server.os_help()
-    assert set(out["topics"]) == set(server.HELP)
+    assert set(out["topics"]) == set(server.HELP) | {
+        f"odoo_{major}" for major in rules.majors()
+    }
     assert out["instructions_truncated_at"] == INSTRUCTION_CAP
 
 
@@ -1420,7 +1424,7 @@ async def test_os_help_returns_one_topic_in_full():
 async def test_os_help_refuses_an_unknown_topic_with_the_list():
     out = await server.os_help("nonsense")
     assert out["error"] == "no_such_topic"
-    assert set(out["topics"]) == set(server.HELP)
+    assert set(server.HELP) <= set(out["topics"])
 
 
 def test_nothing_that_used_to_be_instructions_was_simply_deleted():
@@ -2076,3 +2080,48 @@ def test_the_guidance_says_an_agent_never_writes_to_production_and_a_human_may()
     assert "take the session back" in remote
     assert "for one commit" in remote
     assert "Polling for that grant is an endless loop" in remote
+
+
+async def test_the_first_session_on_a_major_carries_its_rules_and_later_ones_point_back(wired):
+    """An agent that writes for 19 what it remembers from 17 writes `attrs` and
+    `<tree>`. The rules for the major arrive with the session, once — the
+    second session on the same major says where they are instead of spending
+    the context again."""
+    first = await server.os_open_session(container="integra19", database="integra_db_19")
+    assert first["rules"]["topic"] == "odoo_19"
+    assert first["rules"]["text"] == rules.for_major(19)
+
+    again = await server.os_open_session(container="integra19", database="integra_db_19")
+    assert "text" not in again["rules"]
+    assert "os_help('odoo_19')" in again["rules"]["note"]
+
+
+async def test_an_adopted_session_carries_the_rules_too(wired, monkeypatch):
+    monkeypatch.setattr(server, "_keys", {})
+    described = await server.os_attach_session("s1", "key-s1")
+    assert described["rules"]["text"] == rules.for_major(19)
+
+
+async def test_a_major_without_rules_says_so_rather_than_staying_silent(wired):
+    wired.session.described = {"odoo": "14.0"}
+    opened = await server.os_open_session(container="old14", database="db")
+    assert opened["rules"]["topic"] is None
+    assert "text" not in opened["rules"]
+    assert "os_source" in opened["rules"]["note"]
+
+
+async def test_os_help_answers_a_major_with_its_rules():
+    out = await server.os_help("odoo_17")
+    assert out == {"topic": "odoo_17", "text": rules.for_major(17)}
+
+
+async def test_os_help_lists_the_majors_that_have_rules():
+    listed = (await server.os_help())["topics"]
+    assert {f"odoo_{major}" for major in rules.majors()} <= set(listed)
+    refused = await server.os_help("odoo_14")
+    assert refused["error"] == "no_such_topic"
+    assert "odoo_19" in refused["topics"]
+
+
+def test_the_instructions_name_the_rules_topics():
+    assert "odoo_<major>" in server.INSTRUCTIONS
