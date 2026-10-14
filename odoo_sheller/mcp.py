@@ -595,6 +595,37 @@ no tool here can name one. That session is not yours: it does not close
 itself, and you do not close it either. Watch `discarded_pending` there — if
 the human left work in it, Odoo's own runner rolled that back before testing.
 Passing both a session_id and a container is refused rather than guessed at.
+
+### JS tests (Hoot, `/web/tests`)
+
+Hoot runs in the browser against the web process, not in this session, and
+the web process caches which files each asset bundle has. A test file you
+add, delete or rename stays invisible to it — and a deleted one makes the
+whole bundle fail with `FileNotFoundError`, so the test page comes up blank —
+until the assets cache is cleared and the other processes are told. On 18
+and 19, in os_exec:
+
+    env.registry.clear_cache('assets')
+    env.registry.signal_changes()
+
+then reload `/web/tests`. The second line is the one that reaches the web
+process; the first alone changes only this session. On 20 caches are
+signalled on commit instead, so signal on a cursor of your own (it commits
+that one row and nothing of your transaction; read from source, not yet run
+on a 20):
+
+    with env.registry.cursor() as cr:
+        env.registry._signal_changes(cr, ['assets'])
+
+This is not a restart and does not need one. What it cannot reach is the
+manifest: each process reads it once, so a new entry or glob in `assets`
+needs the human to restart the web process. Ask for that once per module;
+after it, new test files under the glob need only the two lines above.
+
+Hoot's own suites also run as Python tests (`web.WebSuite` and the like),
+which os_run_test can name — but Odoo starts Chrome inside the container for
+them, and without one the run reports `Chrome executable not found` as a
+skip. A skip is not a pass: say the tests did not run.
 """,
     "watching": """\
 ## Being watched

@@ -2125,3 +2125,17 @@ async def test_os_help_lists_the_majors_that_have_rules():
 
 def test_the_instructions_name_the_rules_topics():
     assert "odoo_<major>" in server.INSTRUCTIONS
+
+
+def test_the_tests_guidance_says_how_a_new_js_test_reaches_the_web_process():
+    """Verified live on 19: a file added to a manifest glob stays out of the
+    web process's bundle until the assets cache is cleared *and* signalled, and
+    a deleted one turns the whole bundle into a 500 until then. An agent that
+    does not know this asks for a web restart every time it adds a test."""
+    tests = " ".join(server.HELP["tests"].split())
+    assert "env.registry.clear_cache('assets')" in tests
+    assert "env.registry.signal_changes()" in tests
+    assert "_signal_changes(cr, ['assets'])" in tests     # 20 signals on commit
+    assert "FileNotFoundError" in tests
+    assert "manifest" in tests and "restart" in tests
+    assert "Chrome executable not found" in tests          # a skip is not a pass

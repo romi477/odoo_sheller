@@ -15,6 +15,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `_sql_constraints` or `models.Constraint`, `groups_id` or `group_ids`.
   Later sessions on the same major point at `os_help('odoo_<major>')`
   instead of repeating them.
+- `os_help('tests')` says how a new JS test file reaches the web process
+  without a restart: clear the assets cache and signal it. Without the
+  signal the web process never sees the file, and a deleted one blanks the
+  whole bundle. Only a manifest change still needs a restart.
 
 ### Fixed
 
