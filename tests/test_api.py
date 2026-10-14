@@ -118,8 +118,8 @@ class FakeSession:
     async def interrupt(self):
         self.calls.append(("interrupt",))
 
-    async def run_test(self, module, test_class, test_method=None, timeout=300.0):
-        self.calls.append(("run_test", module, test_class, test_method))
+    async def run_test(self, module, test_class, test_method=None, timeout=300.0, **kwargs):
+        self.calls.append(("run_test", module, test_class, test_method, *kwargs.values()))
         if self.raises:
             raise self.raises
 
@@ -303,6 +303,29 @@ def test_run_test_parses_class_and_method_spec(client):
     )
     assert response.status_code == 200
     assert client.registry.session.calls[-1] == ("run_test", "sale", "TestSaleOrder", "test_x")
+
+
+def test_run_test_passes_params_through(client):
+    response = client.post(
+        "/api/sessions/s1/run_test",
+        json={"test": "web.WebSuite.test_unit_desktop", "params": "@web/core,-@web/core/l10n"},
+    )
+    assert response.status_code == 200
+    assert client.registry.session.calls[-1] == (
+        "run_test", "web", "WebSuite", "test_unit_desktop", "@web/core,-@web/core/l10n",
+    )
+
+
+@pytest.mark.parametrize("bad", ["", "  ", "@web]x", "[@web", "@web\\x", "@web\nx"])
+def test_run_test_refuses_params_that_would_break_the_tag(client, bad):
+    """Brackets close or open the tag's parameter list, a backslash escapes,
+    and a line break has no business in a tag at all."""
+    response = client.post(
+        "/api/sessions/s1/run_test",
+        json={"test": "web.WebSuite.test_unit_desktop", "params": bad},
+    )
+    assert response.status_code == 422
+    assert client.registry.session.calls == []
 
 
 def test_run_test_rejects_a_malformed_spec(client):

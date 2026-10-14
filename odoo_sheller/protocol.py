@@ -66,12 +66,18 @@ def run_test_frame(
     module: str,
     test_class: str | None = None,
     test_method: str | None = None,
+    params: str | None = None,
 ) -> dict:
-
-    return {
+    frame = {
         "t": "run_test",
         "id": request_id,
         "module": module,
         "test_class": test_class,
         "test_method": test_method,
     }
+    if params is not None:
+        # Only when given, so a frame without them stays the shape an older
+        # bootstrap already reads.
+        frame["params"] = params
+
+    return frame

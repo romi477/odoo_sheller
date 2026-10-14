@@ -335,6 +335,8 @@ def to_markdown(records: list[dict], meta: dict | None = None) -> str:
                     record.get("module"), record.get("test_class"), record.get("test_method"),
                 ) if part
             )
+            if record.get("params"):
+                spec += f"[{record['params']}]"
             lines.append(f"## Test {next_ordinal}{by} — `{spec}` — {stamp}\n")
         elif kind in ("result", "abandoned_result"):
             if kind == "abandoned_result":
@@ -502,6 +504,8 @@ def feed_from_records(
                 "module": record.get("module"),
                 "test_class": record.get("test_class"),
                 "test_method": record.get("test_method"),
+                # Absent from journals written before a run could carry them.
+                "params": record.get("params"),
                 "status": "running",
                 "result": None,
                 "actor": record.get("actor"),

@@ -286,6 +286,16 @@ def test_a_whole_module_runs_its_standard_tests_only():
     assert out[1]["test"]["test_class"] is None
 
 
+def test_params_ride_on_the_tag_in_brackets():
+    """How Odoo hands a test its `_test_params`: Hoot reads them as filters."""
+    out, _, calls = run_bootstrap([
+        {"t": "run_test", "id": 1, "module": "web", "test_class": "WebSuite",
+         "test_method": "test_unit_desktop", "params": "@web/core/utils/strings"},
+    ], fake_odoo="17")
+    assert out[1]["error"] is None, out[1]["error"]
+    assert "shell.run_tests(*/web:WebSuite.test_unit_desktop[@web/core/utils/strings])" in calls
+
+
 def test_a_whole_module_on_the_fallback_uses_the_same_tag():
     out, _, calls = run_bootstrap([
         {"t": "run_test", "id": 1, "module": "sale", "test_class": None,

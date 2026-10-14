@@ -46,6 +46,14 @@ def test_run_test_frame_carries_module_class_and_optional_method():
     }
 
 
+def test_run_test_frame_carries_params_only_when_given():
+    """A frame without them stays the shape an older bootstrap already reads."""
+    assert protocol.run_test_frame(9, "web", "WebSuite", "test_unit_desktop", "@web/a") == {
+        "t": "run_test", "id": 9, "module": "web", "test_class": "WebSuite",
+        "test_method": "test_unit_desktop", "params": "@web/a",
+    }
+
+
 def test_frame_line_limit_covers_a_clipped_bootstrap_payload():
     """64 KiB is asyncio's default; a clipped stdout+result frame is larger."""
     assert protocol.FRAME_LINE_LIMIT > 64 * 1024

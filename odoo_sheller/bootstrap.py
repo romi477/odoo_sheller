@@ -112,15 +112,21 @@ def _os_run(namespace, code, cell):
     }
 
 
-def _os_test_tags(module, test_class, test_method):
+def _os_test_tags(module, test_class, test_method, params=None):
     if not test_class:
         # No tag means `standard` to Odoo's selector: what `--test-tags
         # /module` runs. `*` would also take tests tagged `-standard` or
         # `external`, which may call real third-party services.
-        return f"/{module}"
-    spec = f"*/{module}:{test_class}"
-    if test_method:
-        spec += f".{test_method}"
+        spec = "/" + module
+    else:
+        spec = "*/" + module + ":" + test_class
+        if test_method:
+            spec += "." + test_method
+    if params:
+        # The selector hands what is in brackets to the test as
+        # `_test_params` (16+); Hoot's suites read them as filters. The daemon
+        # has already refused brackets and backslashes inside them.
+        spec += "[" + params + "]"
 
     return spec
 
@@ -265,7 +271,7 @@ class TestRunnerUnsupported(Exception):
     """This Odoo's test runner is not one the bootstrap knows how to drive."""
 
 
-def _os_run_test(env, module, test_class, test_method):
+def _os_run_test(env, module, test_class, test_method, params=None):
     captured = io.StringIO()
     saved_stdout = sys.stdout
     sys.stdout = captured
@@ -348,7 +354,7 @@ def _os_run_test(env, module, test_class, test_method):
                 # reads.
                 server.http_spawn()
                 server.httpd = "spawned by odoo-sheller"
-        test_tags = _os_test_tags(module, test_class, test_method)
+        test_tags = _os_test_tags(module, test_class, test_method, params)
         if shell is None:
             report = _os_run_tests_fallback(env, test_tags, [module])
         else:
@@ -506,6 +512,7 @@ def _os_answer(namespace, env, frame):
             frame.get("module", ""),
             frame.get("test_class", ""),
             frame.get("test_method"),
+            frame.get("params"),
         )
     elif kind in ("commit", "rollback"):
 

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 
 import pytest
@@ -15,6 +16,7 @@ from odoo_sheller.session import (
     SessionDead,
     SessionNotReady,
     SessionState,
+    parse_hoot_line,
     parse_test_line,
     rerun_spec,
 )
@@ -1792,3 +1794,94 @@ async def test_a_commit_that_lands_late_on_production_is_journalled_with_its_sta
     late = [r for r in session.journal.records() if r["kind"] == "commit" and r.get("late")]
     assert len(late) == 1
     assert late[0]["stage"] == "production"
+
+
+HOOT = "odoo.addons.web.tests.test_js.WebSuite.test_unit_desktop.browser"
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        # Lines as a live 19 run logged them, apart from the failure, whose
+        # shape is hoot/core/runner.js's `Test ${fullName} failed:`.
+        ((f'2026-10-14 21:22:19,878 50 INFO db {HOOT}: [HOOT] Running test '
+         f'"@web/core/utils/strings/sprintf/supports escaped \'%\' signs" '),
+         ("running", "@web/core/utils/strings/sprintf/supports escaped '%' signs")),
+        ((f'2026-10-14 21:22:19,878 50 ERROR db {HOOT}: [HOOT] Test '
+         f'"@integration/views/list/renders the badge" failed:'),
+         ("failed", "@integration/views/list/renders the badge")),
+        ((f"2026-10-14 21:22:19,950 50 INFO db {HOOT}: [HOOT] Passed 11 tests "
+         f"(79 assertions, total time: 00:00:00) "),
+         ("summary", {"passed": 11, "failed": 0})),
+        ((f"2026-10-14 21:22:19,950 50 INFO db {HOOT}: [HOOT] Failed 2 tests "
+         f"(9 passed, total time: 00:00:01) "),
+         ("summary", {"passed": 9, "failed": 2})),
+        # A suite ending is not a summary: the last line is.
+        ((f'2026-10-14 21:22:19,905 50 INFO db {HOOT}: [HOOT] "@web/core/utils/strings" '
+         f"ended (passed: 11 / time: 37 ms) "), None),
+        (f"2026-10-14 21:22:19,950 50 INFO db {HOOT}: [HOOT] Test suite succeeded ", None),
+        ("2026-10-14 21:22:19,950 50 INFO db odoo.sql_db: Passed 3 tests", None),
+    ],
+)
+def test_parse_hoot_line(line, expected):
+    assert parse_hoot_line(line) == expected
+
+
+RUN_HOOT_FAKE = r"""
+import json, sys, time
+H = "2026-10-14 21:22:19,950 50 %s db odoo.addons.web.tests.test_js.WebSuite.test_unit_desktop.browser: [HOOT] %s\n"
+sys.stdout.write(json.dumps({"t":"hello","protocol":1,"odoo":"19.0","python":"3.12.0",
+                             "db":"db","uid":1,"pid":4242}) + "\n")
+sys.stdout.flush()
+for line in sys.stdin:
+    frame = json.loads(line)
+    if frame["t"] == "close":
+        sys.stdout.write(json.dumps({"t":"bye","id":frame["id"]}) + "\n")
+        sys.stdout.flush()
+        break
+    sys.stderr.write(H % ("INFO", 'Running test "@web/a/one"'))
+    sys.stderr.write(H % ("ERROR", 'Test "@web/a/one" failed:'))
+    sys.stderr.write("Failed assertion:\n")
+    sys.stderr.write(H % ("ERROR", 'Test "@web/a/one" failed:'))
+    sys.stderr.write(H % ("INFO", "Failed 1 tests (4 passed, total time: 00:00:00)"))
+    sys.stderr.flush()
+    time.sleep(0.1)
+    sys.stdout.write(json.dumps({"t":"result","id":frame["id"],"stdout":"",
+                                 "stdout_truncated":False,"result":None,
+                                 "result_truncated":False,"error":None,"duration":0.01,
+                                 "test":{"tests_run":1,"failures":1,"errors":0,
+                                 "skipped":0,"success":False},
+                                 "params": frame.get("params")}) + "\n")
+    sys.stdout.flush()
+"""
+
+
+async def test_a_hoot_run_reports_its_own_counts_and_failed_tests(tmp_path):
+    """Hoot runs inside one Python test: `tests_run` says 1 whatever ran in the
+    browser. What did run, and what failed, is only in the log."""
+    session = await make_session(tmp_path, script=RUN_HOOT_FAKE)
+    await session.start()
+    result = await session.run_test(
+        "web", "WebSuite", "test_unit_desktop", params="@web/a"
+    )
+    assert result["params"] == "@web/a"           # the frame carried them
+    assert result["hoot"] == {"passed": 4, "failed": 1, "failed_tests": ["@web/a/one"]}
+    await session.close()
+
+
+async def test_a_run_without_hoot_has_no_hoot_block(tmp_path):
+    session = await make_session(tmp_path, script=RUN_TEST_STDERR_FAKE)
+    await session.start()
+    result = await session.run_test("sale", "TestSaleOrder", "test_x")
+    assert "hoot" not in result
+    await session.close()
+
+
+async def test_the_journal_records_the_params_a_run_was_given(tmp_path):
+    session = await make_session(tmp_path, script=RUN_HOOT_FAKE)
+    await session.start()
+    await session.run_test("web", "WebSuite", "test_unit_desktop", params="@web/a")
+    await session.close()
+    records = [json.loads(line) for line in (tmp_path / "s1.jsonl").read_text().splitlines()]
+    started = next(r for r in records if r["kind"] == "run_test")
+    assert started["params"] == "@web/a"

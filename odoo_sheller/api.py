@@ -74,6 +74,27 @@ class RunTestBody(BaseModel):
     # same breath: the run really starts, and the session stays busy for its
     # whole length with nobody waiting. An hour is past any sane test class.
     timeout: float | None = Field(default=None, gt=0, le=3600)
+    # Appended to the test tag as `[params]`, which Odoo hands the test as
+    # `_test_params` — Hoot's suites read them as filters.
+    params: str | None = None
+
+    @field_validator("params")
+    @classmethod
+    def _params_fit_in_a_tag(cls, value: str | None) -> str | None:
+        if value is None:
+
+            return None
+        if not value.strip():
+            raise ValueError("params are empty; leave them out instead")
+        # A bracket ends or opens the tag's parameter list and a backslash
+        # escapes inside it, so either would make the tag mean something else
+        # than what was asked. A control character is never part of a filter.
+        if any(char in value for char in "[]\\") or any(ord(char) < 32 for char in value):
+            raise ValueError(
+                "params may not contain brackets, backslashes or control characters"
+            )
+
+        return value
 
 
 class Owner(BaseModel):
@@ -941,6 +962,8 @@ def create_app(registry: Registry | None = None) -> FastAPI:
             )
         module, test_class, test_method = match.groups()
         kwargs = {"timeout": body.timeout} if body.timeout is not None else {}
+        if body.params is not None:
+            kwargs["params"] = body.params
         try:
 
             return await session.run_test(module, test_class, test_method, **kwargs)

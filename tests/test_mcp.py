@@ -98,8 +98,13 @@ class FakeSession:
 
         return {"error": None}
 
-    async def run_test(self, module, test_class, test_method=None, timeout=300.0):
+    async def run_test(self, module, test_class, test_method=None, timeout=300.0, params=None):
         self.calls.append(("run_test", module, test_class, test_method, timeout))
+        self.params = params
+        hoot = (
+            {"hoot": {"passed": 4, "failed": 1, "failed_tests": ["@web/a/one"]}}
+            if params else {}
+        )
 
         return {
             "stdout": "printed\n",
@@ -111,6 +116,7 @@ class FakeSession:
             },
             "stderr": ["INFO something"],
             "discarded_pending": False,
+            **hoot,
         }
 
 
@@ -2139,3 +2145,60 @@ def test_the_tests_guidance_says_how_a_new_js_test_reaches_the_web_process():
     assert "FileNotFoundError" in tests
     assert "manifest" in tests and "restart" in tests
     assert "Chrome executable not found" in tests          # a skip is not a pass
+
+
+
+async def test_run_test_hands_params_to_the_run_and_hoot_counts_back(wired):
+    result = await server.os_run_test(
+        "web.WebSuite.test_unit_desktop", params="@web/a", timeout=120
+    )
+    assert wired.session.params == "@web/a"
+    assert result["hoot"] == {"passed": 4, "failed": 1, "failed_tests": ["@web/a/one"]}
+    assert result["test"] == "web.WebSuite.test_unit_desktop[@web/a]"
+
+
+async def test_a_run_with_params_defaults_to_a_class_ceiling(wired):
+    """A Hoot run is one method, but Chrome alone takes ten seconds to start:
+    the method's thirty would kill most of them."""
+    await server.os_run_test("web.WebSuite.test_unit_desktop", params="@web/a")
+    assert wired.session.calls[-1][-1] == server.DEFAULT_TEST_TIMEOUTS["class"]
+
+
+async def test_a_run_without_hoot_answers_without_a_hoot_block(wired):
+    result = await server.os_run_test("sale.TestSaleOrder.test_x")
+    assert "hoot" not in result
+
+
+async def test_history_keeps_the_params_and_the_hoot_block(wired, monkeypatch):
+    feed = {
+        "session": {"session_id": "s1"},
+        "entries": [{
+            "kind": "run_test", "id": 1, "ordinal": 1,
+            "module": "web", "test_class": "WebSuite", "test_method": "test_unit_desktop",
+            "params": "@web/a", "status": "done",
+            "actor": {"kind": "agent", "label": "mcp-agent"},
+            "result": {
+                "stdout": "", "stderr": [], "error": None, "duration": 14.9,
+                "test": {"tests_run": 1, "failures": 1, "errors": 0,
+                          "skipped": 0, "success": False},
+                "hoot": {"passed": 4, "failed": 1, "failed_tests": ["@web/a/one"]},
+            },
+        }],
+    }
+
+    async def fake_call(method, path, session_id=None, **kwargs):
+
+        return feed
+
+    monkeypatch.setattr(server, "_call", fake_call)
+    entry = (await server.os_history("s1"))["entries"][0]
+    assert entry["test"] == "web.WebSuite.test_unit_desktop[@web/a]"
+    assert entry["hoot"]["failed_tests"] == ["@web/a/one"]
+
+
+def test_the_tests_guidance_says_how_to_run_hoot_headless():
+    tests = " ".join(server.HELP["tests"].split())
+    assert 'os_run_test("web.WebSuite.test_unit_desktop", params="@' in tests
+    assert "web.assets_unit_tests" in tests
+    assert "failed_tests" in tests
+    assert "websocket-client module is not installed" in tests

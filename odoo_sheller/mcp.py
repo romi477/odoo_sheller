@@ -538,6 +538,10 @@ os_run_test takes three forms:
 - `module.TestClass` — one class.
 - `module.TestClass.test_method` — one method.
 
+`params` adds what Odoo's tag syntax carries in brackets, `[...]`, which the
+test reads as `_test_params` — Hoot's suites take them as filters; see JS
+tests below.
+
 Every answer carries `failed`: one entry per failing test, `{"test": spec,
 "kind": "failure" | "error"}`, where `test` is ready to pass straight back to
 os_run_test. A failed subtest is listed as its method, a class whose
@@ -622,10 +626,28 @@ manifest: each process reads it once, so a new entry or glob in `assets`
 needs the human to restart the web process. Ask for that once per module;
 after it, new test files under the glob need only the two lines above.
 
-Hoot's own suites also run as Python tests (`web.WebSuite` and the like),
-which os_run_test can name — but Odoo starts Chrome inside the container for
-them, and without one the run reports `Chrome executable not found` as a
-skip. A skip is not a pass: say the tests did not run.
+Hoot also runs headless, through os_run_test, when the container has
+Chromium and `websocket-client` in Odoo's own Python. Name the Python test
+that drives it and pass Hoot's filter as `params`:
+
+    os_run_test("web.WebSuite.test_unit_desktop", params="@integration", timeout=300)
+
+`params` goes on the test tag in brackets, and Hoot reads it as a filter: a
+module (`@integration`), a suite or one test by its id
+(`@integration/views/list/renders the badge`), several joined by commas, a
+`-` in front to leave one out. A module's tests are in the run only if its
+manifest lists them under `web.assets_unit_tests`. With params the default
+ceiling is a class's 300 seconds, since Chrome alone takes about ten to start.
+
+The answer's counts are about the one Python test that ran Hoot. `hoot` has
+Hoot's own: `passed`, `failed`, and `failed_tests` — ids to pass straight
+back as params to rerun just those, with the reasons in `stderr`. That is 18
+and 19; on 20 `test_unit_desktop` picks the modules from the run itself, and
+that form has not been run here.
+
+Without Chrome or without `websocket-client`, Odoo skips the test:
+`Chrome executable not found` or `websocket-client module is not installed`.
+A skip is not a pass: say the tests did not run.
 """,
     "watching": """\
 ## Being watched
@@ -1343,7 +1365,11 @@ RUN_TEST_DESCRIPTION = (
     "never call this tool again for the same run. Without a timeout the "
     "ceiling follows the spec — 30s for a method, 300s for a class, 1800s "
     "for a module, at most 3600 — and it is the ceiling for the run itself, "
-    "not for this call."
+    "not for this call. `params` goes on the test tag as `[params]`: Hoot's "
+    "JS suites take it as a filter, e.g. "
+    "('web.WebSuite.test_unit_desktop', params='@my_module'), and then the "
+    "answer carries `hoot` with Hoot's own counts and failed test ids — "
+    "os_help('tests')."
 )
 
 
@@ -1355,9 +1381,12 @@ async def os_run_test(
     odoo_bin: str | None = None,
     timeout: float | None = None,
     session_id: str | None = None,
+    params: str | None = None,
 ) -> Any:
     if timeout is None:
-        timeout = DEFAULT_TEST_TIMEOUTS[_spec_form(test)]
+        # A run with params is a browser suite more often than not, and Chrome
+        # alone takes about ten seconds to start: a method's thirty is too few.
+        timeout = DEFAULT_TEST_TIMEOUTS["class" if params else _spec_form(test)]
     if session_id and (container or database or odoo_bin):
         # One says where to run, the other says where to open, and the two can
         # name different places. Refuse rather than silently pick.
@@ -1391,7 +1420,7 @@ async def os_run_test(
         # A session a human handed over — the only way onto a remote instance,
         # since no tool here can name one. Not ours to close, and not opened
         # with autoclose, so it stays exactly as it was lent.
-        return await _run_test_in(session_id, test, timeout, deadline, ours=False)
+        return await _run_test_in(session_id, test, timeout, deadline, ours=False, params=params)
 
     # Container and database do not identify a session — several may be
     # opening on the same target at once — so the token is what finds this one
@@ -1433,7 +1462,7 @@ async def os_run_test(
     session_id = opened["id"]
     _keys[session_id] = opened.pop("write_key")
 
-    return await _run_test_in(session_id, test, timeout, deadline, ours=True)
+    return await _run_test_in(session_id, test, timeout, deadline, ours=True, params=params)
 
 
 def _spec_form(test: str) -> str:
@@ -1443,7 +1472,8 @@ def _spec_form(test: str) -> str:
 
 
 async def _run_test_in(
-    session_id: str, test: str, timeout: float, deadline: float, ours: bool
+    session_id: str, test: str, timeout: float, deadline: float, ours: bool,
+    params: str | None = None,
 ) -> Any:
     """Run one test in a session and shape the outcome.
 
@@ -1461,8 +1491,9 @@ async def _run_test_in(
     result = await _call(
         "POST", f"/api/sessions/{session_id}/run_test", session_id,
         client_timeout=run_leg,
-        json={"test": test, "timeout": timeout},
+        json={"test": test, "timeout": timeout, "params": params},
     )
+    spec = f"{test}[{params}]" if params else test
     if result.get("error") == "request_timed_out":
         afterwards = (
             "that session closes itself when the run ends, so there is "
@@ -1475,7 +1506,7 @@ async def _run_test_in(
         return {
             "status": "running",
             "session_id": session_id,
-            "test": test,
+            "test": spec,
             "recovery": (
                 "the run is still going in the container — call "
                 f'os_test_result("{session_id}") to wait for it; {afterwards}'
@@ -1490,8 +1521,9 @@ async def _run_test_in(
     log, stderr_clipped = _test_log(test, result)
     truncated = stdout_clipped or stderr_clipped
 
-    return {
+    answer = {
         "session_id": session_id,
+        "test": spec,
         "tests_run": test_info.get("tests_run"),
         "failures": test_info.get("failures"),
         "errors": test_info.get("errors"),
@@ -1512,6 +1544,12 @@ async def _run_test_in(
             if truncated or "stderr_lines" in log else None
         ),
     }
+    if "hoot" in result:
+        # Hoot runs inside one Python test, so the counts above say 1 whatever
+        # ran in the browser; these are what did.
+        answer["hoot"] = result["hoot"]
+
+    return answer
 
 
 def _test_log(test: str, result: dict) -> tuple[dict, bool]:
@@ -1722,6 +1760,9 @@ def _history_run_test_entry(entry: dict) -> dict:
     # The same rule os_run_test answers by, so a run recovered later reads
     # the same as one answered at once.
     log, stderr_clipped = _test_log(spec, result)
+    if entry.get("params"):
+        # After the log rule: a dot inside the params is not a class.
+        spec += f"[{entry['params']}]"
     shaped = {
         "n": entry.get("ordinal"),
         "test": spec,
@@ -1742,6 +1783,8 @@ def _history_run_test_entry(entry: dict) -> dict:
         "duration": round(result["duration"], 3) if result.get("duration") is not None else None,
         "actor": _actor(entry.get("actor")),
     }
+    if result.get("hoot"):
+        shaped["hoot"] = result["hoot"]
     if out_clipped or stderr_clipped:
         shaped["truncated"] = True
     if entry.get("abandoned"):

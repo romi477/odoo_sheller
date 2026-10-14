@@ -19,6 +19,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   without a restart: clear the assets cache and signal it. Without the
   signal the web process never sees the file, and a deleted one blanks the
   whole bundle. Only a manifest change still needs a restart.
+- Hoot runs headless through `os_run_test`: `params` goes on the test tag
+  as `[params]`, which Hoot reads as a filter —
+  `os_run_test("web.WebSuite.test_unit_desktop", params="@my_module")`. The
+  answer carries `hoot` with Hoot's own counts and the ids of the tests that
+  failed, each one ready to pass back as `params`. Needs Chromium and
+  `websocket-client` in the container's Odoo Python.
 
 ### Fixed
 

@@ -44,7 +44,7 @@ human, and a local human commits without asking anyone.
 | `os_session` | `session_id=None` | one session's state, including `allow_commit` (read-only) |
 | `os_exec` | `code`, `session_id=None`, `stderr=False` | blocks; returns stdout, result, error, duration and `stderr_lines`. `stderr=True` adds the log lines themselves |
 | `os_list_tests` | `module`, `container=None` | classes and methods in one addon, as `os_run_test` specs; disk catalogue, no session. A local container's disk only: on a remote build it answers `not_a_container` and points at `os_source` |
-| `os_run_test` | `test`, `container=None`, `database=None`, `odoo_bin=None`, `timeout=None`, `session_id=None` | runs a whole module's standard tests (`module`), one class or one method; answers with counts and `failed`, each a spec to rerun; opens its own new session (which then closes itself), or runs in one it was handed. Without `timeout` the ceiling follows the spec: 30s, 300s, 1800s |
+| `os_run_test` | `test`, `container=None`, `database=None`, `odoo_bin=None`, `timeout=None`, `session_id=None`, `params=None` | runs a whole module's standard tests (`module`), one class or one method; answers with counts and `failed`, each a spec to rerun; opens its own new session (which then closes itself), or runs in one it was handed. Without `timeout` the ceiling follows the spec: 30s, 300s, 1800s — 300s whenever `params` is given. `params` rides on the tag as `[params]`; Hoot reads it as a filter, and the answer then carries `hoot` (below) |
 | `os_test_result` | `session_id` | waits for a run started by `os_run_test` and returns its outcome (read-only, no key needed) |
 | `os_rollback` | `session_id=None` | discards the open transaction |
 | `os_commit` | `session_id=None`, `include_inherited=False` | fails unless the human has granted commit; refused once as `inherited_pending` on a session handed over with work already in its transaction |
@@ -122,6 +122,33 @@ The topics: `sessions`, `ownership`, `commit`, `remote_server`, `limits`,
 `remote` still answers as an alias for `remote_server`, so an agent that read
 the old name — or a transcript that recorded it — does not land on
 `no_such_topic`.
+
+### Hoot, headless
+
+Hoot, the JS test framework from 18, runs in a browser, so through Odoo it
+is one Python test — `web.WebSuite.test_unit_desktop` — that starts Chromium
+inside the container, opens `/web/tests` with a filter, and waits for
+`[HOOT] Test suite succeeded`. The filter comes from the test tag's
+parameters, so `os_run_test(test, params=...)` appends `[params]` to the tag
+and Odoo hands them to the test as `_test_params`:
+
+    os_run_test("web.WebSuite.test_unit_desktop", params="@integration", timeout=300)
+
+The daemon refuses params with a bracket, a backslash or a control character:
+the first two would change what the tag means, the last has no place in one.
+
+`tests_run` then says 1 however many Hoot tests ran, so the session reads
+Hoot's own lines out of the run's log (`hoot/core/runner.js`): `Test "<id>"
+failed:` for each failure, `Passed N tests` or `Failed N tests (M passed` at
+the end. The answer, and `os_test_result` and `os_history` after it, carry
+`hoot: {passed, failed, failed_tests}`; each id in `failed_tests` passed back
+as `params` reruns that one test.
+
+It needs Chromium and `websocket-client` in the Python Odoo runs on; without
+them Odoo skips the test rather than failing it. Verified on 19 with a test
+written to fail: one passed, one failed, the failed id rerun alone. 18 has
+the same class and method; 20 makes `test_unit_desktop` a `CrossModule` test
+that filters by the run's modules, and has not been run.
 
 ### Rules for the Odoo major
 

@@ -178,6 +178,18 @@ def rerun_spec(module: str, description: str) -> str:
     return description
 
 
+def spec_of(
+    module: str,
+    test_class: str | None = None,
+    test_method: str | None = None,
+    params: str | None = None,
+) -> str:
+    """A run as one string: `module.Class.method`, and `[params]` if it had any."""
+    spec = ".".join(part for part in (module, test_class, test_method) if part)
+
+    return f"{spec}[{params}]" if params else spec
+
+
 def parse_test_line(line: str) -> tuple[str, str] | None:
     """`(kind, test description)` if Odoo logged this about a test, else None."""
     for kind, pattern in _TEST_LINES:
@@ -185,6 +197,42 @@ def parse_test_line(line: str) -> tuple[str, str] | None:
         if match:
 
             return kind, match.group(1)
+
+    return None
+
+
+# What Hoot logs through the browser test that runs it (18+). Hoot runs
+# inside one Python test, so `tests_run` says 1 however many ran in the
+# browser: these lines are the only record of what did. Shapes from
+# web/static/lib/hoot/core/runner.js — a failed test is `Test "<id>" failed:`
+# with its reasons on the lines after, and the run ends on `Passed N tests`
+# or `Failed N tests (M passed`.
+_HOOT_LINES = (
+    ("running", re.compile(r'\[HOOT\] Running test "(.+)"\s*$')),
+    ("failed", re.compile(r'\[HOOT\] Test "(.+)" failed:\s*$')),
+    ("passed_all", re.compile(r"\[HOOT\] Passed (\d+) tests \(")),
+    ("failed_some", re.compile(r"\[HOOT\] Failed (\d+) tests \((\d+) passed")),
+)
+
+
+def parse_hoot_line(line: str) -> tuple[str, object] | None:
+    """`(kind, value)` if Hoot logged this about a test or the run, else None.
+
+    `running` and `failed` carry the test's id — `@module/suite/name`, what
+    Hoot's own filter takes back — and `summary` the run's counts.
+    """
+    for kind, pattern in _HOOT_LINES:
+        match = pattern.search(line)
+        if match is None:
+            continue
+        if kind == "passed_all":
+
+            return "summary", {"passed": int(match.group(1)), "failed": 0}
+        if kind == "failed_some":
+
+            return "summary", {"passed": int(match.group(2)), "failed": int(match.group(1))}
+
+        return kind, match.group(1)
 
     return None
 
@@ -255,6 +303,8 @@ class Session:
         # What failed in the running test, as specs to run again. A whole
         # module's log is thousands of lines; this is the part an agent acts on.
         self._test_failed: list[dict] = []
+        # What Hoot reported during the current run; None until it says anything.
+        self._hoot: dict | None = None
         self._test_module: str | None = None
         self._hello_waiter: asyncio.Future = asyncio.get_running_loop().create_future()
         self._stderr: deque[str] = deque(maxlen=2000)
@@ -563,6 +613,7 @@ class Session:
         test_class: str | None = None,
         test_method: str | None = None,
         timeout: float = 300.0,
+        params: str | None = None,
     ) -> dict:
         self._ensure_acceptable("run_test")
         # Odoo's own run_tests() rolls back env.cr if it holds an open
@@ -574,7 +625,7 @@ class Session:
         request_id = self._take_id()
         self.journal.write(
             "run_test", id=request_id, module=module, test_class=test_class,
-            test_method=test_method, actor=dict(self.owner),
+            test_method=test_method, params=params, actor=dict(self.owner),
         )
         self._ran_test = True
         window = _StderrWindow(RUN_STDERR_LIMIT)
@@ -582,7 +633,7 @@ class Session:
         # Cleared with `_activity`, when the session leaves BUSY: a timed-out
         # run is still running and still worth watching.
         self._test_progress = {
-            "spec": ".".join(part for part in (module, test_class, test_method) if part),
+            "spec": spec_of(module, test_class, test_method, params),
             "current": None,
             "started": 0,
             "failures": 0,
@@ -592,10 +643,11 @@ class Session:
         }
         self._emit_test_progress()
         self._test_failed = []
+        self._hoot = None
         self._test_module = module
         try:
             result = await self._request(
-                run_test_frame(request_id, module, test_class, test_method), timeout
+                run_test_frame(request_id, module, test_class, test_method, params), timeout
             )
             await asyncio.sleep(STDERR_DRAIN)  # let the reader catch up on the tail
         finally:
@@ -610,6 +662,8 @@ class Session:
             "stderr_truncated": window.truncated,
             "discarded_pending": discarded_pending,
         }
+        if self._hoot is not None:
+            result["hoot"] = self._hoot
         self.journal.write("result", **_journal_fields(result))
         self._maybe_autoclose()
 
@@ -798,6 +852,7 @@ class Session:
         if self._test_progress is None:
 
             return
+        self._note_hoot_line(line)
         parsed = parse_test_line(line)
         if parsed is None:
 
@@ -811,6 +866,24 @@ class Session:
         if kind == "start":
             self._test_progress["current"] = description
         self._emit_test_progress()
+
+    def _note_hoot_line(self, line: str) -> None:
+        parsed = parse_hoot_line(line)
+        if parsed is None:
+
+            return
+        if self._hoot is None:
+            self._hoot = {"passed": None, "failed": None, "failed_tests": []}
+        kind, value = parsed
+        if kind == "failed" and value not in self._hoot["failed_tests"]:
+            # Hoot logs a failure once from the test and once more in the
+            # run's summary of failed reasons; one entry is what to rerun.
+            self._hoot["failed_tests"].append(value)
+        elif kind == "summary":
+            self._hoot.update(value)
+        elif kind == "running":
+            self._test_progress["current"] = value
+            self._emit_test_progress()
 
     def _emit_test_progress(self) -> None:
         self._emit({
