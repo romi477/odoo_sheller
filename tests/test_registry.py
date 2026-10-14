@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from odoo_sheller.journal import Journal, journal_path
-from odoo_sheller.registry import Registry, load_admin_key
+from odoo_sheller.registry import Registry, load_admin_key, new_session_id
 from odoo_sheller.session import SessionDead, SessionState
 from odoo_sheller.targets import TargetStore
 from odoo_sheller.transport import Target
@@ -25,6 +25,22 @@ def test_load_admin_key_empty_file_stays_empty(tmp_path):
     path = tmp_path / "admin.key"
     path.write_text("\n", encoding="utf-8")
     assert load_admin_key(path) == ""
+
+
+def test_new_session_id_is_never_all_digits():
+    """An agent's host can send an all-digit id as a JSON number, and the MCP
+    tools take it as a string, so the call fails validation before it runs —
+    and a leading zero would be lost besides. About one hex draw in 280 is all
+    digits; such a draw is thrown away."""
+    draws = iter(["274327107366", "012345678901", "27432710736a"])
+    assert new_session_id(lambda: next(draws)) == "27432710736a"
+
+
+def test_new_session_id_default_shape():
+    session_id = new_session_id()
+    assert len(session_id) == 12
+    assert int(session_id, 16) >= 0
+    assert not session_id.isdigit()
 
 
 def test_subscribe_raises_for_unknown_session():

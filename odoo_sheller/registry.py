@@ -63,6 +63,21 @@ def load_admin_key(path: Path = ADMIN_KEY_PATH) -> str:
     return key
 
 
+def new_session_id(draw=lambda: uuid.uuid4().hex[:12]) -> str:
+    """Twelve hex digits, never all of them decimal ones.
+
+    An agent's host can send `274327107366` as a JSON number; every MCP tool
+    takes `session_id` as a string, so the call is refused before it runs, and
+    a leading zero would be gone besides. About one draw in 280 looks like
+    that, and it is drawn again.
+    """
+    while True:
+        session_id = draw()
+        if not session_id.isdigit():
+
+            return session_id
+
+
 def _hang_up(queue: asyncio.Queue) -> None:
     """Tell a socket's reader it has heard the last event.
 
@@ -274,7 +289,7 @@ class Registry:
             target = await self._remote_target(target_id)
         else:
             target = await self._docker_target(container, database, odoo_bin)
-        session_id = uuid.uuid4().hex[:12]
+        session_id = new_session_id()
         try:
             process = await spawn(build_command(target, bootstrap_source()))
         except FileNotFoundError as exc:

@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A session id is never all digits. About one session in 280 got an id like
+  `274327107366`; an agent's host could send it back as a JSON number, every
+  MCP tool refused it as not a string, and the agent was locked out of its own
+  session. Such an id is now drawn again.
+
 ## [1.9.0] — 2026-10-08
 
 An Odoo installed on a server becomes a third kind of target, written down on a
