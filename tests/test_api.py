@@ -316,16 +316,31 @@ def test_run_test_passes_params_through(client):
     )
 
 
-@pytest.mark.parametrize("bad", ["", "  ", "@web]x", "[@web", "@web\\x", "@web\nx"])
+@pytest.mark.parametrize(
+    "bad", ["", "  ", "@web]x", "[@web", "@web/a] [b", "@web\\x", "@web\nx"],
+)
 def test_run_test_refuses_params_that_would_break_the_tag(client, bad):
-    """Brackets close or open the tag's parameter list, a backslash escapes,
-    and a line break has no business in a tag at all."""
+    """A bracket with no partner closes or opens the tag's parameter list, a
+    backslash escapes, and a line break has no business in a tag at all."""
     response = client.post(
         "/api/sessions/s1/run_test",
         json={"test": "web.WebSuite.test_unit_desktop", "params": bad},
     )
     assert response.status_code == 422
     assert client.registry.session.calls == []
+
+
+def test_run_test_takes_params_with_balanced_brackets(client):
+    """133 of 19's own Hoot test names have a bracket — `click a menu link
+    [2]` — and Odoo's selector reads the tag's parameters to the matching
+    bracket, so a balanced pair inside them is part of a name."""
+    params = "@web/webclient/click a menu link [2]"
+    response = client.post(
+        "/api/sessions/s1/run_test",
+        json={"test": "web.WebSuite.test_unit_desktop", "params": params},
+    )
+    assert response.status_code == 200
+    assert client.registry.session.calls[-1][-1] == params
 
 
 def test_run_test_rejects_a_malformed_spec(client):

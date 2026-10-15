@@ -125,7 +125,7 @@ def _os_test_tags(module, test_class, test_method, params=None):
     if params:
         # The selector hands what is in brackets to the test as
         # `_test_params` (16+); Hoot's suites read them as filters. The daemon
-        # has already refused brackets and backslashes inside them.
+        # has already refused unpaired brackets and backslashes inside them.
         spec += "[" + params + "]"
 
     return spec

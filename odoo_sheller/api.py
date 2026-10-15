@@ -86,13 +86,21 @@ class RunTestBody(BaseModel):
             return None
         if not value.strip():
             raise ValueError("params are empty; leave them out instead")
-        # A bracket ends or opens the tag's parameter list and a backslash
-        # escapes inside it, so either would make the tag mean something else
-        # than what was asked. A control character is never part of a filter.
-        if any(char in value for char in "[]\\") or any(ord(char) < 32 for char in value):
-            raise ValueError(
-                "params may not contain brackets, backslashes or control characters"
-            )
+        # A bracket with no partner ends or opens the tag's parameter list,
+        # and a backslash escapes inside it (18+), so either would make the
+        # tag mean something else than what was asked. A balanced pair is
+        # part of a name — `click a menu link [2]` — and Odoo's selector reads
+        # the parameters to the matching bracket (16 and 17 by a greedy
+        # match, 18+ by counting). A control character is never in a filter.
+        if "\\" in value or any(ord(char) < 32 for char in value):
+            raise ValueError("params may not contain backslashes or control characters")
+        depth = 0
+        for char in value:
+            depth += {"[": 1, "]": -1}.get(char, 0)
+            if depth < 0:
+                break
+        if depth:
+            raise ValueError("params may hold brackets only in balanced pairs")
 
         return value
 

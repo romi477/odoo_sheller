@@ -134,8 +134,11 @@ and Odoo hands them to the test as `_test_params`:
 
     os_run_test("web.WebSuite.test_unit_desktop", params="@integration", timeout=300)
 
-The daemon refuses params with a bracket, a backslash or a control character:
-the first two would change what the tag means, the last has no place in one.
+The daemon refuses params with an unpaired bracket, a backslash or a control
+character: the first two would change what the tag means, the last has no
+place in one. A balanced pair is part of a name — 133 of 19's own test names
+have one, `click a menu link [2]` — and Odoo's selector reads the parameters
+to the matching bracket.
 
 Several filters are joined by commas with no space after them: Odoo splits
 only on a comma right before an `@`. A filter Hoot has no test or suite for
