@@ -393,6 +393,26 @@ def test_to_markdown_renders_a_run_test_heading_and_summary():
     assert "PASS" in text
 
 
+def test_to_markdown_says_what_hoot_ran_not_only_the_one_python_test():
+    """A Hoot run is one Python test: "1 run, 1 failed" over fifty JS tests
+    is what the transcript said without Hoot's own line."""
+    records = [
+        {"kind": "run_test", "ts": "t1", "id": 1, "module": "web",
+         "test_class": "WebSuite", "test_method": "test_unit_desktop", "params": "@web"},
+        {"kind": "result", "ts": "t2", "id": 1, "stdout": "", "error": None,
+         "duration": 30.0, "test": {"tests_run": 1, "failures": 1, "errors": 0,
+         "skipped": 0, "success": False},
+         "hoot": {"passed": 49, "failed": 1, "failed_tests": ["@web/a/one"],
+                  "reasons": {"@web/a/one": "Failed assertion:"},
+                  "unknown_filters": ["@web/typo"]}},
+    ]
+    text = journal.to_markdown(records)
+    assert "web.WebSuite.test_unit_desktop[@web]" in text
+    assert "Hoot: 49 passed, 1 failed" in text
+    assert "`@web/a/one`" in text
+    assert "`@web/typo`" in text
+
+
 def test_feed_from_records_ignores_unmatched_result():
     feed = journal.feed_from_records([
         {"kind": "result", "id": 99, "stdout": "orphan"},

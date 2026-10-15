@@ -356,6 +356,17 @@ def to_markdown(records: list[dict], meta: dict | None = None) -> str:
                     f"{t.get('errors')} errors, {t.get('skipped')} skipped — "
                     f"{'PASS' if t.get('success') else 'FAIL'}\n"
                 )
+            if record.get("hoot"):
+                # A Hoot run is one Python test; the line above says 1 over
+                # however many JS tests ran.
+                hoot = record["hoot"]
+                lines.append(
+                    f"Hoot: {hoot.get('passed')} passed, {hoot.get('failed')} failed\n"
+                )
+                for name in hoot.get("failed_tests") or []:
+                    lines.append(f"- failed: `{name}`\n")
+                for name in hoot.get("unknown_filters") or []:
+                    lines.append(f"- filter Hoot has nothing for: `{name}`\n")
             if record.get("error"):
                 error = record["error"]
                 if not isinstance(error, dict):
