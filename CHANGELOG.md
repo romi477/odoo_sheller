@@ -28,10 +28,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
-- A session id is never all digits. About one session in 280 got an id like
-  `274327107366`; an agent's host could send it back as a JSON number, every
-  MCP tool refused it as not a string, and the agent was locked out of its own
-  session. Such an id is now drawn again.
+- A session id never reads as a JSON number. About one session in 280 got an
+  id like `274327107366`, and about as many one like `27432710e366`; an
+  agent's host could send it back as a JSON number, every MCP tool refused it
+  as not a string, and the agent was locked out of its own session. Such an
+  id is now drawn again.
 
 ## [1.9.0] — 2026-10-08
 

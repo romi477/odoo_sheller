@@ -36,6 +36,13 @@ def test_new_session_id_is_never_all_digits():
     assert new_session_id(lambda: next(draws)) == "27432710736a"
 
 
+def test_new_session_id_is_never_a_number_in_exponent_form():
+    """`27432710e366` is a JSON number as well — 2.74e373, which overflows —
+    and such a draw is about as common as an all-digit one."""
+    draws = iter(["27432710e366", "0e1234567890", "2743271e036a", "27432710e36a"])
+    assert new_session_id(lambda: next(draws)) == "2743271e036a"
+
+
 def test_new_session_id_default_shape():
     session_id = new_session_id()
     assert len(session_id) == 12

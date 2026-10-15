@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import os
+import re
 import secrets
 import uuid
 from dataclasses import replace
@@ -63,17 +64,22 @@ def load_admin_key(path: Path = ADMIN_KEY_PATH) -> str:
     return key
 
 
+# A JSON number spelled in hex digits: decimal ones, or two runs of them
+# around an `e` — `27432710e366` is 2.74e373.
+_NUMBER_SHAPED = re.compile(r"\d+(?:e\d+)?")
+
+
 def new_session_id(draw=lambda: uuid.uuid4().hex[:12]) -> str:
-    """Twelve hex digits, never all of them decimal ones.
+    """Twelve hex digits that never read as a JSON number.
 
     An agent's host can send `274327107366` as a JSON number; every MCP tool
     takes `session_id` as a string, so the call is refused before it runs, and
-    a leading zero would be gone besides. About one draw in 280 looks like
-    that, and it is drawn again.
+    a leading zero would be gone besides. About one draw in 280 is all digits
+    and about as many are digits around one `e`; those are drawn again.
     """
     while True:
         session_id = draw()
-        if not session_id.isdigit():
+        if not _NUMBER_SHAPED.fullmatch(session_id):
 
             return session_id
 
