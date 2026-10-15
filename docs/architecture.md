@@ -549,7 +549,11 @@ starting ──(hello)──> ready ──(exec)──> busy ──(result)─�
   may have written. A commit that finally got its lock did commit: a
   `commit` record (with `late: true`) follows the `abandoned_result`, the
   pending count clears, and the journal stops reading "discarded" over a
-  write that happened.
+  write that happened. A test run that blew its ceiling keeps its stderr
+  window and its parsers until the late result lands, and that
+  `abandoned_result` carries what an answer in time would — `failed`, the
+  run's `stderr`, `discarded_pending` and `hoot` — so `os_test_result`
+  reads the same outcome either way.
 - **Closing a busy session never passes through `ready`.** The command a
   close cuts short is still what the container is doing, so the session
   stays `busy` — with its original `activity` — until it is `closed`. It used

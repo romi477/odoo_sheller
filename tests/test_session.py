@@ -1967,6 +1967,54 @@ async def test_two_browser_suites_in_one_run_add_up(tmp_path):
     await session.close()
 
 
+# A Hoot run that outlives its ceiling: the failure is logged before the
+# daemon gives up, the summary and the result after.
+RUN_HOOT_LATE_FAKE = RUN_HOOT_FAKE.replace(
+    "    sys.stderr.write(H % (\"INFO\", \"Failed 1 tests (4 passed, total time: 00:00:00)\"))\n"
+    "    sys.stderr.flush()\n"
+    "    time.sleep(0.1)\n",
+    "    sys.stderr.flush()\n"
+    "    time.sleep(0.3)\n"
+    "    sys.stderr.write(H % (\"INFO\", \"Failed 1 tests (4 passed, total time: 00:00:00)\"))\n"
+    "    sys.stderr.flush()\n"
+    "    time.sleep(0.02)\n",
+)
+
+
+async def test_a_run_that_lands_after_its_timeout_keeps_what_it_logged(
+    tmp_path, monkeypatch
+):
+    """A browser suite is the run most likely to blow its ceiling, and the
+    late result is what os_test_result then reads. It used to be the bare
+    frame: `tests_run: 1` with no `hoot`, no `failed` and no log."""
+
+    async def fake_signal(container, pid, name):
+        pass
+
+    monkeypatch.setattr("odoo_sheller.session.send_signal", fake_signal)
+    assert RUN_HOOT_LATE_FAKE != RUN_HOOT_FAKE
+    session = await make_session(tmp_path, script=RUN_HOOT_LATE_FAKE)
+    await session.start()
+    try:
+        with pytest.raises(TimeoutError):
+            await session.run_test(
+                "web", "WebSuite", "test_unit_desktop", timeout=0.1, params="@web/a"
+            )
+        await wait_for_state(session, SessionState.READY)
+    finally:
+        await session.kill()
+
+    late = [r for r in session.journal.records() if r["kind"] == "abandoned_result"]
+    assert len(late) == 1
+    assert late[0]["hoot"]["failed_tests"] == ["@web/a/one"]
+    assert late[0]["hoot"]["passed"] == 4          # logged after the ceiling
+    assert late[0]["hoot"]["reasons"] == {"@web/a/one": "Failed assertion:"}
+    assert any("Failed 1 tests" in line for line in late[0]["stderr"])
+    assert late[0]["failed"] == []
+    assert late[0]["discarded_pending"] is False
+    assert not session._stderr_collectors       # the window went with the run
+
+
 async def test_a_run_without_hoot_has_no_hoot_block(tmp_path):
     session = await make_session(tmp_path, script=RUN_TEST_STDERR_FAKE)
     await session.start()

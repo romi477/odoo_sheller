@@ -319,6 +319,9 @@ class Session:
         # module's log is thousands of lines; this is the part an agent acts on.
         self._test_failed: list[dict] = []
         # What Hoot reported during the current run; None until it says anything.
+        # The test run in flight: its stderr window and what it discarded.
+        # It outlives `run_test` when the run blows its ceiling.
+        self._run: dict | None = None
         self._hoot: dict | None = None
         # The failed Hoot test whose reasons are being read, and the lines so far.
         self._hoot_reason_for: str | None = None
@@ -664,30 +667,51 @@ class Session:
         self._hoot = None
         self._hoot_reason_for = None
         self._test_module = module
+        self._run = {"window": window, "discarded_pending": discarded_pending}
         try:
             result = await self._request(
                 run_test_frame(request_id, module, test_class, test_method, params), timeout
             )
             await asyncio.sleep(STDERR_DRAIN)  # let the reader catch up on the tail
-        finally:
-            # A run that raised (timeout, death) must not leave a collector
-            # behind: it would keep filling for the rest of the session.
-            self._stderr_collectors.remove(window)
-            self._test_module = None
-        result = {
-            **result,
-            "failed": self._test_failed,
-            "stderr": list(window.lines),
-            "stderr_truncated": window.truncated,
-            "discarded_pending": discarded_pending,
-        }
-        if self._hoot is not None:
-            self._end_hoot_reason()
-            result["hoot"] = self._hoot
+        except TimeoutError:
+            # Past its ceiling, and still running and logging in the
+            # container: the window and the parsers stay on until
+            # `_settle_abandoned` books the late result with them — or the
+            # session ends, which ends the run too.
+            raise
+        except BaseException:
+            # Death, a close: a collector left behind would keep filling for
+            # the rest of the session.
+            self._end_run()
+            raise
+        result = self._run_result(result)
+        self._end_run()
         self.journal.write("result", **_journal_fields(result))
         self._maybe_autoclose()
 
         return result
+
+    def _run_result(self, frame: dict) -> dict:
+        """The bootstrap's answer to a run, with what the session read of it."""
+        run = self._run
+        result = {
+            **frame,
+            "failed": self._test_failed,
+            "stderr": list(run["window"].lines),
+            "stderr_truncated": run["window"].truncated,
+            "discarded_pending": run["discarded_pending"],
+        }
+        if self._hoot is not None:
+            self._end_hoot_reason()
+            result["hoot"] = self._hoot
+
+        return result
+
+    def _end_run(self) -> None:
+        run, self._run = self._run, None
+        if run is not None and run["window"] in self._stderr_collectors:
+            self._stderr_collectors.remove(run["window"])
+        self._test_module = None
 
     async def commit(self, timeout: float = 300.0) -> dict:
 
@@ -843,7 +867,12 @@ class Session:
                 if not self._hello_waiter.done():
                     self._hello_waiter.set_result(frame)
             elif kind == "result" and frame.get("id") == self._abandoned_id:
-                self._settle_abandoned(frame)
+                if self._run is not None:
+                    # The same drain an answer in time gets: the log tail may
+                    # still be behind this frame.
+                    await asyncio.sleep(STDERR_DRAIN)
+                if frame.get("id") == self._abandoned_id:  # not dead meanwhile
+                    self._settle_abandoned(frame)
             elif (
                 kind in ("result", "bye")
                 and self._waiter is not None
@@ -995,6 +1024,11 @@ class Session:
         kind = self._abandoned_kind
         self._abandoned_id = None
         self._abandoned_kind = None
+        if kind == "run_test" and self._run is not None:
+            # Booked as an answer in time would have been: the failures, the
+            # log and Hoot's counts — what os_test_result reads back.
+            frame = self._run_result(frame)
+            self._end_run()
         self.journal.write("abandoned_result", **_journal_fields(frame))
         if kind == "exec":
             self.pending_commands += 1
@@ -1074,6 +1108,7 @@ class Session:
         if state in (SessionState.CLOSED, SessionState.DEAD):
             self._abandoned_id = None  # nothing is coming back now
             self._abandoned_kind = None
+            self._end_run()
         if state is not SessionState.BUSY:
             self._activity = None
             if self._test_progress is not None:
