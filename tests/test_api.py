@@ -360,6 +360,16 @@ def test_run_test_rejects_a_malformed_spec(client):
     assert client.registry.session.calls == []
 
 
+def test_a_spec_with_its_params_in_it_is_told_where_they_go(client):
+    """os_run_test and os_history show a run as `spec[params]`; copied back
+    whole as the spec, it was refused with no word about `params`."""
+    response = client.post(
+        "/api/sessions/s1/run_test", json={"test": "web.WebSuite.test_unit_desktop[@web]"},
+    )
+    assert response.status_code == 400
+    assert "params" in response.json()["detail"]["recovery"]
+
+
 @pytest.mark.parametrize("bad", [0, -1, 100000])
 def test_run_test_rejects_a_timeout_that_cannot_work(client, bad):
     """timeout=0 sends the frame and gives up on it at once: the run really

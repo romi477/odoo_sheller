@@ -976,6 +976,12 @@ def create_app(registry: Registry | None = None) -> FastAPI:
                     "recovery": (
                         "use 'module', 'module.TestClass' or "
                         "'module.TestClass.test_method'"
+                        # How os_run_test and os_history show a run with
+                        # params, so the likeliest thing to be copied back.
+                        + (
+                            "; what is in brackets goes in `params`, not in the spec"
+                            if "[" in body.test else ""
+                        )
                     ),
                 },
             )
