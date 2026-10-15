@@ -1915,6 +1915,28 @@ async def test_the_log_tail_that_arrives_after_the_result_is_still_read(tmp_path
     await session.close()
 
 
+# `web.WebSuite` as a class is test_unit_desktop and test_hoot: two browser
+# runs, two summaries, in one Python run.
+RUN_TWO_HOOT_SUITES_FAKE = RUN_HOOT_FAKE.replace(
+    "    sys.stderr.write(H % (\"INFO\", 'Running test \"@web/a/one\"'))\n",
+    "    sys.stderr.write(H % (\"INFO\", \"Passed 3 tests (7 assertions, total time: 00:00:00)\"))\n"
+    "    sys.stderr.write(H % (\"INFO\", 'Running test \"@web/a/one\"'))\n",
+)
+
+
+async def test_two_browser_suites_in_one_run_add_up(tmp_path):
+    """Each browser test ends on its own summary. Keeping only the last one
+    told the agent 4 passed over a run where 7 did, next to failed ids from
+    both."""
+    assert RUN_TWO_HOOT_SUITES_FAKE != RUN_HOOT_FAKE
+    session = await make_session(tmp_path, script=RUN_TWO_HOOT_SUITES_FAKE)
+    await session.start()
+    result = await session.run_test("web", "WebSuite", params="@web/a")
+    assert result["hoot"]["passed"] == 7
+    assert result["hoot"]["failed"] == 1
+    await session.close()
+
+
 async def test_a_run_without_hoot_has_no_hoot_block(tmp_path):
     session = await make_session(tmp_path, script=RUN_TEST_STDERR_FAKE)
     await session.start()

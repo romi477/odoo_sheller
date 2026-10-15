@@ -890,7 +890,9 @@ class Session:
             # run's summary of failed reasons; one entry is what to rerun.
             self._hoot["failed_tests"].append(value)
         elif kind == "summary":
-            self._hoot.update(value)
+            # One per browser test, and a class or a module can run several.
+            for key, count in value.items():
+                self._hoot[key] = (self._hoot[key] or 0) + count
         elif kind == "running" and self._test_progress is not None:
             self._test_progress["current"] = value
             self._emit_test_progress()
