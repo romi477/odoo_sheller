@@ -703,7 +703,9 @@ class Session:
         self._hoot_filters = hoot_filters(params) if params else {}
         self._hoot_stopping = False
         self._test_module = module
-        self._run = {"window": window, "discarded_pending": discarded_pending}
+        self._run = {
+            "window": window, "discarded_pending": discarded_pending, "params": params,
+        }
         try:
             result = await self._request(
                 run_test_frame(request_id, module, test_class, test_method, params), timeout
@@ -950,6 +952,10 @@ class Session:
         kind, description = parsed
         if kind in ("failure", "error") and self._test_module:
             failed = {"test": rerun_spec(self._test_module, description), "kind": kind}
+            if self._run is not None and self._run["params"]:
+                # A browser test without its params is the suite of every
+                # module, not the part of it that failed.
+                failed["params"] = self._run["params"]
             if failed not in self._test_failed:
                 self._test_failed.append(failed)
         if self._test_progress is None:

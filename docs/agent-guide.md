@@ -303,7 +303,9 @@ daemon reads it off Odoo's own `FAIL:` / `ERROR:` log lines while the run
 goes, so `test` is a spec to pass straight back to `os_run_test` — a failed
 subtest as its method, a class whose `setUpClass` failed as the class, a test
 file whose `setUpModule` failed as the whole module (no tag can name a file),
-and anything Odoo named some other way as Odoo named it. Odoo logs a failed
+and anything Odoo named some other way as Odoo named it. An entry from a run
+with `params` carries them as well, and both go back: a browser test without
+its params is every module's JS suite. Odoo logs a failed
 fixture under the suite rather than under the test — `odoo.tests.suite`, or
 `unittest.suite` in 15 — and the daemon reads both. The intended loop is a
 module run, then one run per failed spec: a class or a method answers with

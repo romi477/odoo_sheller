@@ -544,7 +544,9 @@ tests below.
 
 Every answer carries `failed`: one entry per failing test, `{"test": spec,
 "kind": "failure" | "error"}`, where `test` is ready to pass straight back to
-os_run_test. A failed subtest is listed as its method, a class whose
+os_run_test — with `params` too when the run had them: pass both back, or
+a browser test reruns every module's suite. A failed subtest is listed as
+its method, a class whose
 setUpClass failed as the class, and a test file whose setUpModule failed as
 the whole module — no tag can name a file. To find out why one failed, run
 that spec on its own: a class or a method answers with its log tail in

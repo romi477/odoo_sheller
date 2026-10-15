@@ -1442,6 +1442,19 @@ async def test_a_run_names_what_failed_as_specs_to_rerun(tmp_path):
     await session.close()
 
 
+async def test_what_failed_in_a_run_with_params_carries_them(tmp_path):
+    """A failed browser test without its params is the whole suite of every
+    module: `failed` promises a spec to pass straight back, so the params
+    come with it."""
+    session = await make_session(tmp_path, script=FAILED_FAKE)
+    await session.start()
+    result = await session.run_test("sale", "TestSaleOrder", params="@sale")
+    assert result["failed"][0] == {
+        "test": "sale.TestSaleOrder.test_b", "kind": "failure", "params": "@sale",
+    }
+    await session.close()
+
+
 async def test_the_failed_list_is_journalled_with_the_result(tmp_path):
     session = await make_session(tmp_path, script=FAILED_FAKE)
     await session.start()
