@@ -81,3 +81,15 @@ def run_test_frame(
         frame["params"] = params
 
     return frame
+
+
+def spec_of(
+    module: str,
+    test_class: str | None = None,
+    test_method: str | None = None,
+    params: str | None = None,
+) -> str:
+    """A run as one string: `module.Class.method`, and `[params]` if it had any."""
+    spec = ".".join(part for part in (module, test_class, test_method) if part)
+
+    return f"{spec}[{params}]" if params else spec

@@ -22,6 +22,7 @@ from mcp.server import MCPServer
 from mcp_types import ToolAnnotations
 
 from odoo_sheller import rules
+from odoo_sheller.protocol import spec_of
 
 logger = logging.getLogger(__name__)
 
@@ -1516,7 +1517,7 @@ async def _run_test_in(
         client_timeout=run_leg,
         json={"test": test, "timeout": timeout, "params": params},
     )
-    spec = f"{test}[{params}]" if params else test
+    spec = spec_of(test, params=params)
     if result.get("error") == "request_timed_out":
         afterwards = (
             "that session closes itself when the run ends, so there is "
@@ -1775,17 +1776,13 @@ def _history_run_test_entry(entry: dict) -> dict:
     """
     result = entry.get("result") or {}
     test = result.get("test") or {}
-    spec = ".".join(
-        part for part in (entry.get("module"), entry.get("test_class"), entry.get("test_method"))
-        if part
-    )
+    parts = (entry.get("module"), entry.get("test_class"), entry.get("test_method"))
     stdout, out_clipped = _clip(result.get("stdout"), MAX_STDOUT)
     # The same rule os_run_test answers by, so a run recovered later reads
-    # the same as one answered at once.
-    log, stderr_clipped = _test_log(spec, result)
-    if entry.get("params"):
-        # After the log rule: a dot inside the params is not a class.
-        spec += f"[{entry['params']}]"
+    # the same as one answered at once — on the spec without its params: a
+    # dot inside them is not a class.
+    log, stderr_clipped = _test_log(spec_of(*parts), result)
+    spec = spec_of(*parts, entry.get("params"))
     shaped = {
         "n": entry.get("ordinal"),
         "test": spec,

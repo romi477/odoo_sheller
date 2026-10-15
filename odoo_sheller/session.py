@@ -19,6 +19,7 @@ from odoo_sheller.protocol import (
     exec_frame,
     rollback_frame,
     run_test_frame,
+    spec_of,
 )
 from odoo_sheller.rules import major_of
 from odoo_sheller.transport import PRODUCTION, Target, send_signal
@@ -189,18 +190,6 @@ def rerun_spec(module: str, description: str) -> str:
         return f"{module}.{description}"
 
     return description
-
-
-def spec_of(
-    module: str,
-    test_class: str | None = None,
-    test_method: str | None = None,
-    params: str | None = None,
-) -> str:
-    """A run as one string: `module.Class.method`, and `[params]` if it had any."""
-    spec = ".".join(part for part in (module, test_class, test_method) if part)
-
-    return f"{spec}[{params}]" if params else spec
 
 
 def parse_test_line(line: str) -> tuple[str, str] | None:

@@ -12,6 +12,8 @@ from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
+from odoo_sheller.protocol import spec_of
+
 logger = logging.getLogger(__name__)
 
 JOURNAL_ROOT = Path.home() / ".odoo-sheller" / "journals"
@@ -330,13 +332,10 @@ def to_markdown(records: list[dict], meta: dict | None = None) -> str:
             ordinals[record.get("id")] = next_ordinal
             actor = record.get("actor") or {}
             by = f" by {actor.get('kind')} ({_named(actor)})" if actor else ""
-            spec = ".".join(
-                part for part in (
-                    record.get("module"), record.get("test_class"), record.get("test_method"),
-                ) if part
+            spec = spec_of(
+                record.get("module"), record.get("test_class"), record.get("test_method"),
+                record.get("params"),
             )
-            if record.get("params"):
-                spec += f"[{record['params']}]"
             lines.append(f"## Test {next_ordinal}{by} — `{spec}` — {stamp}\n")
         elif kind in ("result", "abandoned_result"):
             if kind == "abandoned_result":
