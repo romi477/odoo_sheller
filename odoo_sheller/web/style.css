@@ -692,6 +692,11 @@ button.region-toggle:active:not(:disabled) {
   margin-bottom: 8px;
 }
 
+.odoosh-name {
+  flex: 1 1 16ch;
+  min-width: 0;
+}
+
 .odoosh-build {
   flex: 0 0 10ch;
 }
@@ -736,6 +741,10 @@ button.region-toggle:active:not(:disabled) {
   margin: 0;
   color: var(--red);
   font-size: 12px;
+}
+
+.odoosh-error {
+  margin-bottom: 8px;
 }
 
 .ssh-field:has(.field-error:not([hidden])) input {

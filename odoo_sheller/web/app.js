@@ -28,6 +28,7 @@ const state = {
   servers: [],
   serversError: null,
   serverEditing: null,
+  buildEditing: null,
   containerCards: new Map(),
 };
 
@@ -592,18 +593,83 @@ async function loadTargets() {
   renderServers();
 }
 
-async function addBuild(build, host) {
-  try {
-    await withAdminRetry(
-      () => api.post('/api/targets', {kind: 'odoosh', build, host}, adminHeaders()),
-    );
-  } catch (error) {
-    noticeDialog(`Could not save the build: ${error.message}`);
+// The build form writes a new card, or — after Edit — saves over one. A card
+// follows its build: odoo.sh makes a new one on every push, with a new
+// hostname, and the name is what stays. The id comes from the build, so a
+// change of build is a card with a new id; the probe of the old one is not
+// about it.
+function buildFormElement() {
+
+  return document.querySelector('#odoosh .odoosh-form');
+}
+
+function showBuildError(message) {
+  const element = document.querySelector('.odoosh-error');
+  element.hidden = !message;
+  element.textContent = message || '';
+}
+
+async function saveBuildForm() {
+  const form = buildFormElement();
+  const name = form.querySelector('.odoosh-name').value.trim();
+  const build = form.querySelector('.odoosh-build').value.trim();
+  const host = form.querySelector('.odoosh-host').value.trim();
+  if (!build || !host) {
+    showBuildError('A build needs its id and its hostname.');
 
     return;
   }
+  const editing = state.builds.find((item) => item.id === state.buildEditing);
+  try {
+    await withAdminRetry(() => (editing
+      ? api.put(`/api/targets/${editing.id}`, {name, build, host}, adminHeaders())
+      : api.post('/api/targets', {kind: 'odoosh', name, build, host}, adminHeaders())));
+  } catch (error) {
+    if (error.status === 422) {
+      showBuildError(typeof error.detail === 'string' ? error.detail : error.message);
+    } else {
+      noticeDialog(`Could not save the build: ${error.message}`);
+    }
+
+    return;
+  }
+  resetBuildForm();
   await loadTargets();
-  await probeBuild(build, host);
+  // A new name says nothing new about the instance; a new build or host does.
+  if (!editing || editing.build !== build || editing.host !== host) {
+    await probeBuild(build, host);
+  }
+}
+
+function resetBuildForm() {
+  const form = buildFormElement();
+  state.buildEditing = null;
+  composerEditing('odoosh', null);
+  setComposerCollapsed('odoosh', composerWasCollapsed('odoosh'), false);
+  form.querySelector('.odoosh-name').value = '';
+  form.querySelector('.odoosh-build').value = '';
+  form.querySelector('.odoosh-host').value = '';
+  form.querySelector('.odoosh-add').textContent = 'Probe';
+  form.querySelector('.odoosh-cancel').hidden = true;
+  showBuildError('');
+}
+
+function editBuild(entry) {
+  const form = buildFormElement();
+  resetBuildForm();
+  state.buildEditing = entry.id;
+  composerEditing('odoosh', entry.name);
+  // A change made in a folded form would be one nobody can see.
+  setComposerCollapsed('odoosh', false, false);
+  // A card without a name of its own is called by its build: that is not a
+  // name to put in the field, or it would stay behind when the build changes.
+  form.querySelector('.odoosh-name').value = entry.name === entry.build ? '' : entry.name;
+  form.querySelector('.odoosh-build').value = entry.build;
+  form.querySelector('.odoosh-host').value = entry.host;
+  form.querySelector('.odoosh-add').textContent = 'Save changes';
+  form.querySelector('.odoosh-cancel').hidden = false;
+  form.scrollIntoView({block: 'nearest'});
+  form.querySelector('.odoosh-name').focus();
 }
 
 async function forgetBuild(entry) {
@@ -613,6 +679,9 @@ async function forgetBuild(entry) {
     noticeDialog(`Could not remove the build: ${error.message}`);
 
     return;
+  }
+  if (state.buildEditing === entry.id) {
+    resetBuildForm();
   }
   await loadTargets();
 }
@@ -855,12 +924,14 @@ async function saveServerForm() {
 
 // The panel a card is written in says whether it is a new card or one being
 // changed: both are the same form, and nothing else on the screen tells.
-function composerEditing(name) {
-  const composer = document.querySelector('#ssh').querySelector('.composer');
+const COMPOSER_TITLES = {odoosh: 'Add a build', ssh: 'New server'};
+
+function composerEditing(mode, name) {
+  const composer = document.querySelector(COMPOSERS[mode].root).querySelector('.composer');
   composer.classList.toggle('editing', Boolean(name));
   setText(
-    document.querySelector('#ssh-composer-title'),
-    name ? `Editing ${name}` : 'New server',
+    document.querySelector(`#${mode}-composer-title`),
+    name ? `Editing ${name}` : COMPOSER_TITLES[mode],
   );
 }
 
@@ -905,7 +976,7 @@ function setComposerCollapsed(mode, collapsed, remember = true) {
 function resetServerForm() {
   const form = serverFormElement();
   state.serverEditing = null;
-  composerEditing(null);
+  composerEditing('ssh', null);
   setComposerCollapsed('ssh', composerWasCollapsed('ssh'), false);
   form.querySelector('.ssh-name').value = '';
   form.querySelector('.ssh-access').value = '';
@@ -923,7 +994,7 @@ function editServer(entry) {
   const form = serverFormElement();
   resetServerForm();
   state.serverEditing = entry.id;
-  composerEditing(entry.name);
+  composerEditing('ssh', entry.name);
   // A change made in a folded form would be one nobody can see.
   setComposerCollapsed('ssh', false, false);
   form.querySelector('.ssh-name').value = entry.name;
@@ -1007,7 +1078,10 @@ function renderTargets() {
 
 const CONNECT_COPY = {
   local: ['Containers', 'Pick one to probe it and start a session.'],
-  odoosh: ['Odoo.sh builds', 'Enter a build id and its hostname. The instance decides the rest.'],
+  odoosh: [
+    'Odoo.sh builds',
+    'Name it, then enter a build id and its hostname. The instance decides the rest.',
+  ],
   ssh: [
     'Servers',
     'Write down how to arrive and what to run there. Nothing about a server can be discovered.',
@@ -1160,9 +1234,15 @@ const REMOTE_KINDS = {
     probing: 'probing build…',
     // The instance says what it is.
     stage: (entry, probe) => probe.stage,
-    facts: (entry, probe) => [entry.host, ...(probe.ok ? [`Odoo ${probe.odoo_version}`, probe.db_name] : [])],
-    start: (entry) => startOdooshSession(entry.name),
+    // A card with a name of its own would otherwise not say which build it is.
+    facts: (entry, probe) => [
+      entry.name === entry.build ? null : `build ${entry.build}`,
+      entry.host,
+      ...(probe.ok ? [`Odoo ${probe.odoo_version}`, probe.db_name] : []),
+    ],
+    start: (entry) => startOdooshSession(entry.build),
     reprobe: (entry) => probeBuild(entry.build, entry.host),
+    edit: (entry) => editBuild(entry),
     forget: (entry) => forgetBuild(entry),
     forgetKept: 'this card is the only record of its hostname here.',
     startHint: 'Open the session on this build. The instance chooses the database; there is nothing to pick.',
@@ -1181,6 +1261,7 @@ const REMOTE_KINDS = {
     facts: (entry, probe) => serverFacts(entry, probe),
     start: (entry) => startServerSession(entry),
     reprobe: (entry) => probeServer(entry),
+    edit: (entry) => editServer(entry),
     forget: (entry) => forgetServer(entry),
     forgetKept: 'this card is the only record of how to reach it here.',
     startHint: 'Open the session on this server. The card says which user and which database.',
@@ -1271,7 +1352,7 @@ function renderRemoteCards(kind) {
     card.querySelector('.reprobe').addEventListener('click', () => kind.reprobe(entry));
     card.querySelector('.reprobe').disabled = Boolean(broken);
     card.querySelector('.forget').addEventListener('click', () => kind.forget(entry));
-    card.querySelector('.edit')?.addEventListener('click', () => editServer(entry));
+    card.querySelector('.edit').addEventListener('click', () => kind.edit(entry));
 
     const key = cardKey(entry.id);
     const open = sessionsForTarget(key);
@@ -4160,13 +4241,14 @@ Object.keys(COMPOSERS).forEach((mode) => {
   });
   setComposerCollapsed(mode, composerWasCollapsed(mode), false);
 });
-document.querySelector('.odoosh-add').addEventListener('click', () => {
-  const build = document.querySelector('.odoosh-build').value.trim();
-  const host = document.querySelector('.odoosh-host').value.trim();
-  if (build && host) {
-    addBuild(build, host);
-  }
-});
+{
+  const form = buildFormElement();
+  form.querySelector('.odoosh-add').addEventListener('click', saveBuildForm);
+  form.querySelector('.odoosh-cancel').addEventListener('click', resetBuildForm);
+  form.querySelectorAll('input').forEach((input) => {
+    input.addEventListener('input', () => showBuildError(''));
+  });
+}
 
 // Framed by the desktop app, which says so in the URL. `/docs` is a link out
 // of this page with no way back — the app's window has no address bar and no

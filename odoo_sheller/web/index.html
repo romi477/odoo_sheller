@@ -70,10 +70,13 @@
           </h2>
           <div class="composer-body" id="odoosh-composer-body" hidden>
             <div class="odoosh-form">
+              <input class="odoosh-name" placeholder="name (optional)" maxlength="60" spellcheck="false" title="What this card is called — optional: without a name it is called by its build id. Worth giving: odoo.sh makes a new build on every push, and the name stays when you edit the card to follow it.">
               <input class="odoosh-build mono" placeholder="build id" title="The numeric build id, which is also the SSH user — odoo.sh shows it beside the build.">
               <input class="odoosh-host mono" placeholder="build hostname" title="The hostname the build's UI is served on. Together with the build id this is the SSH destination.">
               <button class="odoosh-add" title="Ask the build what it is: database, Odoo version, and whether it is staging or production. Nothing is opened yet.">Probe</button>
+              <button type="button" class="odoosh-cancel" hidden>Cancel</button>
             </div>
+            <p class="field-error odoosh-error" hidden></p>
             <p class="composer-note">A build is entered, not discovered — there is no listing for odoo.sh. Probing only reads what the instance says about itself.</p>
           </div>
         </section>
@@ -169,6 +172,7 @@
             <button class="start primary" title="Open the session on this build. The instance chooses the database; there is nothing to pick.">Open session</button>
             <button class="close-connected" hidden title="Close the session on this build. Uncommitted work is discarded.">Close session</button>
             <button class="reprobe" title="Ask the build about itself again — after a rebuild, or if it was asleep.">Probe</button>
+            <button class="edit" title="Change this card: its name, or the build and hostname after a new push.">Edit</button>
             <button class="forget icon" aria-label="Forget this build" title="Remove this build from the list. Nothing on the instance changes."><span aria-hidden="true">×</span></button>
           </div>
           <div class="card-facts">

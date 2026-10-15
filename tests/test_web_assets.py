@@ -2029,6 +2029,54 @@ def test_the_odoosh_mode_asks_for_a_build_and_a_host(markup):
         assert cls in markup.classes, cls
 
 
+def test_the_build_form_asks_for_a_name_first_and_does_not_insist(markup):
+    form = re.search(r'<div class="odoosh-form">(.*?)</div>', _page(), re.DOTALL)
+    assert form is not None
+    inputs = re.findall(r'<input class="(odoosh-[a-z]+)', form.group(1))
+    assert inputs == ["odoosh-name", "odoosh-build", "odoosh-host"]
+    name = re.search(r'<input class="odoosh-name"[^>]*>', form.group(1)).group(0)
+    assert 'maxlength="60"' in name, "the daemon's own limit"
+    assert "optional" in name
+
+
+def test_a_build_card_is_edited_like_a_server_card(app_js):
+    template = re.search(r'<template id="odoosh-card">(.*?)</template>', _page(), re.DOTALL)
+    assert template is not None
+    assert 'class="edit"' in template.group(1)
+    edit = re.search(r"function editBuild\(.*?\n\}", app_js, re.DOTALL)
+    assert edit is not None
+    body = edit.group(0)
+    for field in ("build", "host"):
+        assert f"entry.{field}" in body, field
+    assert "state.buildEditing = entry.id" in body
+    assert "setComposerCollapsed('odoosh', false, false)" in body
+    assert "composerEditing('odoosh'" in body
+    # The card's name is the build when none was given; the form shows none.
+    assert "entry.name === entry.build ? ''" in body
+    save = re.search(r"async function saveBuildForm\(.*?\n\}", app_js, re.DOTALL)
+    assert save is not None
+    assert "api.put(" in save.group(0) and "api.post(" in save.group(0)
+    assert "withAdminRetry(" in save.group(0) and "adminHeaders()" in save.group(0)
+    reset = re.search(r"function resetBuildForm\(.*?\n\}", app_js, re.DOTALL)
+    assert reset is not None
+    assert "setComposerCollapsed('odoosh', composerWasCollapsed('odoosh'), false)" in reset.group(0)
+    assert "composerEditing('odoosh', null)" in reset.group(0)
+
+
+def test_each_kind_of_card_edits_in_its_own_form(app_js):
+    render = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL)
+    assert "kind.edit(entry)" in render.group(0)
+    assert "editServer(entry)" not in render.group(0)
+    assert "edit: (entry) => editBuild(entry)" in app_js
+    assert "edit: (entry) => editServer(entry)" in app_js
+
+
+def test_a_named_build_still_opens_its_build(app_js):
+    """A card's name is free text now; the session is opened by its build."""
+    assert "start: (entry) => startOdooshSession(entry.build)" in app_js
+    assert "startOdooshSession(entry.name)" not in app_js
+
+
 def test_a_remembered_build_is_a_card_like_a_container(app_js):
     """Typing a 40-character hostname twice is once too many, and it keeps the
     existing habit: click a card, press Start."""
@@ -2045,7 +2093,7 @@ def test_the_cards_live_on_the_daemon_not_in_the_page(app_js):
 
 def test_writing_probing_and_deleting_a_card_go_through_the_admin_key(app_js):
     """Each is an instruction to this machine to open an ssh connection."""
-    for name in ("addBuild", "probeBuild", "forgetBuild"):
+    for name in ("saveBuildForm", "probeBuild", "forgetBuild"):
         function = re.search(rf"async function {name}\(.*?\n\}}", app_js, re.DOTALL)
         assert function is not None, name
         body = function.group(0)
