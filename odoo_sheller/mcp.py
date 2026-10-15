@@ -649,6 +649,11 @@ run the moment Hoot says so, and the answer carries `hoot.unknown_filters`.
 Check the id — `@module/` then the suite path and the test name as the test
 file spells them — and that the file is in `web.assets_unit_tests`.
 
+A run in a fresh session sees every file on disk. One in a session you were
+handed reuses that process's asset lists; on 17 to 19 the session drops them
+before each run, on 20 it cannot — there, ask for a fresh session before a
+rerun that has to see a new file.
+
 The answer's counts are about the one Python test that ran Hoot. `hoot` has
 Hoot's own: `passed`, `failed` (summed over every browser test the run
 had), `failed_tests` — ids to pass straight back as params to rerun just

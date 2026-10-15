@@ -32,12 +32,29 @@ class FakeModel:
         CALLS.append("base.flush")
 
 
+class FakeEnvRegistry:
+    """`env.registry` as far as the bootstrap touches it before a run."""
+
+    def clear_caches(self):
+        CALLS.append("registry.clear_caches")
+
+
+class FakeNamedCachesRegistry(FakeEnvRegistry):
+    """17 to 19 name their ormcaches; 20 keeps them per transaction instead."""
+
+    def clear_cache(self, *names):
+        CALLS.append(f"registry.clear_cache({','.join(names)})")
+
+
 class FakeEnv:
     """Odoo 16+ shape by default; OS_FAKE_ENV=15 drops what 15 does not have."""
 
     def __init__(self, flavour=None):
         self.cr = FakeCursor()
         self.uid = 1
+        self.registry = (
+            FakeNamedCachesRegistry() if flavour == "17" else FakeEnvRegistry()
+        )
         if flavour in ("13", "14", "15"):
             # 13 through 15 have neither flush_all nor invalidate_all: the
             # boundary is env['base'].flush() and env.clear().

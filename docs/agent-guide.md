@@ -152,6 +152,14 @@ stops the run (`SIGINT`, journalled as an `interrupt` with
 `reason: hoot_unknown_filter`) when Hoot drops one of them, and names it in
 `hoot.unknown_filters`. A dropped id that is not one of ours is only listed.
 
+Each bundle's file list is cached per process (`ir.asset._get_asset_paths`,
+in the `assets` ormcache), so a session that runs a browser suite, gains a
+test file and runs again would rerun the old list. Before every run the
+bootstrap drops that cache in its own process on 17 to 19, which name it;
+20 keeps its caches per transaction and is left alone, so there a rerun that
+must see a new file wants a fresh session. A fresh session — what
+`os_run_test` opens without a `session_id` — sees every file anyway.
+
 `tests_run` then says 1 however many Hoot tests ran, so the session reads
 Hoot's own lines out of the run's log (`hoot/core/runner.js`): `Test "<id>"
 failed:` for each failure, `Passed N tests` or `Failed N tests (M passed` at

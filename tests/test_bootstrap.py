@@ -200,6 +200,31 @@ def test_run_test_calls_odoos_own_shell_runner_when_there_is_one():
     )
 
 
+def test_run_test_forgets_this_processs_asset_file_lists_first():
+    """Each bundle's file list is cached per process (`_get_asset_paths`, in
+    the `assets` cache). A session that runs a browser suite, gains a test
+    file and runs it again would rerun the old list — and Hoot runs every test
+    it has when a filter names one it lacks."""
+    _, _, calls = run_bootstrap([
+        {"t": "run_test", "id": 1, "module": "web", "test_class": "WebSuite",
+         "test_method": "test_unit_desktop", "params": "@web"},
+    ], fake_odoo="17")
+    assert "registry.clear_cache(assets)" in calls
+    assert calls.index("registry.clear_cache(assets)") < calls.index(
+        "shell.run_tests(*/web:WebSuite.test_unit_desktop[@web])"
+    )
+
+
+def test_run_test_leaves_caches_alone_where_none_is_named():
+    """16 and older have only `clear_caches()`, every ormcache at once: not
+    worth it for a JS file list, so nothing is cleared."""
+    _, _, calls = run_bootstrap([
+        {"t": "run_test", "id": 1, "module": "sale", "test_class": "TestSaleOrder",
+         "test_method": None},
+    ], fake_odoo="16")
+    assert not [call for call in calls if call.startswith("registry.clear_cache")]
+
+
 def test_run_test_falls_back_to_the_primitives_when_shell_is_absent():
     """Odoo 16 has no odoo/tests/shell.py, but every piece it was built from.
 

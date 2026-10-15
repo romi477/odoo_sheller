@@ -271,6 +271,29 @@ class TestRunnerUnsupported(Exception):
     """This Odoo's test runner is not one the bootstrap knows how to drive."""
 
 
+def _os_forget_asset_lists(env):
+    """Drop this process's cached asset file lists before a run.
+
+    Each bundle's files are globbed once per process and kept in the
+    `assets` ormcache (`ir.asset._get_asset_paths`). A session that ran a
+    browser suite, then gained a JS test file, would run the old list — and
+    Hoot runs every test it has when a filter names one it lacks. In memory
+    and in this process: other processes hear of it only if code here later
+    calls `signal_changes()`, which is what os_help('tests') asks for anyway
+    when the web process should see a new file. 17 to 19 name
+    that cache; 20 keeps its caches per transaction and 16 and older have
+    only `clear_caches()`, every cache at once, so those are left alone.
+    """
+    clear = getattr(env.registry, "clear_cache", None)
+    if clear is None:
+        return
+    try:
+        clear("assets")
+    except (AssertionError, KeyError):
+        # A registry that names its caches but not this one.
+        pass
+
+
 def _os_run_test(env, module, test_class, test_method, params=None):
     captured = io.StringIO()
     saved_stdout = sys.stdout
@@ -354,6 +377,7 @@ def _os_run_test(env, module, test_class, test_method, params=None):
                 # reads.
                 server.http_spawn()
                 server.httpd = "spawned by odoo-sheller"
+        _os_forget_asset_lists(env)
         test_tags = _os_test_tags(module, test_class, test_method, params)
         if shell is None:
             report = _os_run_tests_fallback(env, test_tags, [module])
