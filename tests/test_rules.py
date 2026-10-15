@@ -66,3 +66,20 @@ def test_each_file_covers_python_and_xml(major):
 )
 def test_the_spellings_that_move_are_where_they_belong(major, says):
     assert says in (rules.RULES / f"{major}.md").read_text()
+
+
+def test_the_common_part_says_how_module_code_is_written_on_any_major():
+    """The approach, not a spelling: what holds on every major and is easy to
+    skip in a hurry. The shell is superuser, so a missing access row or a
+    `sudo()` that should not be there never shows in a session."""
+    common = rules.common()
+    section = re.search(r"^## How module code is written\n(.*?)(?=^## |\Z)", common, re.MULTILINE | re.DOTALL)
+    assert section is not None
+    text = section.group(1)
+    for says in (
+        "_inherit", "xpath", "UserError", "ValidationError", "_()",
+        "@api.constrains", "ir.model.access.csv", "_logger", "os_run_test",
+        "blank line before the final `return`",
+    ):
+        assert says in text, says
+    assert common.index("## How module code is written") < common.index("## On every major")

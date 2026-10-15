@@ -8,6 +8,29 @@ before you rely on it: os_source(model=..., method=...) for a method, a file
 path for a view or a manifest. The running source wins over these rules and
 over memory alike.
 
+## How module code is written
+
+- Extend, never edit: change another module, core included, from the module
+  you work in — `_inherit` on the model, an inherited view with `xpath`.
+- Through the ORM: a search domain, a computed field with `@api.depends`,
+  grouping in the database rather than in a Python loop. Raw SQL only where
+  the ORM cannot say it, with parameters, never by formatting a string.
+- An error a user sees is `UserError` or `ValidationError`, its message in
+  `_()`; so is every other string a user reads. Integrity is an
+  `@api.constrains` method or a database constraint, not a check in `create`.
+- A new model needs its row in `security/ir.model.access.csv`, and a
+  multi-company one its `ir.rule`. The shell is superuser, so a missing one
+  never shows in a session — only to the first real user.
+- Log with `_logger = logging.getLogger(__name__)`, never `print`.
+- Prove a change with Odoo's own tests (`TransactionCase`, `HttpCase`), run
+  through os_run_test.
+- Match the module you edit: its layout (`models/`, `views/`, `security/`,
+  `data/`, `controllers/`), its names, its idioms.
+- Put a blank line before the final `return` of a method when other
+  statements precede it. An early return, or a method of three or four
+  lines, may go without. New and changed code only: never reformat a legacy
+  module for this alone.
+
 ## On every major from 15 to 20
 
 - `@api.multi` and `@api.one` are gone. A method on `self` handles any number

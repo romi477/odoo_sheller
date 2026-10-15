@@ -20,6 +20,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   a session goes by the stricter of the two — a card can put a build behind
   the production guard, never take it off one. Cards written before declare
   none and go by the build alone.
+- The rules handed over with a session open with how module code is written,
+  on any major: extend rather than edit, the ORM before SQL, `UserError` and
+  `_()`, an access row for every new model, `_logger`, Odoo's own tests, and
+  a blank line before a method's final `return`.
 - Rules for the Odoo major a session runs. The first session an agent opens
   or adopts on 15 through 20 comes with `rules`: what that major expects of
   Python and XML — `attrs` or Python modifiers, `<tree>` or `<list>`,

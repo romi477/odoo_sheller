@@ -185,7 +185,10 @@ it remembers from one is an error on the other: `attrs` is gone in 17,
 `<tree>` in 18, `_sql_constraints` in 19. So each supported major has a file
 in `odoo_sheller/rules/` — `15.md` through `20.md`, each self-contained, each
 with a `## Python` and a `## XML` section — and `common.md` goes in front of
-it.
+it. That one holds what no major changes: how module code is written here
+(extend rather than edit, the ORM before SQL, errors and strings in `_()`,
+an access row for every new model, a blank line before a method's final
+`return`) and the spellings shared by 15 through 20.
 
 They arrive without being asked for. `os_open_session` and
 `os_attach_session` read the major out of the session's `odoo` field
