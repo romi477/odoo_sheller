@@ -51,6 +51,8 @@ Every card and an open form share one style: a 1px edge that stays, and under
 the pointer a 2px outline drawn over it — brand cyan on every card that can be
 opened, on every list, connected or not (the badge says which); amber on a form.
 A container that is not an Odoo image keeps the plain edge.
+A field being typed into keeps its 1px edge and turns it cyan, in place of the
+browser's own thick blue ring; a field with an error stays red.
 
 Both forms fold. A form's title is a button with an arrow — down while the form
 is open, right once it is folded — and a click on it folds the form to that title,

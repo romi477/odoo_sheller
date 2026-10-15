@@ -947,6 +947,16 @@ input {
   line-height: 1.3;
 }
 
+/* The browser's focus ring is a thick blue found nowhere else on the page. A
+   field being typed into keeps its 1px edge and turns it cyan. An inline
+   error's red edge is the more specific rule, so it stays while the field is
+   being fixed. */
+select:focus,
+input:not([type="radio"]):focus {
+  outline: none;
+  border-color: var(--cyan);
+}
+
 .primary {
   border-color: transparent;
   background: transparent;

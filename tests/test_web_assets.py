@@ -3648,3 +3648,15 @@ def test_a_card_has_a_1px_cyan_edge_that_doubles_under_the_pointer():
     assert "outline-offset: -1px" in hover.group(1)
     # A connected card no longer needs an edge of its own: all of them have it.
     assert ".card:has(.connected:not([hidden])) {" not in css
+
+
+def test_a_field_in_focus_is_edged_in_cyan_at_1px_not_the_browser_ring():
+    """The browser's own focus ring is a thick blue the page uses nowhere else.
+    A field being typed into keeps its 1px edge and turns it cyan instead; the
+    radio dots of the connect modes keep their own ring."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    rule = re.search(r'\nselect:focus,\s*input:not\(\[type="radio"\]\):focus\s*\{([^}]*)\}', css)
+    assert rule is not None
+    assert "outline: none" in rule.group(1)
+    assert "border-color: var(--cyan)" in rule.group(1)
+    assert "px" not in rule.group(1)
