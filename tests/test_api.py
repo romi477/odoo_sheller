@@ -11,6 +11,7 @@ from odoo_sheller.api import create_app
 from odoo_sheller.registry import Registry
 from odoo_sheller.session import (
     CommitNotAllowed,
+    RunParamsUnsupported,
     SessionBusy,
     SessionDead,
     SessionNotReady,
@@ -341,6 +342,15 @@ def test_run_test_takes_params_with_balanced_brackets(client):
     )
     assert response.status_code == 200
     assert client.registry.session.calls[-1][-1] == params
+
+
+def test_run_test_with_params_an_odoo_cannot_take_is_a_422(client):
+    client.registry.session.raises = RunParamsUnsupported("Odoo 15.0 has none")
+    response = client.post(
+        "/api/sessions/s1/run_test", json={"test": "web.WebSuite", "params": "@web"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["error"] == "params_unsupported"
 
 
 def test_run_test_rejects_a_malformed_spec(client):

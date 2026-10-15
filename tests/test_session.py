@@ -12,6 +12,7 @@ from odoo_sheller.session import (
     CommitForbidden,
     CommitNotAllowed,
     ProductionConfirmation,
+    RunParamsUnsupported,
     Session,
     SessionBusy,
     SessionDead,
@@ -1452,6 +1453,18 @@ async def test_what_failed_in_a_run_with_params_carries_them(tmp_path):
     assert result["failed"][0] == {
         "test": "sale.TestSaleOrder.test_b", "kind": "failure", "params": "@sale",
     }
+    await session.close()
+
+
+async def test_params_on_15_are_refused_before_the_run(tmp_path):
+    """15's tag selector has no parameters: it logs `Invalid tag`, selects
+    nothing, and the run reports success over zero tests."""
+    session = await make_session(tmp_path, script=FAKE.replace('"19.0"', '"15.0"'))
+    await session.start()
+    with pytest.raises(RunParamsUnsupported, match="16"):
+        await session.run_test("web", "WebSuite", params="@web")
+    assert not [r for r in session.journal.records() if r["kind"] == "run_test"]
+    assert (await session.run_test("sale"))["error"] is None   # without params it runs
     await session.close()
 
 

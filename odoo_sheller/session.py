@@ -20,6 +20,7 @@ from odoo_sheller.protocol import (
     rollback_frame,
     run_test_frame,
 )
+from odoo_sheller.rules import major_of
 from odoo_sheller.transport import PRODUCTION, Target, send_signal
 
 
@@ -84,6 +85,10 @@ class CommitForbidden(CommitNotAllowed):
     production instance, by both `commit` and the attempt to grant it the
     right: only a human writes to production, and only by granting it.
     """
+
+
+class RunParamsUnsupported(Exception):
+    """This Odoo's test tags carry no parameters: 15 has none before 16."""
 
 
 class ProductionConfirmation(CommitNotAllowed):
@@ -671,6 +676,13 @@ class Session:
         params: str | None = None,
     ) -> dict:
         self._ensure_acceptable("run_test")
+        major = major_of((self.hello or {}).get("odoo"))
+        if params and major is not None and major < 16:
+            # 15's selector has no `[...]`: it logs `Invalid tag`, selects
+            # nothing, and the run reports success over zero tests.
+            raise RunParamsUnsupported(
+                f"Odoo {self.hello.get('odoo')} test tags take no params; they arrived in 16"
+            )
         # Odoo's own run_tests() rolls back env.cr if it holds an open
         # transaction before testing (odoo/tests/shell.py) — silently, unless
         # we say so here. Whatever was pending is gone either way.

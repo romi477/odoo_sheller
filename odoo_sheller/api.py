@@ -27,6 +27,7 @@ from odoo_sheller.session import (
     CommitForbidden,
     CommitNotAllowed,
     ProductionConfirmation,
+    RunParamsUnsupported,
     SessionBusy,
     SessionDead,
     SessionNotReady,
@@ -454,6 +455,16 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         if isinstance(exc, (SessionBusy, SessionNotReady)):
 
             return HTTPException(status_code=409, detail=str(exc))
+        if isinstance(exc, RunParamsUnsupported):
+
+            return HTTPException(
+                status_code=422,
+                detail={
+                    "error": "params_unsupported",
+                    "message": str(exc),
+                    "recovery": "run the test without params; nothing on this Odoo reads them",
+                },
+            )
         if isinstance(exc, ProductionConfirmation):
             # A request to complete, not a refusal: the person can fix it by
             # typing. Checked before CommitNotAllowed, which it subclasses.
