@@ -7,19 +7,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.10.0] — 2026-10-15
+
+An agent gets the rules of the Odoo major it works on with its session — what
+15 through 20 each expect of Python and XML, and how module code is written on
+any of them. Hoot, Odoo's JS test runner, runs headless through `os_run_test`.
+An odoo.sh card gets a name, an Edit button and a stage of its own; the stricter
+of the card's stage and the build's is the one a session goes by. Nothing is
+removed from the API or the MCP surface.
+
 ### Added
 
-- An odoo.sh card has a name and an **Edit** button. The name is the first
-  field of *Add a build*; it is optional, and a card without one is called
-  by its build as before. Edit changes the name, the build and the hostname
-  — odoo.sh makes a new build on every push, and the named card is what
-  follows it. The card's id is derived from its build, so `PUT
-  /api/targets/{id}` with a new build answers with the new id.
-- An odoo.sh card declares a stage, as a server card does: `production` or
-  `staging`, `production` by default. The build still reports its own, and
-  a session goes by the stricter of the two — a card can put a build behind
-  the production guard, never take it off one. Cards written before declare
-  none and go by the build alone.
+- Rules for the Odoo major a session runs. The first session an agent opens
+  or adopts on 15 through 20 comes with `rules`: what that major expects of
+  Python and XML — `attrs` or Python modifiers, `<tree>` or `<list>`,
+  `_sql_constraints` or `models.Constraint`, `groups_id` or `group_ids`.
+  Later sessions on the same major point at `os_help('odoo_<major>')`
+  instead of repeating them — worded for a server shared by several
+  conversations, as Claude Desktop's is.
 - The rules handed over with a session open with how module code is written,
   on any major: extend rather than edit, the ORM before SQL, `UserError` and
   `_()`, an access row for every new model, `_logger`, Odoo's own tests, and
@@ -28,17 +33,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   draws an empty space without an error, so icons are Material Symbols
   (`<i class="oi" data-icon=…>`, `icon="name"` on a button), limited to the
   names in `addons/web/tooling/icons/icons_wishlist.txt`.
-- Rules for the Odoo major a session runs. The first session an agent opens
-  or adopts on 15 through 20 comes with `rules`: what that major expects of
-  Python and XML — `attrs` or Python modifiers, `<tree>` or `<list>`,
-  `_sql_constraints` or `models.Constraint`, `groups_id` or `group_ids`.
-  Later sessions on the same major point at `os_help('odoo_<major>')`
-  instead of repeating them — worded for a server shared by several
-  conversations, as Claude Desktop's is.
-- `os_help('tests')` says how a new JS test file reaches the web process
-  without a restart: clear the assets cache and signal it. Without the
-  signal the web process never sees the file, and a deleted one blanks the
-  whole bundle. Only a manifest change still needs a restart.
 - Hoot runs headless through `os_run_test`: `params` goes on the test tag
   as `[params]`, which Hoot reads as a filter —
   `os_run_test("web.WebSuite.test_unit_desktop", params="@my_module")`. The
@@ -54,6 +48,33 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   process's cached asset file lists, so a reused session sees a new test
   file. The Markdown transcript shows Hoot's counts. Needs Chromium and
   `websocket-client` in the container's Odoo Python.
+
+- `os_help('tests')` says how a new JS test file reaches the web process
+  without a restart: clear the assets cache and signal it. Without the
+  signal the web process never sees the file, and a deleted one blanks the
+  whole bundle. Only a manifest change still needs a restart.
+- An odoo.sh card has a name and an **Edit** button. The name is the first
+  field of *Add a build*; it is optional, and a card without one is called
+  by its build as before. Edit changes the name, the build and the hostname
+  — odoo.sh makes a new build on every push, and the named card is what
+  follows it. The card's id is derived from its build, so `PUT
+  /api/targets/{id}` with a new build answers with the new id.
+- An odoo.sh card declares a stage, as a server card does: `production` or
+  `staging`, `production` by default. The build still reports its own, and
+  a session goes by the stricter of the two — a card can put a build behind
+  the production guard, never take it off one. Cards written before declare
+  none and go by the build alone.
+### Changed
+
+- The Connect screen draws every card alike: a 1px cyan edge at rest, doubled
+  to 2px under the pointer, in all three places. A container that is not an
+  Odoo image keeps the plain edge, and a connected card is told apart by its
+  badge alone. An open form — a new card or one being edited — is amber, with
+  the same 1px edge and 2px hover; the title that opens it turns amber under
+  the pointer. A field being typed into keeps its 1px edge and turns it cyan,
+  in place of the browser's own thick blue ring.
+- The build form puts its keys on a row of their own, under the fields, so
+  the name and the hostname have the room.
 
 ### Fixed
 
@@ -1663,6 +1684,8 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
+[1.10.0]: https://github.com/romi477/odoo_sheller/compare/v1.9.0...v1.10.0
+[1.9.0]: https://github.com/romi477/odoo_sheller/compare/v1.8.3...v1.9.0
 [1.8.3]: https://github.com/romi477/odoo_sheller/compare/v1.8.2...v1.8.3
 [1.8.2]: https://github.com/romi477/odoo_sheller/compare/v1.8.1...v1.8.2
 [1.8.1]: https://github.com/romi477/odoo_sheller/compare/v1.8.0...v1.8.1
