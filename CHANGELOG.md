@@ -9,6 +9,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- An odoo.sh card has a name and an **Edit** button. The name is the first
+  field of *Add a build*; it is optional, and a card without one is called
+  by its build as before. Edit changes the name, the build and the hostname
+  — odoo.sh makes a new build on every push, and the named card is what
+  follows it. The card's id is derived from its build, so `PUT
+  /api/targets/{id}` with a new build answers with the new id.
 - Rules for the Odoo major a session runs. The first session an agent opens
   or adopts on 15 through 20 comes with `rules`: what that major expects of
   Python and XML — `attrs` or Python modifiers, `<tree>` or `<list>`,

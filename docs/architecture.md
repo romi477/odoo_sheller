@@ -671,7 +671,12 @@ longer part of the body of `POST /api/sessions`: a session opens a card by
 probed with the admin key (`POST`/`PUT`/`DELETE /api/targets`,
 `POST /api/targets/probe`) — it is an instruction to this machine to open an
 ssh connection somewhere, and only a human gives one. Reading the list needs no
-key: it holds names, not secrets. The cards live in
+key: it holds names, not secrets. A build card has an optional name and is
+called by its build without one; `PUT` changes its name, build and host
+together, because odoo.sh makes a new build on every push and the named card is
+what follows it. The id is derived from the build, so a new build is a new id:
+the card `PUT` returns carries it, and a session opened on the old build keeps
+the old one. The cards live in
 `~/.odoo-sheller/targets.json` (`targets.py`): one JSON file, one key per kind
 of target, written atomically and mode 0600, left untouched when it cannot be
 read. It replaces the list the browser used to keep in `localStorage`, which a

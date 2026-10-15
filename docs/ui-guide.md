@@ -132,9 +132,16 @@ restart or a config change.
 
 ### odoo.sh
 
-Two fields — build id and hostname — then **Probe**, which only reads what the
-instance says about itself: its database, its Odoo version, and whether it is
-`staging` or `production`. Nothing is opened by probing.
+Three fields — a name, the build id and its hostname — then **Probe**, which
+only reads what the instance says about itself: its database, its Odoo version,
+and whether it is `staging` or `production`. Nothing is opened by probing.
+
+The name is optional, and a card without one is called by its build id. It is
+worth giving: odoo.sh makes a new build, with a new hostname, on every push,
+and **Edit** puts the card back in the form to follow it — name, build and
+hostname, saved over the card. The name is what stays. A card with a name of
+its own also says which build it is, under its title. Two cards are never
+called the same, and a name the daemon refuses is said under the form.
 
 A probed build becomes a card and stays in the list, so a 40-character
 hostname is typed once rather than once per session. Each card carries what
