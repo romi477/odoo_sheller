@@ -686,10 +686,13 @@ button.region-toggle:active:not(:disabled) {
 }
 
 .odoosh-form {
+  margin-bottom: 8px;
+}
+
+.odoosh-fields {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 8px;
 }
 
 /* The name and the build id are short; the hostname is the long one, and gets
@@ -743,7 +746,7 @@ button.region-toggle:active:not(:disabled) {
 }
 
 .odoosh-error {
-  margin-bottom: 8px;
+  margin-top: 8px;
 }
 
 .ssh-field:has(.field-error:not([hidden])) input {
@@ -786,7 +789,8 @@ button.region-toggle:active:not(:disabled) {
 
 /* Probe and Save are acts, not another field: set apart from the fields above
    and in the middle of the card, or they read as the next row. */
-.ssh-actions {
+.ssh-actions,
+.odoosh-actions {
   display: flex;
   justify-content: center;
   gap: 8px;

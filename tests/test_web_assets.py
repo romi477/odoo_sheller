@@ -2075,7 +2075,14 @@ def test_a_build_card_is_edited_like_a_server_card(app_js):
 
 def test_editing_a_build_offers_probe_save_and_cancel_like_a_server(app_js):
     """Probe asks the build in the form and writes nothing; Save changes writes."""
-    form = re.search(r'<div class="odoosh-form">(.*?)</div>', _page(), re.DOTALL).group(1)
+    form = re.search(
+        r'<div class="odoosh-form">\s*<div class="odoosh-fields">(.*?)</div>.*?'
+        r'<div class="odoosh-actions">(.*?)</div>',
+        _page(), re.DOTALL,
+    )
+    assert form is not None, "the keys are a row of their own, under the fields"
+    assert "<button" not in form.group(1)
+    form = form.group(2)
     buttons = re.findall(r'<button[^>]*class="([^"]+)"[^>]*>([^<]*)</button>', form)
     assert buttons == [
         ("odoosh-add", "Probe"),
@@ -2085,6 +2092,10 @@ def test_editing_a_build_offers_probe_save_and_cancel_like_a_server(app_js):
     ]
     for marker in ("odoosh-probe", "odoosh-save", "odoosh-cancel"):
         assert re.search(rf'class="{marker}[^"]*" hidden', form), marker
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    actions = re.search(r"\n\.ssh-actions,\s*\.odoosh-actions\s*\{([^}]*)\}", css)
+    assert actions is not None, "laid out as the server form's keys are"
+    assert "justify-content: center" in actions.group(1)
     assert 'class="odoosh-probe-result probe-note"' in _page()
 
     edit = re.search(r"function editBuild\(.*?\n\}", app_js, re.DOTALL).group(0)
@@ -3542,7 +3553,7 @@ def test_the_buttons_under_the_server_form_sit_apart_from_the_fields_and_in_the_
     """Probe and Save are acts, not another field: with the fields' own gap between
     them they read as the next one, left-aligned like it."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    rule = re.search(r"\n\.ssh-actions\s*\{([^}]*)\}", css)
+    rule = re.search(r"\n\.ssh-actions,\s*\.odoosh-actions\s*\{([^}]*)\}", css)
     assert rule is not None
     assert "justify-content: center" in rule.group(1)
     margin = re.search(r"margin-top:\s*(\d+)px", rule.group(1))
