@@ -2164,6 +2164,13 @@ async def test_a_run_with_params_defaults_to_a_class_ceiling(wired):
     assert wired.session.calls[-1][-1] == server.DEFAULT_TEST_TIMEOUTS["class"]
 
 
+async def test_params_never_lower_a_module_runs_ceiling(wired):
+    """Params raise a method's ceiling to a class's; they must not cut a whole
+    module's thirty minutes down to five."""
+    await server.os_run_test("web", params="@web/a")
+    assert wired.session.calls[-1][-1] == server.DEFAULT_TEST_TIMEOUTS["module"]
+
+
 async def test_a_run_without_hoot_answers_without_a_hoot_block(wired):
     result = await server.os_run_test("sale.TestSaleOrder.test_x")
     assert "hoot" not in result

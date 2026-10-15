@@ -1396,9 +1396,12 @@ async def os_run_test(
     params: str | None = None,
 ) -> Any:
     if timeout is None:
-        # A run with params is a browser suite more often than not, and Chrome
-        # alone takes about ten seconds to start: a method's thirty is too few.
-        timeout = DEFAULT_TEST_TIMEOUTS["class" if params else _spec_form(test)]
+        timeout = DEFAULT_TEST_TIMEOUTS[_spec_form(test)]
+        if params:
+            # A run with params is a browser suite more often than not, and
+            # Chrome alone takes about ten seconds to start: a method's thirty
+            # is too few. Raised to a class's, never lowered from a module's.
+            timeout = max(timeout, DEFAULT_TEST_TIMEOUTS["class"])
     if session_id and (container or database or odoo_bin):
         # One says where to run, the other says where to open, and the two can
         # name different places. Refuse rather than silently pick.
