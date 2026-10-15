@@ -3606,12 +3606,14 @@ def test_the_explanation_under_a_form_is_a_centred_filled_note_not_loose_text():
 
 
 def test_an_open_form_for_a_new_card_is_outlined_in_cyan_without_the_pointer():
-    """Open, it is where something is being written: outlined as a card under the
-    pointer is, whether the pointer is there or not. Folded it is a title, and
-    a card being changed keeps its amber edge."""
+    """Open, it is where something is being written: a cyan edge whether the
+    pointer is there or not. A state that stays is drawn as the other states
+    that stay are — the amber of a card being changed, the cyan of a connected
+    card: the 1px border. The 2px outline is for the pointer, which passes."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
     rule = re.search(r"\n\.composer:not\(\.collapsed\):not\(\.editing\)\s*\{([^}]*)\}", css)
     assert rule is not None
-    assert "outline: 2px solid var(--cyan)" in rule.group(1), "the cards' own outline"
-    assert "outline-offset: -1px" in rule.group(1)
+    assert "border-color: var(--cyan)" in rule.group(1)
+    assert "border-style: solid" in rule.group(1)
+    assert "outline" not in rule.group(1), "the pointer's 2px, not a resting edge"
     assert not re.search(r"\.composer[^{,]*:hover", css), "not a pointer effect"
