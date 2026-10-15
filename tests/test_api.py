@@ -1137,11 +1137,41 @@ def test_a_card_nobody_wrote_is_404(client):
     assert client.delete("/api/targets/odoosh-9", headers=ADMIN).status_code == 404
 
 
-def test_a_build_cannot_be_renamed(client):
+def test_a_build_is_written_down_with_a_name(client):
+    written = client.post("/api/targets", json={**BUILD, "name": "acme staging"}, headers=ADMIN)
+    assert written.status_code == 200
+    assert written.json()["name"] == "acme staging"
+    assert client.get("/api/targets").json()[0]["name"] == "acme staging"
+
+
+def test_a_build_card_follows_a_new_build_under_its_name(client):
+    client.post("/api/targets", json={**BUILD, "name": "acme"}, headers=ADMIN)
+    response = client.put(
+        "/api/targets/odoosh-36887345",
+        json={"name": "acme staging", "build": "36887399", "host": "next.dev.odoo.com"},
+        headers=ADMIN,
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": "odoosh-36887399", "kind": "odoosh", "name": "acme staging",
+        "build": "36887399", "host": "next.dev.odoo.com",
+    }
+    assert [card["id"] for card in client.get("/api/targets").json()] == ["odoosh-36887399"]
+
+
+def test_a_build_card_cannot_take_another_card_s_build(client):
     client.post("/api/targets", json=BUILD, headers=ADMIN)
+    client.post("/api/targets", json={**BUILD, "build": "1"}, headers=ADMIN)
     response = client.put("/api/targets/odoosh-36887345", json={"build": "1"}, headers=ADMIN)
     assert response.status_code == 422
     assert "build" in str(response.json()["detail"])
+
+
+def test_a_build_card_has_no_ssh_field_to_change(client):
+    client.post("/api/targets", json=BUILD, headers=ADMIN)
+    response = client.put("/api/targets/odoosh-36887345", json={"stage": "staging"}, headers=ADMIN)
+    assert response.status_code == 422
+    assert "stage" in str(response.json()["detail"])
 
 
 @pytest.mark.parametrize(

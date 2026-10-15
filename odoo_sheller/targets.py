@@ -5,12 +5,14 @@ journals — a handful of records, never queried, so a database would be weight
 for nothing. One key per kind of target:
 
     {"version": 1,
-     "odoosh": [{"build": "36887345", "host": "build-36887345.dev.odoo.com"}],
+     "odoosh": [{"name": "acme staging", "build": "36887345",
+                 "host": "build-36887345.dev.odoo.com"}],
      "ssh": [{"id": "ssh-3f9a01cc", "name": "acme prod",
               "access": "ssh -i ~/.ssh/acme.pem ubuntu@acme.example.com sudo -n -u odoo -H",
               "launch": "/opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf -d acme",
               "stage": "production"}]}
 
+A build's name is optional, and a build without one is called by its build.
 An ssh card holds what its author *wrote*, not what it parses to: they edit it
 later, and `~` is theirs. It is parsed (`recipe.py`) when it is saved, to refuse
 what the grammar refuses, and again wherever it is used.
@@ -59,10 +61,32 @@ STAGES = ("production", "staging")
 DEFAULT_STAGE = "production"
 MAX_NAME = 60
 SSH_FIELDS = ("name", "access", "launch", "stage")
+ODOOSH_FIELDS = ("name", "build", "host")
 
 
 class TargetsError(Exception):
     """The file exists and cannot be used as it is. It has not been touched."""
+
+
+def _build_name(entry: dict) -> str:
+    """What a build is called: the name it was given, or else its build."""
+
+    return entry.get("name") or entry["build"]
+
+
+def _checked_name(name: str, taken: list[str]) -> str:
+    """A card's name, trimmed, or ValueError. `taken` is what the other cards
+    of its kind are called."""
+    name = name.strip()
+    if len(name) > MAX_NAME or not name.isprintable():
+        raise ValueError(
+            f"the card's name is at most {MAX_NAME} printable characters, on one line"
+        )
+    for other in taken:
+        if other.casefold() == name.casefold():
+            raise ValueError(f"a card named {other!r} already exists")
+
+    return name
 
 
 def _card(entry: dict) -> dict:
@@ -71,7 +95,7 @@ def _card(entry: dict) -> dict:
     return {
         "id": f"{ODOOSH_PREFIX}{entry['build']}",
         "kind": "odoosh",
-        "name": entry["build"],
+        "name": _build_name(entry),
         "build": entry["build"],
         "host": entry["host"],
     }
@@ -149,6 +173,7 @@ class TargetStore:
                 isinstance(entry, dict)
                 and isinstance(entry.get("build"), str)
                 and isinstance(entry.get("host"), str)
+                and isinstance(entry.get("name", ""), str)
             ):
                 raise self._refuse("has an odoosh entry without a build and a host")
         for entry in data["ssh"]:
@@ -238,32 +263,48 @@ class TargetStore:
 
         return self.parse_access(card["access"]), self.parse_launch(card["launch"])
 
-    def add_odoosh(self, build: str, host: str) -> dict:
-        """Adds a build, or updates the one already there and moves it first."""
-        check_ssh_name("build", build)
-        check_ssh_name("host", host)
+    def _checked_odoosh(self, data: dict, fields: dict, own_build: str | None) -> dict:
+        """An odoo.sh entry as it is stored, or ValueError saying what is wrong.
+        A name left empty is no name: the entry has none."""
+        build = check_ssh_name("build", fields["build"])
+        host = check_ssh_name("host", fields["host"])
+        others = [e for e in data["odoosh"] if e["build"] not in (build, own_build)]
+        if own_build is not None and build != own_build and any(
+            e["build"] == build for e in data["odoosh"]
+        ):
+            raise ValueError(f"build {build} already has a card")
+        entry = {"build": build, "host": host}
+        name = fields.get("name") or ""
+        if name.strip():
+            entry = {"name": _checked_name(name, [_build_name(e) for e in others]), **entry}
+        elif any(_build_name(e).casefold() == build.casefold() for e in others):
+            raise ValueError(f"a card named {build!r} already exists")
+
+        return entry
+
+    def add_odoosh(self, build: str, host: str, name: str | None = None) -> dict:
+        """Adds a build, or updates the one already there and moves it first.
+        Without a name, one it already had is kept: adding again is not a
+        request to forget it."""
         data = self._read()
+        known = next((e for e in data["odoosh"] if e["build"] == build), {})
+        if not (name or "").strip():
+            name = known.get("name")
+        entry = self._checked_odoosh(data, {"name": name, "build": build, "host": host}, None)
         data["odoosh"] = [
-            {"build": build, "host": host},
-            *(entry for entry in data["odoosh"] if entry["build"] != build),
+            entry,
+            *(e for e in data["odoosh"] if e["build"] != build),
         ]
         self._write(data)
 
-        return _card(data["odoosh"][0])
+        return _card(entry)
 
     def _checked_ssh(self, data: dict, fields: dict, own_id: str | None) -> dict:
         """The fields of an ssh card, or ValueError saying which is wrong."""
         name = fields["name"]
         if not isinstance(name, str) or not name.strip():
             raise ValueError("an ssh card needs a name")
-        name = name.strip()
-        if len(name) > MAX_NAME or not name.isprintable():
-            raise ValueError(
-                f"the card's name is at most {MAX_NAME} printable characters, on one line"
-            )
-        for other in data["ssh"]:
-            if other["id"] != own_id and other["name"].casefold() == name.casefold():
-                raise ValueError(f"a card named {other['name']!r} already exists")
+        name = _checked_name(name, [e["name"] for e in data["ssh"] if e["id"] != own_id])
         if fields["stage"] not in STAGES:
             raise ValueError(f"stage must be one of {', '.join(STAGES)}")
         self.parse_access(fields["access"])
@@ -296,10 +337,14 @@ class TargetStore:
         return _ssh_card(entry)
 
     def update(self, target_id: str, fields: dict) -> dict:
-        """What can change on a card. An odoo.sh card's host; the build is its
-        identity, so a different build is a different card — deleted and added,
-        not renamed. An ssh card's fields, checked together afterwards: a
-        change that makes the whole recipe refused changes nothing."""
+        """What can change on a card, checked whole afterwards: a change that
+        makes the card refused changes nothing.
+
+        An odoo.sh card's name, build and host. odoo.sh gives every push a new
+        build and a new hostname, and the card with the name on it is what
+        follows them. Its id is derived from the build, so a new build is a new
+        id, and the card returned carries it; it keeps its place in the list.
+        """
         data = self._read()
         if target_id.startswith(SSH_PREFIX):
             entry = next((e for e in data["ssh"] if e["id"] == target_id), None)
@@ -314,20 +359,15 @@ class TargetStore:
 
             return _ssh_card(entry)
         build = self._build_of(target_id)
-        entry = next((e for e in data["odoosh"] if e["build"] == build), None)
-        if entry is None:
+        place = next((i for i, e in enumerate(data["odoosh"]) if e["build"] == build), None)
+        if place is None:
             raise KeyError(target_id)
-        if fields.get("build", build) != build:
-            raise ValueError(
-                "a card's build is its identity and cannot change: delete the "
-                "card and add another"
-            )
-        unknown = sorted(set(fields) - {"build", "host"})
+        unknown = sorted(set(fields) - set(ODOOSH_FIELDS))
         if unknown:
             raise ValueError(f"an odoo.sh card has no {unknown[0]!r} to change")
-        if "host" in fields:
-            entry["host"] = check_ssh_name("host", fields["host"])
-            self._write(data)
+        entry = self._checked_odoosh(data, {**data["odoosh"][place], **fields}, build)
+        data["odoosh"][place] = entry
+        self._write(data)
 
         return _card(entry)
 

@@ -160,6 +160,8 @@ class OdooshCardBody(BaseModel):
     kind: Literal["odoosh"]
     build: str
     host: str
+    # What the card is called; without one, it is called by its build.
+    name: str | None = None
 
     @field_validator("build", "host")
     @classmethod
@@ -222,8 +224,7 @@ class CardChangeBody(NoDatabase):
     """What may change. Only what is sent changes."""
 
     host: str | None = None
-    # Accepted only so that asking for it can be refused in words: a card's
-    # build is its identity.
+    # An odoo.sh card's id follows its build: the card that comes back has it.
     build: str | None = None
     name: str | None = None
     access: str | None = None
@@ -627,7 +628,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         try:
             if body.kind == "odoosh":
 
-                return cards().add_odoosh(body.build, body.host)
+                return cards().add_odoosh(body.build, body.host, body.name)
 
             return present(
                 cards().add_ssh(body.name, body.access, body.launch, body.stage)

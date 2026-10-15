@@ -100,17 +100,103 @@ def test_a_card_is_found_by_its_id_and_not_otherwise(store):
         store.get("ssh-1")
 
 
-def test_a_host_can_be_changed_but_not_a_build(store):
+def test_a_host_can_be_changed(store):
     store.add_odoosh("1", "a.example.com")
     assert store.update("odoosh-1", {"host": "b.example.com"})["host"] == "b.example.com"
     assert store.get("odoosh-1")["host"] == "b.example.com"
-    with pytest.raises(ValueError, match="build"):
-        store.update("odoosh-1", {"build": "2"})
     with pytest.raises(ValueError):
         store.update("odoosh-1", {"host": "-oProxyCommand=x"})
     assert store.get("odoosh-1")["host"] == "b.example.com"
     with pytest.raises(KeyError):
         store.update("odoosh-2", {"host": "c.example.com"})
+
+
+def test_a_build_may_be_given_a_name(store):
+    card = store.add_odoosh("1", "a.example.com", name="  acme staging ")
+    assert card["name"] == "acme staging"
+    assert card["id"] == "odoosh-1"
+    assert on_disk(store)["odoosh"] == [
+        {"name": "acme staging", "build": "1", "host": "a.example.com"}
+    ]
+
+
+def test_a_build_without_a_name_is_called_by_its_build_and_stores_none(store):
+    assert store.add_odoosh("1", "a.example.com", name="  ")["name"] == "1"
+    assert on_disk(store)["odoosh"] == [{"build": "1", "host": "a.example.com"}]
+
+
+def test_adding_a_build_again_without_a_name_keeps_the_name_it_had(store):
+    """The add form and the move from localStorage both send no name: neither
+    is a request to forget one."""
+    store.add_odoosh("1", "a.example.com", name="acme")
+    assert store.add_odoosh("1", "b.example.com")["name"] == "acme"
+    assert store.add_odoosh("1", "b.example.com", name="other")["name"] == "other"
+
+
+@pytest.mark.parametrize("name", ["x" * 61, "two\nlines", "tab\there"])
+def test_a_build_name_that_cannot_be_shown_is_refused(store, name):
+    with pytest.raises(ValueError, match="name"):
+        store.add_odoosh("1", "a.example.com", name=name)
+    assert store.list() == []
+
+
+def test_two_builds_are_never_called_the_same(store):
+    """A name or a bare build: what the list shows is what must not repeat."""
+    store.add_odoosh("1", "a.example.com", name="Acme")
+    with pytest.raises(ValueError, match="Acme"):
+        store.add_odoosh("2", "b.example.com", name="acme")
+    store.add_odoosh("3", "c.example.com")
+    with pytest.raises(ValueError, match="3"):
+        store.add_odoosh("4", "d.example.com", name="3")
+    # Its own name is no clash.
+    assert store.add_odoosh("1", "a.example.com", name="ACME")["name"] == "ACME"
+
+
+def test_a_build_card_is_changed_whole_and_keeps_its_place(store):
+    """odoo.sh gives every push a new build, and a new hostname with it: the
+    card with the name on it is what follows them. Its id is its build, so the
+    answer carries the new one."""
+    store.add_odoosh("1", "a.example.com", name="acme")
+    store.add_odoosh("2", "b.example.com")
+    card = store.update("odoosh-1", {"name": "acme staging", "build": "7", "host": "g.example.com"})
+    assert card == {
+        "id": "odoosh-7", "kind": "odoosh", "name": "acme staging",
+        "build": "7", "host": "g.example.com",
+    }
+    assert [c["id"] for c in store.list()] == ["odoosh-2", "odoosh-7"]
+    with pytest.raises(KeyError):
+        store.get("odoosh-1")
+
+
+def test_a_build_card_name_is_cleared_with_an_empty_one(store):
+    store.add_odoosh("1", "a.example.com", name="acme")
+    assert store.update("odoosh-1", {"name": ""})["name"] == "1"
+    assert on_disk(store)["odoosh"] == [{"build": "1", "host": "a.example.com"}]
+    store.update("odoosh-1", {"name": "acme"})
+    assert store.update("odoosh-1", {"name": None})["name"] == "1"
+
+
+def test_a_build_card_change_that_is_refused_changes_nothing(store):
+    store.add_odoosh("1", "a.example.com", name="acme")
+    store.add_odoosh("2", "b.example.com", name="beta")
+    before = on_disk(store)
+    with pytest.raises(ValueError, match="2"):
+        store.update("odoosh-1", {"build": "2"})
+    with pytest.raises(ValueError, match="beta"):
+        store.update("odoosh-1", {"name": "Beta", "host": "z.example.com"})
+    with pytest.raises(ValueError):
+        store.update("odoosh-1", {"build": "-oProxyCommand=x", "name": "new"})
+    with pytest.raises(ValueError, match="stage"):
+        store.update("odoosh-1", {"stage": "staging"})
+    assert on_disk(store) == before
+
+
+def test_a_build_entry_whose_name_is_not_text_is_reported_and_left_alone(store):
+    content = json.dumps({"version": 1, "odoosh": [{"name": 5, "build": "1", "host": "h"}]})
+    store.path.write_text(content, encoding="utf-8")
+    with pytest.raises(TargetsError):
+        store.list()
+    assert store.path.read_text(encoding="utf-8") == content
 
 
 def test_a_deleted_card_is_gone(store):
