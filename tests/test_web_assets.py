@@ -777,12 +777,10 @@ def test_container_facts_sit_together_below_the_name():
 
 def test_connected_card_and_ready_badge_use_cyan_not_green():
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    card = re.search(
-        r"\.card:has\(\.connected:not\(\[hidden\]\)\)\s*\{([^}]*)\}", css
-    )
-    assert card is not None
-    assert "var(--cyan)" in card.group(1)
-    assert "var(--green)" not in card.group(1)
+    # Every card has the cyan edge now, connected or not; the badge says which.
+    assert "var(--green)" not in re.search(
+        r"\n#containers \.card:not\(\.not-a-target\),[^{]*\{([^}]*)\}", css
+    ).group(1)
     badge = re.search(
         r"\.badge\.ready,\s*\.badge\.connected,\s*\.badge\.committed\s*\{([^}]*)\}",
         css,
@@ -3630,3 +3628,23 @@ def test_the_title_that_opens_a_form_turns_amber_under_the_pointer():
     assert hover is not None
     assert "color: var(--amber)" in hover.group(1)
     assert "cyan" not in hover.group(1)
+
+
+def test_a_card_has_a_1px_cyan_edge_that_doubles_under_the_pointer():
+    """Every card that can be opened, on every list: the brand cyan at 1px, at
+    rest; the pointer doubles it. A folded-away container has nothing to offer
+    and keeps the plain edge."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    lists = r"#containers \.card:not\(\.not-a-target\),\s*#odoosh-builds \.card,\s*#ssh-servers \.card"
+    rest = re.search(rf"\n{lists}\s*\{{([^}}]*)\}}", css)
+    assert rest is not None
+    assert "border-color: var(--cyan)" in rest.group(1)
+    hover = re.search(
+        r"\n#containers \.card:not\(\.not-a-target\):hover,\s*#odoosh-builds \.card:hover,"
+        r"\s*#ssh-servers \.card:hover\s*\{([^}]*)\}",
+        css,
+    )
+    assert "outline: 2px solid var(--cyan)" in hover.group(1)
+    assert "outline-offset: -1px" in hover.group(1)
+    # A connected card no longer needs an edge of its own: all of them have it.
+    assert ".card:has(.connected:not([hidden])) {" not in css

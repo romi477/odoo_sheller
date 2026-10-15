@@ -372,13 +372,16 @@ button.icon:hover:not(:disabled) {
   background: var(--panel);
 }
 
-.card:has(.connected:not([hidden])) {
+/* A card that can be opened has a 1px edge in the brand cyan, on every list.
+   Under the pointer it doubles: a 2px outline drawn over its own border so
+   nothing moves (centred on the 1px edge). A folded-away container has nothing
+   to offer, so it is left alone. */
+#containers .card:not(.not-a-target),
+#odoosh-builds .card,
+#ssh-servers .card {
   border-color: var(--cyan);
 }
 
-/* A card under the pointer is outlined in the brand cyan, drawn over its own border so
-   nothing moves (2px wide, centred on the 1px edge). A folded-away container has nothing to offer, so it is left
-   alone. */
 #containers .card:not(.not-a-target):hover,
 #odoosh-builds .card:hover,
 #ssh-servers .card:hover {
