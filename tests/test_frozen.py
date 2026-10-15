@@ -1,8 +1,9 @@
-"""The frozen daemon: health, /web, and one real session.
+"""The frozen daemon: health, /web, and one real session — and the frozen MCP
+server's rules.
 
-This is the only test that catches bootstrap.py or web/ missing from the
-bundle. It needs a PyInstaller build and a running Odoo container, so it is
-not part of the unit suite.
+This is the only test that catches bootstrap.py, web/ or rules/ missing from
+the bundle. It needs a PyInstaller build and a running Odoo container, so it
+is not part of the unit suite.
 
     uv run pytest tests/test_frozen.py -v -m frozen
 
@@ -31,6 +32,7 @@ ODOO_BIN = os.environ.get("PT_E2E_ODOO_BIN")
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_FROZEN = ROOT / "packaging" / "dist" / "odoo-sheller" / "odoo-sheller"
+DEFAULT_FROZEN_MCP = ROOT / "packaging" / "dist" / "odoo-sheller-mcp"
 
 pytestmark = pytest.mark.frozen
 
@@ -156,3 +158,16 @@ def test_frozen_daemon_opens_a_session_and_runs_a_command(frozen_daemon):
             headers={"X-OS-Session-Key": write_key},
             timeout=30.0,
         )
+
+
+def test_frozen_mcp_carries_the_rules_for_every_supported_major():
+    """`odoo_sheller/rules/*.md` are read from disk next to the package. A
+    bundle without them still starts, and opens every session with "no rules
+    for Odoo …" — nothing else would say they are gone."""
+    tree = Path(os.environ.get("ODOO_SHELLER_FROZEN_MCP_TREE", DEFAULT_FROZEN_MCP))
+    if not (tree / "odoo-sheller-mcp").is_file():
+        pytest.skip(f"no frozen MCP server in {tree}")
+    rules = tree / "_internal" / "odoo_sheller" / "rules"
+    assert (rules / "common.md").is_file()
+    missing = [major for major in SUPPORTED_MAJORS if not (rules / f"{major}.md").is_file()]
+    assert not missing, f"rules missing from the bundle for {missing}"
