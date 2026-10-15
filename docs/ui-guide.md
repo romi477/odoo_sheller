@@ -42,11 +42,13 @@ first opened.
 On each of the two entered screens there are two regions, and nothing else. The
 **form** is a dashed panel under its own title (*New server*, *Add a build*): it
 is where a card is written, and it is drawn as a draft so that it does not read as
-one more card. Open, its edge turns the brand cyan whether or not the pointer
-is over it — something is being written there. Changing a card puts it back in
-that panel, which turns amber and says *Editing ‹name›*. Under it, headed by a rule, are the **saved cards** — a
-title with a count (*Saved servers · 2*) and the cards themselves. A card under
-the pointer is outlined in the brand cyan, on every screen.
+one more card; its title turns amber under the pointer. Open — for a new card,
+or for one being changed, when it says *Editing ‹name›* — its edge is solid
+amber, the colour of writing here. Under it, headed by a rule, are the **saved
+cards** — a title with a count (*Saved servers · 2*) and the cards themselves.
+
+Every card and an open form share one style: a 1px edge that stays, and under
+the pointer a 2px outline drawn over it — brand cyan on a card, amber on a form.
 
 Both forms fold. A form's title is a button with an arrow — down while the form
 is open, right once it is folded — and a click on it folds the form to that title,

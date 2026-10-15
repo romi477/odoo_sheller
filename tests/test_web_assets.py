@@ -3605,15 +3605,28 @@ def test_the_explanation_under_a_form_is_a_centred_filled_note_not_loose_text():
     assert "dashed" not in body, "the card around it already is"
 
 
-def test_an_open_form_for_a_new_card_is_outlined_in_cyan_without_the_pointer():
-    """Open, it is where something is being written: a cyan edge whether the
-    pointer is there or not. A state that stays is drawn as the other states
-    that stay are — the amber of a card being changed, the cyan of a connected
-    card: the 1px border. The 2px outline is for the pointer, which passes."""
+def test_an_open_form_is_amber_and_answers_the_pointer_as_a_card_does():
+    """A form open — for a new card or one being changed — is where something is
+    being written, and amber is the colour of writing here. One style with the
+    cards: a 1px edge that stays, a 2px outline under the pointer."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    rule = re.search(r"\n\.composer:not\(\.collapsed\):not\(\.editing\)\s*\{([^}]*)\}", css)
+    rule = re.search(r"\n\.composer:not\(\.collapsed\)\s*\{([^}]*)\}", css)
     assert rule is not None
-    assert "border-color: var(--cyan)" in rule.group(1)
     assert "border-style: solid" in rule.group(1)
-    assert "outline" not in rule.group(1), "the pointer's 2px, not a resting edge"
-    assert not re.search(r"\.composer[^{,]*:hover", css), "not a pointer effect"
+    assert "border-color: var(--amber)" in rule.group(1)
+    assert "outline" not in rule.group(1), "the edge that stays is the 1px border"
+    hover = re.search(r"\n\.composer:not\(\.collapsed\):hover\s*\{([^}]*)\}", css)
+    assert hover is not None
+    assert "outline: 2px solid var(--amber)" in hover.group(1)
+    assert "outline-offset: -1px" in hover.group(1), "drawn over the edge, as a card's is"
+    cards = re.search(r"\n#containers \.card:not\(\.not-a-target\):hover,[^{]*\{([^}]*)\}", css)
+    assert "outline: 2px solid var(--cyan)" in cards.group(1)
+    assert "outline-offset: -1px" in cards.group(1)
+
+
+def test_the_title_that_opens_a_form_turns_amber_under_the_pointer():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    hover = re.search(r"\nbutton\.region-toggle:hover:not\(:disabled\)\s*\{([^}]*)\}", css)
+    assert hover is not None
+    assert "color: var(--amber)" in hover.group(1)
+    assert "cyan" not in hover.group(1)

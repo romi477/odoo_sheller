@@ -398,13 +398,18 @@ button.icon:hover:not(:disabled) {
   background: color-mix(in oklch, var(--panel) 40%, var(--background));
 }
 
-/* An open form for a new card is where something is being written: its edge
-   turns the brand cyan, whether the pointer is there or not. A 1px border, as
-   the other edges that stay are; the 2px outline is the pointer's. Folded it is
-   only a title. */
-.composer:not(.collapsed):not(.editing) {
+/* An open form — for a new card or one being changed — is where something is
+   being written, and amber is the colour of writing here. The same style as a
+   card: a 1px edge that stays, and under the pointer a 2px outline drawn over
+   it. Folded it is only a title. */
+.composer:not(.collapsed) {
   border-style: solid;
-  border-color: var(--cyan);
+  border-color: var(--amber);
+}
+
+.composer:not(.collapsed):hover {
+  outline: 2px solid var(--amber);
+  outline-offset: -1px;
 }
 
 /* Editing is the same form with an edge that says it is not a new card. */
@@ -449,7 +454,7 @@ button.region-toggle {
 }
 
 button.region-toggle:hover:not(:disabled) {
-  color: var(--cyan);
+  color: var(--amber);
 }
 
 button.region-toggle:active:not(:disabled) {
