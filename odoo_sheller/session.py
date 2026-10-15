@@ -206,10 +206,12 @@ def parse_test_line(line: str) -> tuple[str, str] | None:
 # browser: these lines are the only record of what did. Shapes from
 # web/static/lib/hoot/core/runner.js — a failed test is `Test "<id>" failed:`
 # with its reasons on the lines after, and the run ends on `Passed N tests`
-# or `Failed N tests (M passed`.
+# or `Failed N tests (M passed`. The quotes are hoot_utils.js's `stringify`:
+# double, unless the name has one — then single, and backticks if it has both.
+_HOOT_NAME = r"""(?P<q>["'`])(?P<name>.+)(?P=q)"""
 _HOOT_LINES = (
-    ("running", re.compile(r'\[HOOT\] Running test "(.+)"\s*$')),
-    ("failed", re.compile(r'\[HOOT\] Test "(.+)" failed:\s*$')),
+    ("running", re.compile(r"\[HOOT\] Running test " + _HOOT_NAME + r"\s*$")),
+    ("failed", re.compile(r"\[HOOT\] Test " + _HOOT_NAME + r" failed:\s*$")),
     ("passed_all", re.compile(r"\[HOOT\] Passed (\d+) tests \(")),
     ("failed_some", re.compile(r"\[HOOT\] Failed (\d+) tests \((\d+) passed")),
 )
@@ -232,7 +234,7 @@ def parse_hoot_line(line: str) -> tuple[str, object] | None:
 
             return "summary", {"passed": int(match.group(2)), "failed": int(match.group(1))}
 
-        return kind, match.group(1)
+        return kind, match.group("name")
 
     return None
 

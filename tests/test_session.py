@@ -1810,6 +1810,18 @@ HOOT = "odoo.addons.web.tests.test_js.WebSuite.test_unit_desktop.browser"
         ((f'2026-10-14 21:22:19,878 50 ERROR db {HOOT}: [HOOT] Test '
          f'"@integration/views/list/renders the badge" failed:'),
          ("failed", "@integration/views/list/renders the badge")),
+        # Hoot's stringify picks the quote the name does not contain: single
+        # quotes around a name with a double quote, backticks around one with
+        # both. 119 test names in 19's own addons have a double quote.
+        ((f"2026-10-14 21:22:19,878 50 ERROR db {HOOT}: [HOOT] Test "
+         f"'@im_livechat/livechats should be in \"chat\" filter' failed:"),
+         ("failed", '@im_livechat/livechats should be in "chat" filter')),
+        ((f"2026-10-14 21:22:19,878 50 ERROR db {HOOT}: [HOOT] Test "
+         f"`@web/it's \"quoted\"` failed:"),
+         ("failed", "@web/it's \"quoted\"")),
+        ((f"2026-10-14 21:22:19,878 50 INFO db {HOOT}: [HOOT] Running test "
+         f"'@web/renders \"x\"' "),
+         ("running", '@web/renders "x"')),
         ((f"2026-10-14 21:22:19,950 50 INFO db {HOOT}: [HOOT] Passed 11 tests "
          f"(79 assertions, total time: 00:00:00) "),
          ("summary", {"passed": 11, "failed": 0})),
