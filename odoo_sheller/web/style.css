@@ -695,16 +695,21 @@ button.region-toggle:active:not(:disabled) {
   flex-wrap: wrap;
 }
 
-/* The name and the build id are short; the hostname is the long one, and gets
-   whatever the row has left. */
-.odoosh-name,
+/* The keys are a row of their own, so the fields have the whole width. The
+   build id is short and fixed; the name has room to be read; the hostname, the
+   long one, grows twice as fast as the name. */
+.odoosh-name {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
 .odoosh-build {
   flex: 0 0 10rem;
   min-width: 0;
 }
 
 .odoosh-host {
-  flex: 1 1 32ch;
+  flex: 2 1 16rem;
   min-width: 0;
 }
 

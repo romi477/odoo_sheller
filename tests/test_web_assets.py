@@ -2039,14 +2039,25 @@ def test_the_build_form_asks_for_a_name_first_and_does_not_insist(markup):
     assert "optional" in name
 
 
-def test_the_name_is_as_wide_as_the_build_and_the_hostname_takes_the_rest():
+def test_the_row_of_fields_gives_the_name_room_and_the_hostname_more():
+    """The keys went to a row of their own, and the room they left is the
+    name's. The build id stays fixed; the hostname, the long one, still grows
+    the faster."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    pair = re.search(r"\n\.odoosh-name,\s*\.odoosh-build\s*\{([^}]*)\}", css)
-    assert pair is not None, "one rule, so the two cannot drift apart"
-    assert re.search(r"flex:\s*0 0 ", pair.group(1)), "neither grows"
-    assert "min-width: 0" in pair.group(1), "an input's own width would win otherwise"
-    host = re.search(r"\n\.odoosh-host\s*\{([^}]*)\}", css)
-    assert re.search(r"flex:\s*1 1 ", host.group(1))
+
+    def flex(selector):
+        rule = re.search(rf"\n\.{selector}\s*\{{([^}}]*)\}}", css)
+        assert rule is not None, selector
+        assert "min-width: 0" in rule.group(1), "an input's own width would win otherwise"
+        grow, _shrink, basis = re.search(r"flex:\s*(\S+) (\S+) (\S+);", rule.group(1)).groups()
+
+        return float(grow), float(basis.removesuffix("rem"))
+
+    name, build, host = flex("odoosh-name"), flex("odoosh-build"), flex("odoosh-host")
+    assert build[0] == 0, "the build id is short and stays so"
+    assert name[1] > build[1], "the name is wider than the build id"
+    assert 0 < name[0] < host[0], "both grow, the hostname faster"
+    assert host[1] > name[1]
 
 
 def test_a_build_card_is_edited_like_a_server_card(app_js):
