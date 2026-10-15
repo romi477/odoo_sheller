@@ -187,7 +187,10 @@ answer:
 - the first session on a major in this MCP server's life gets
   `{"topic": "odoo_17", "text": ...}`, the whole of `common.md` and `17.md`;
 - every later one on the same major gets `{"topic": "odoo_17", "note": ...}`,
-  pointing at `os_help('odoo_17')` rather than spending the context again;
+  pointing at `os_help('odoo_17')` rather than spending the context again.
+  A server is not always one conversation — Claude Desktop keeps one for all
+  its chats — so the note says to call it unless this conversation read the
+  text, not that it did;
 - a major without a file (13, 14) gets `{"topic": null, "note": ...}`, which
   says to check every name in the instance with `os_source`.
 

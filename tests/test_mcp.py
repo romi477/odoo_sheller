@@ -2100,6 +2100,9 @@ async def test_the_first_session_on_a_major_carries_its_rules_and_later_ones_poi
     again = await server.os_open_session(container="integra19", database="integra_db_19")
     assert "text" not in again["rules"]
     assert "os_help('odoo_19')" in again["rules"]["note"]
+    # One server can serve several conversations — Claude Desktop keeps one
+    # for all its chats — so the pointer cannot assume this one saw the text.
+    assert "this conversation" in again["rules"]["note"]
 
 
 async def test_an_adopted_session_carries_the_rules_too(wired, monkeypatch):

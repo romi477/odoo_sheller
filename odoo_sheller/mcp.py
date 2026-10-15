@@ -683,9 +683,11 @@ mcp = MCPServer("odoo-sheller", instructions=INSTRUCTIONS)
 # session id -> write key, for the sessions this server may type into.
 _keys: dict[str, str] = {}
 
-# The majors whose rules this server has already handed over. One server is
-# one agent's conversation, so the second session on a major gets a pointer,
-# not the same few thousand characters again.
+# The majors whose rules this server has already handed over, so the second
+# session on a major gets a pointer, not the same few thousand characters
+# again. A server is not always one conversation — Claude Desktop keeps one
+# for all its chats — so the pointer says how to get them, not that they were
+# read.
 _rules_given: set[int] = set()
 
 # os_help answers to these as well as to HELP; the text is in odoo_sheller/rules.
@@ -720,8 +722,9 @@ def _with_rules(described: dict) -> dict:
         described["rules"] = {
             "topic": topic,
             "note": (
-                f"handed over with an earlier session; call os_help('{topic}') "
-                "if they are no longer in your context"
+                f"handed over with an earlier session of this server; call "
+                f"os_help('{topic}') unless you read them in this conversation "
+                "and still have them"
             ),
         }
 
