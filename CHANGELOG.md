@@ -15,6 +15,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   — odoo.sh makes a new build on every push, and the named card is what
   follows it. The card's id is derived from its build, so `PUT
   /api/targets/{id}` with a new build answers with the new id.
+- An odoo.sh card declares a stage, as a server card does: `production` or
+  `staging`, `production` by default. The build still reports its own, and
+  a session goes by the stricter of the two — a card can put a build behind
+  the production guard, never take it off one. Cards written before declare
+  none and go by the build alone.
 - Rules for the Odoo major a session runs. The first session an agent opens
   or adopts on 15 through 20 comes with `rules`: what that major expects of
   Python and XML — `attrs` or Python modifiers, `<tree>` or `<list>`,

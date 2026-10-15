@@ -75,6 +75,11 @@
                 <input class="odoosh-build mono" placeholder="build id" title="The numeric build id, which is also the SSH user — odoo.sh shows it beside the build.">
                 <input class="odoosh-host mono" placeholder="build hostname" title="The hostname the build's UI is served on. Together with the build id this is the SSH destination.">
               </div>
+              <select class="odoosh-stage"
+                      title="What this build is to you. The build reports a stage of its own, and a session goes by the stricter of the two: a card can make a build production, never take production away. On production only you commit, one commit at a time, after typing its name — an agent never writes there. Staging is closed to commit until you grant it.">
+                <option value="production" selected>production — commit only by you, after typing its name</option>
+                <option value="staging">staging — commit off until granted</option>
+              </select>
               <p class="field-error odoosh-error" hidden></p>
               <div class="odoosh-probe-result probe-note" aria-live="polite" hidden></div>
               <div class="odoosh-actions">

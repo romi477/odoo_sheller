@@ -139,14 +139,22 @@ restart or a config change.
 
 ### odoo.sh
 
-Three fields — a name, the build id and its hostname — then **Probe**, which
-only reads what the instance says about itself: its database, its Odoo version,
-and whether it is `staging` or `production`. Nothing is opened by probing.
+Three fields — a name, the build id and its hostname — and under them the
+**stage**, the same choice a server card has, `production` until changed. Then
+**Probe**, which only reads what the instance says about itself: its database,
+its Odoo version, and whether it is `staging` or `production`. Nothing is
+opened by probing.
+
+The build reports a stage of its own, and the card and the session go by the
+stricter of the two: `production` if either says so. A card can put a build
+behind the production guard, never take it off one. A card written before
+builds had a stage goes by what its build reports; editing it offers
+`production`, or `staging` when the build last reported something else.
 
 The name is optional, and a card without one is called by its build id. It is
 worth giving: odoo.sh makes a new build, with a new hostname, on every push,
-and **Edit** puts the card back in the form to follow it — name, build and
-hostname. Changing a card offers what changing a server card does: **Probe**
+and **Edit** puts the card back in the form to follow it — name, build,
+hostname and stage. Changing a card offers what changing a server card does: **Probe**
 asks the build in the form and writes nothing, the card keeping what its own
 last probe said; **Save changes** writes over the card; **Cancel** drops the
 change. The name is what stays. A card with a name of
@@ -155,7 +163,8 @@ called the same, and a name the daemon refuses is said under the form.
 
 A probed build becomes a card and stays in the list, so a 40-character
 hostname is typed once rather than once per session. Each card carries what
-its last probe said, and `production` is the one badge on this screen that
+its last probe said, its stage badge the stricter of its own and the build's,
+and `production` is the one badge on this screen that
 fills solid rather than tinting — it is the word worth interrupting for. The
 **×** removes a card and changes nothing on the instance; it is disabled
 while the build has a session open, and says so, because this card is the

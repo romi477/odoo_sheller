@@ -3660,3 +3660,47 @@ def test_a_field_in_focus_is_edged_in_cyan_at_1px_not_the_browser_ring():
     assert "outline: none" in rule.group(1)
     assert "border-color: var(--cyan)" in rule.group(1)
     assert "px" not in rule.group(1)
+
+
+def test_the_build_form_declares_a_stage_as_the_server_form_does():
+    """The same two choices, worded the same, production first and chosen."""
+    page = _page()
+    server = re.search(r'<select class="ssh-stage".*?</select>', page, re.DOTALL).group(0)
+    build = re.search(r'<select class="odoosh-stage".*?</select>', page, re.DOTALL)
+    assert build is not None
+    options = re.findall(r"<option[^>]*>.*?</option>", build.group(0))
+    assert options == re.findall(r"<option[^>]*>.*?</option>", server)
+    assert 'value="production" selected' in options[0]
+    # The build reports a stage of its own, and the title says which one wins.
+    assert "stricter" in build.group(0)
+    form = re.search(r'<div class="odoosh-form">.*?<div class="odoosh-actions">', page, re.DOTALL)
+    assert 'class="odoosh-stage"' in form.group(0), "inside the form, before its keys"
+
+
+def test_a_build_card_saves_its_stage_and_shows_the_stricter_one(app_js):
+    save = re.search(r"async function saveBuildForm\(.*?\n\}", app_js, re.DOTALL).group(0)
+    assert "form.querySelector('.odoosh-stage').value" in save
+    assert "{name, build, host, stage}" in save
+    assert "{kind: 'odoosh', name, build, host, stage}" in save
+    reset = re.search(r"function resetBuildForm\(.*?\n\}", app_js, re.DOTALL).group(0)
+    assert "form.querySelector('.odoosh-stage').value = 'production'" in reset
+    edit = re.search(r"function editBuild\(.*?\n\}", app_js, re.DOTALL).group(0)
+    assert "form.querySelector('.odoosh-stage').value = buildFormStage(entry)" in edit
+    # The badge on the card is the stage a session would open as.
+    kinds = re.search(r"const REMOTE_KINDS = \{.*?\n\};", app_js, re.DOTALL).group(0)
+    assert "stage: (entry, probe) => odooshStage(entry.stage, probe.stage)" in kinds
+    stricter = re.search(r"function odooshStage\(declared, reported\) \{.*?\n\}", app_js, re.DOTALL)
+    assert stricter is not None
+    assert "[declared, reported].includes('production')" in stricter.group(0)
+    assert "reported || declared" in stricter.group(0)
+
+
+def test_a_card_written_before_stages_is_edited_as_what_its_build_said(app_js):
+    """No stage on the card: the form offers production unless the build last
+    reported another, so that saving a new name does not close the build
+    further than it was — and staging, being the looser, never opens one."""
+    form_stage = re.search(r"function buildFormStage\(entry\) \{.*?\n\}", app_js, re.DOTALL)
+    assert form_stage is not None
+    body = form_stage.group(0)
+    assert "entry.stage" in body
+    assert "reported && reported !== 'production' ? 'staging' : 'production'" in body

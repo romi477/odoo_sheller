@@ -660,6 +660,7 @@ async function saveBuildForm() {
   const name = form.querySelector('.odoosh-name').value.trim();
   const build = form.querySelector('.odoosh-build').value.trim();
   const host = form.querySelector('.odoosh-host').value.trim();
+  const stage = form.querySelector('.odoosh-stage').value;
   if (!build || !host) {
     showBuildError('A build needs its id and its hostname.');
 
@@ -668,8 +669,8 @@ async function saveBuildForm() {
   const editing = state.builds.find((item) => item.id === state.buildEditing);
   try {
     await withAdminRetry(() => (editing
-      ? api.put(`/api/targets/${editing.id}`, {name, build, host}, adminHeaders())
-      : api.post('/api/targets', {kind: 'odoosh', name, build, host}, adminHeaders())));
+      ? api.put(`/api/targets/${editing.id}`, {name, build, host, stage}, adminHeaders())
+      : api.post('/api/targets', {kind: 'odoosh', name, build, host, stage}, adminHeaders())));
   } catch (error) {
     if (error.status === 422) {
       showBuildError(typeof error.detail === 'string' ? error.detail : error.message);
@@ -695,6 +696,7 @@ function resetBuildForm() {
   form.querySelector('.odoosh-name').value = '';
   form.querySelector('.odoosh-build').value = '';
   form.querySelector('.odoosh-host').value = '';
+  form.querySelector('.odoosh-stage').value = 'production';
   form.querySelector('.odoosh-add').hidden = false;
   form.querySelector('.odoosh-probe').hidden = true;
   form.querySelector('.odoosh-save').hidden = true;
@@ -702,6 +704,30 @@ function resetBuildForm() {
   buildProbeSerial += 1;
   showBuildError('');
   showBuildProbe('');
+}
+
+// The stage a build is opened as: its card's or its own, the stricter — the
+// daemon's `odoosh_stage`. A card can close a build further, never open one.
+function odooshStage(declared, reported) {
+  if ([declared, reported].includes('production')) {
+
+    return 'production';
+  }
+
+  return reported || declared;
+}
+
+// A card written before builds had a stage declares none and goes by what the
+// build says. Its form offers that, so a new name alone does not close the
+// build further than it was; staging, the looser, never opens one either.
+function buildFormStage(entry) {
+  if (entry.stage) {
+
+    return entry.stage;
+  }
+  const reported = (entry.probe || {}).stage;
+
+  return reported && reported !== 'production' ? 'staging' : 'production';
 }
 
 function editBuild(entry) {
@@ -716,6 +742,7 @@ function editBuild(entry) {
   form.querySelector('.odoosh-name').value = entry.name === entry.build ? '' : entry.name;
   form.querySelector('.odoosh-build').value = entry.build;
   form.querySelector('.odoosh-host').value = entry.host;
+  form.querySelector('.odoosh-stage').value = buildFormStage(entry);
   // As a server card is changed: Probe asks and writes nothing, Save changes
   // writes. The add form's one key does both, which is right for a new card.
   form.querySelector('.odoosh-add').hidden = true;
@@ -1286,8 +1313,8 @@ const REMOTE_KINDS = {
     error: () => state.buildsError,
     empty: 'No builds yet. Open Add a build above and enter one.',
     probing: 'probing build…',
-    // The instance says what it is.
-    stage: (entry, probe) => probe.stage,
+    // The instance says what it is, and its card may say stricter.
+    stage: (entry, probe) => odooshStage(entry.stage, probe.stage),
     // A card with a name of its own would otherwise not say which build it is.
     facts: (entry, probe) => [
       entry.name === entry.build ? null : `build ${entry.build}`,
