@@ -141,8 +141,13 @@ the first two would change what the tag means, the last has no place in one.
 Hoot's own lines out of the run's log (`hoot/core/runner.js`): `Test "<id>"
 failed:` for each failure, `Passed N tests` or `Failed N tests (M passed` at
 the end. The answer, and `os_test_result` and `os_history` after it, carry
-`hoot: {passed, failed, failed_tests}`; each id in `failed_tests` passed back
-as `params` reruns that one test.
+`hoot: {passed, failed, failed_tests, reasons}`; each id in `failed_tests`
+passed back as `params` reruns that one test. The counts add up over every
+browser test in the run. `reasons` holds, per failed id, the lines Odoo
+logged with that failure — the failed assertions first, then a stack —
+clipped to 800 characters for the first ten failures, because they are
+logged deep in the run and the log tail an answer carries never reaches
+them. A name is read in any of the three quotes Hoot puts around it.
 
 It needs Chromium and `websocket-client` in the Python Odoo runs on; without
 them Odoo skips the test rather than failing it. Verified on 19 with a test

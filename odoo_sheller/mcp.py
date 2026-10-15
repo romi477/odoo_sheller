@@ -640,8 +640,10 @@ manifest lists them under `web.assets_unit_tests`. With params the default
 ceiling is a class's 300 seconds, since Chrome alone takes about ten to start.
 
 The answer's counts are about the one Python test that ran Hoot. `hoot` has
-Hoot's own: `passed`, `failed`, and `failed_tests` — ids to pass straight
-back as params to rerun just those, with the reasons in `stderr`. That is 18
+Hoot's own: `passed`, `failed` (summed over every browser test the run
+had), `failed_tests` — ids to pass straight back as params to rerun just
+those — and `reasons`, each failed id's failed assertions, clipped: the log
+tail in `stderr` is the summary and a traceback, not them. That is 18
 and 19; on 20 `test_unit_desktop` picks the modules from the run itself, and
 that form has not been run here.
 

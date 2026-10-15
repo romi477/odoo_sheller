@@ -100,6 +100,14 @@ HUMAN_OWNER = {"kind": "human", "label": "browser"}
 # a whole test class, but an uncapped collector would grow without limit on a
 # long run. The journal keeps every line either way.
 RUN_STDERR_LIMIT = 20000
+# A failed Hoot test's reasons are one log record over many lines: the failed
+# assertions first, then the stack Odoo appends to a console error. The head
+# is what an agent acts on, so it is the head that is kept.
+HOOT_REASON_CHARS = 800
+# Reasons for this many failed tests; past it a failure is its id alone, and
+# the journal has every line. Together they bound what lands in an agent's
+# context at about what a class's log tail costs twice over.
+HOOT_REASONS = 10
 # A command's own log, bounded so one noisy exec cannot carry a session's
 # worth of lines into every response. The journal keeps all of it.
 EXEC_STDERR_LIMIT = 2000
@@ -217,6 +225,11 @@ _HOOT_LINES = (
 )
 
 
+# Where Odoo's log starts a new record: `2026-10-14 21:22:19,878 `. A line
+# without it continues the record before.
+_LOG_RECORD = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} ")
+
+
 def parse_hoot_line(line: str) -> tuple[str, object] | None:
     """`(kind, value)` if Hoot logged this about a test or the run, else None.
 
@@ -307,6 +320,9 @@ class Session:
         self._test_failed: list[dict] = []
         # What Hoot reported during the current run; None until it says anything.
         self._hoot: dict | None = None
+        # The failed Hoot test whose reasons are being read, and the lines so far.
+        self._hoot_reason_for: str | None = None
+        self._hoot_reason: list[str] = []
         self._test_module: str | None = None
         self._hello_waiter: asyncio.Future = asyncio.get_running_loop().create_future()
         self._stderr: deque[str] = deque(maxlen=2000)
@@ -646,6 +662,7 @@ class Session:
         self._emit_test_progress()
         self._test_failed = []
         self._hoot = None
+        self._hoot_reason_for = None
         self._test_module = module
         try:
             result = await self._request(
@@ -665,6 +682,7 @@ class Session:
             "discarded_pending": discarded_pending,
         }
         if self._hoot is not None:
+            self._end_hoot_reason()
             result["hoot"] = self._hoot
         self.journal.write("result", **_journal_fields(result))
         self._maybe_autoclose()
@@ -878,17 +896,29 @@ class Session:
         self._emit_test_progress()
 
     def _note_hoot_line(self, line: str) -> None:
+        if self._hoot_reason_for is not None:
+            if not _LOG_RECORD.match(line):
+                # Past the clip there is nothing to keep but the fact of it.
+                if sum(len(kept) + 1 for kept in self._hoot_reason) <= HOOT_REASON_CHARS:
+                    self._hoot_reason.append(line)
+
+                return
+            self._end_hoot_reason()
         parsed = parse_hoot_line(line)
         if parsed is None:
 
             return
         if self._hoot is None:
-            self._hoot = {"passed": None, "failed": None, "failed_tests": []}
+            self._hoot = {"passed": None, "failed": None, "failed_tests": [], "reasons": {}}
         kind, value = parsed
-        if kind == "failed" and value not in self._hoot["failed_tests"]:
-            # Hoot logs a failure once from the test and once more in the
-            # run's summary of failed reasons; one entry is what to rerun.
-            self._hoot["failed_tests"].append(value)
+        if kind == "failed":
+            if value not in self._hoot["failed_tests"]:
+                # Hoot logs a failure once from the test and once more in the
+                # run's summary of failed reasons; one entry is what to rerun.
+                self._hoot["failed_tests"].append(value)
+            if value not in self._hoot["reasons"] and len(self._hoot["reasons"]) < HOOT_REASONS:
+                self._hoot_reason_for = value
+                self._hoot_reason = []
         elif kind == "summary":
             # One per browser test, and a class or a module can run several.
             for key, count in value.items():
@@ -896,6 +926,19 @@ class Session:
         elif kind == "running" and self._test_progress is not None:
             self._test_progress["current"] = value
             self._emit_test_progress()
+
+    def _end_hoot_reason(self) -> None:
+        """File the reasons read so far under the failed test they belong to."""
+        name, lines = self._hoot_reason_for, self._hoot_reason
+        self._hoot_reason_for = None
+        self._hoot_reason = []
+        text = "\n".join(lines).strip()
+        if name is None or not text or self._hoot is None:
+
+            return
+        if len(text) > HOOT_REASON_CHARS:
+            text = text[:HOOT_REASON_CHARS].rstrip() + "\n[clipped]"
+        self._hoot["reasons"][name] = text
 
     def _emit_test_progress(self) -> None:
         self._emit({

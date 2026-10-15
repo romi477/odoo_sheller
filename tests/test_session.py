@@ -7,6 +7,7 @@ import pytest
 from odoo_sheller.journal import Journal, feed_from_records
 from odoo_sheller.protocol import FRAME_LINE_LIMIT
 from odoo_sheller.session import (
+    HOOT_REASON_CHARS,
     STDERR_DRAIN,
     CommitForbidden,
     CommitNotAllowed,
@@ -1877,7 +1878,36 @@ async def test_a_hoot_run_reports_its_own_counts_and_failed_tests(tmp_path):
         "web", "WebSuite", "test_unit_desktop", params="@web/a"
     )
     assert result["params"] == "@web/a"           # the frame carried them
-    assert result["hoot"] == {"passed": 4, "failed": 1, "failed_tests": ["@web/a/one"]}
+    assert result["hoot"] == {
+        "passed": 4, "failed": 1, "failed_tests": ["@web/a/one"],
+        "reasons": {"@web/a/one": "Failed assertion:"},
+    }
+    await session.close()
+
+
+# A failure is one log record over many lines: Hoot's reasons, then the
+# stack Odoo appends to a console error. The next record starts with a stamp.
+RUN_HOOT_LONG_REASON_FAKE = RUN_HOOT_FAKE.replace(
+    '    sys.stderr.write("Failed assertion:\\n")\n',
+    '    sys.stderr.write("Failed assertion:\\n")\n'
+    '    sys.stderr.write("expected 2, got 3\\n")\n'
+    '    for n in range(200):\n'
+    '        sys.stderr.write("    at frame%d (web.assets_unit_tests.min.js:1:%d)\\n" % (n, n))\n',
+)
+
+
+async def test_a_failed_hoot_test_comes_with_its_reasons_clipped(tmp_path):
+    """The reasons are logged at the failing test, deep in the run; the tail
+    of the log that comes back is the summary and the Python traceback. So
+    each failed test carries its own block, its head kept and its stack cut."""
+    assert RUN_HOOT_LONG_REASON_FAKE != RUN_HOOT_FAKE
+    session = await make_session(tmp_path, script=RUN_HOOT_LONG_REASON_FAKE)
+    await session.start()
+    result = await session.run_test("web", "WebSuite", "test_unit_desktop", params="@web/a")
+    reason = result["hoot"]["reasons"]["@web/a/one"]
+    assert reason.startswith("Failed assertion:\nexpected 2, got 3\n")
+    assert len(reason) <= HOOT_REASON_CHARS + len("\n[clipped]")
+    assert reason.endswith("[clipped]")
     await session.close()
 
 
