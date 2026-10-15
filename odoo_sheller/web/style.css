@@ -692,13 +692,12 @@ button.region-toggle:active:not(:disabled) {
   margin-bottom: 8px;
 }
 
-.odoosh-name {
-  flex: 1 1 16ch;
-  min-width: 0;
-}
-
+/* The name and the build id are short; the hostname is the long one, and gets
+   whatever the row has left. */
+.odoosh-name,
 .odoosh-build {
-  flex: 0 0 10ch;
+  flex: 0 0 10rem;
+  min-width: 0;
 }
 
 .odoosh-host {

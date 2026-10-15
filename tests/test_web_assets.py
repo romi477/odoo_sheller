@@ -2039,6 +2039,16 @@ def test_the_build_form_asks_for_a_name_first_and_does_not_insist(markup):
     assert "optional" in name
 
 
+def test_the_name_is_as_wide_as_the_build_and_the_hostname_takes_the_rest():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    pair = re.search(r"\n\.odoosh-name,\s*\.odoosh-build\s*\{([^}]*)\}", css)
+    assert pair is not None, "one rule, so the two cannot drift apart"
+    assert re.search(r"flex:\s*0 0 ", pair.group(1)), "neither grows"
+    assert "min-width: 0" in pair.group(1), "an input's own width would win otherwise"
+    host = re.search(r"\n\.odoosh-host\s*\{([^}]*)\}", css)
+    assert re.search(r"flex:\s*1 1 ", host.group(1))
+
+
 def test_a_build_card_is_edited_like_a_server_card(app_js):
     template = re.search(r'<template id="odoosh-card">(.*?)</template>', _page(), re.DOTALL)
     assert template is not None
