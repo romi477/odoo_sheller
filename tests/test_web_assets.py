@@ -3603,3 +3603,15 @@ def test_the_explanation_under_a_form_is_a_centred_filled_note_not_loose_text():
     assert re.search(r"margin:\s*\d+px auto", body), "centred as a block, not only its words"
     assert "background:" in body and "border-radius" in body
     assert "dashed" not in body, "the card around it already is"
+
+
+def test_an_open_form_for_a_new_card_is_outlined_in_cyan_without_the_pointer():
+    """Open, it is where something is being written: outlined as a card under the
+    pointer is, whether the pointer is there or not. Folded it is a title, and
+    a card being changed keeps its amber edge."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    rule = re.search(r"\n\.composer:not\(\.collapsed\):not\(\.editing\)\s*\{([^}]*)\}", css)
+    assert rule is not None
+    assert "outline: 2px solid var(--cyan)" in rule.group(1), "the cards' own outline"
+    assert "outline-offset: -1px" in rule.group(1)
+    assert not re.search(r"\.composer[^{,]*:hover", css), "not a pointer effect"
