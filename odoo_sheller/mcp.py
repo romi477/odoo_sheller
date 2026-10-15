@@ -634,10 +634,18 @@ that drives it and pass Hoot's filter as `params`:
 
 `params` goes on the test tag in brackets, and Hoot reads it as a filter: a
 module (`@integration`), a suite or one test by its id
-(`@integration/views/list/renders the badge`), several joined by commas, a
-`-` in front to leave one out. A module's tests are in the run only if its
+(`@integration/views/list/renders the badge`), several joined by commas
+with no space after them (Odoo splits only on a comma right before an `@`),
+a `-` in front to leave one out. A module's tests are in the run only if its
 manifest lists them under `web.assets_unit_tests`. With params the default
-ceiling is a class's 300 seconds, since Chrome alone takes about ten to start.
+ceiling is at least a class's 300 seconds, since Chrome alone takes about
+ten to start.
+
+A filter Hoot has nothing for does not narrow the run: Hoot drops it, and
+with no filter left it runs every JS test it has. The session stops such a
+run the moment Hoot says so, and the answer carries `hoot.unknown_filters`.
+Check the id — `@module/` then the suite path and the test name as the test
+file spells them — and that the file is in `web.assets_unit_tests`.
 
 The answer's counts are about the one Python test that ran Hoot. `hoot` has
 Hoot's own: `passed`, `failed` (summed over every browser test the run

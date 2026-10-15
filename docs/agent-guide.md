@@ -137,6 +137,16 @@ and Odoo hands them to the test as `_test_params`:
 The daemon refuses params with a bracket, a backslash or a control character:
 the first two would change what the tag means, the last has no place in one.
 
+Several filters are joined by commas with no space after them: Odoo splits
+only on a comma right before an `@`. A filter Hoot has no test or suite for
+is dropped with `Test runner did not find job with ID`, and with no include
+filter left Hoot runs every test it has (`runner.js`, `_simplifyIncludeSpecs`
+then `_prepareJobs`) — a typo is the whole suite of every module, far past
+any ceiling. The session recomputes Odoo's id for each included filter,
+stops the run (`SIGINT`, journalled as an `interrupt` with
+`reason: hoot_unknown_filter`) when Hoot drops one of them, and names it in
+`hoot.unknown_filters`. A dropped id that is not one of ours is only listed.
+
 `tests_run` then says 1 however many Hoot tests ran, so the session reads
 Hoot's own lines out of the run's log (`hoot/core/runner.js`): `Test "<id>"
 failed:` for each failure, `Passed N tests` or `Failed N tests (M passed` at

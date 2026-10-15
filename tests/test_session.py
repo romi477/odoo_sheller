@@ -17,6 +17,7 @@ from odoo_sheller.session import (
     SessionDead,
     SessionNotReady,
     SessionState,
+    hoot_hash,
     parse_hoot_line,
     parse_test_line,
     rerun_spec,
@@ -2013,6 +2014,70 @@ async def test_a_run_that_lands_after_its_timeout_keeps_what_it_logged(
     assert late[0]["failed"] == []
     assert late[0]["discarded_pending"] is False
     assert not session._stderr_collectors       # the window went with the run
+
+
+def test_hoot_hash_is_odoos():
+    """The id Odoo puts in Hoot's URL for a filter (web/tests/test_js.py),
+    pinned to the values Odoo's own test of it expects."""
+    assert hoot_hash("@web/core") == "e39ce9ba"
+    assert hoot_hash("@web/core/autocomplete") == "69a6561d"
+    assert hoot_hash("@web/core/autocomplete/open dropdown on input") == "ee565d54"
+
+
+# Hoot drops a filter id it has no test or suite for, and with no include
+# filter left it runs every test it has (runner.js `_simplifyIncludeSpecs`,
+# then `_prepareJobs(implicitInclude = !this._includeFilterCount)`).
+RUN_HOOT_UNKNOWN_FILTER_FAKE = RUN_HOOT_FAKE.replace(
+    "    sys.stderr.write(H % (\"INFO\", 'Running test \"@web/a/one\"'))\n",
+    "    sys.stderr.write(H.replace('[HOOT] ', '') % ('WARNING', 'Test runner did not find "
+    "job with ID \"%s\": it has been removed from the URL' % ID))\n"
+    "    sys.stderr.flush()\n"
+    "    time.sleep(0.2)\n"
+    "    sys.stderr.write(H % (\"INFO\", 'Running test \"@web/a/one\"'))\n",
+).replace("import json, sys, time\n", "import json, sys, time\nID = \"@@ID@@\"\n", 1)
+
+
+async def test_a_hoot_filter_that_matches_nothing_stops_the_run(tmp_path, monkeypatch):
+    """A typo in params is not a narrower run but the whole suite — every
+    module's JS tests, far past any ceiling. The session stops it as soon as
+    Hoot says it dropped the id, and names the filter that matched nothing."""
+    signals = []
+
+    async def fake_signal(target, pid, name):
+        signals.append((pid, name))
+
+    monkeypatch.setattr("odoo_sheller.session.send_signal", fake_signal)
+    script = RUN_HOOT_UNKNOWN_FILTER_FAKE.replace("@@ID@@", hoot_hash("@web/typo"))
+    session = await make_session(tmp_path, script=script)
+    await session.start()
+    result = await session.run_test(
+        "web", "WebSuite", "test_unit_desktop", params="@web/a, -@web/b,@web/typo"
+    )
+    assert signals == [(4242, "INT")]
+    assert result["hoot"]["unknown_filters"] == ["@web/typo"]
+    await session.close()
+    stops = [r for r in session.journal.records() if r["kind"] == "interrupt"]
+    assert stops[0]["reason"] == "hoot_unknown_filter"
+
+
+async def test_a_dropped_id_that_is_not_a_filter_of_ours_is_only_noted(
+    tmp_path, monkeypatch
+):
+    """On 20 Odoo adds an id per module of the run; one Hoot does not know is
+    not the agent's mistake and does not widen the run."""
+    signals = []
+
+    async def fake_signal(target, pid, name):
+        signals.append(name)
+
+    monkeypatch.setattr("odoo_sheller.session.send_signal", fake_signal)
+    script = RUN_HOOT_UNKNOWN_FILTER_FAKE.replace("@@ID@@", "0badc0de")
+    session = await make_session(tmp_path, script=script)
+    await session.start()
+    result = await session.run_test("web", "WebSuite", "test_unit_desktop", params="@web/a")
+    assert signals == []
+    assert result["hoot"]["unknown_filters"] == ["0badc0de"]
+    await session.close()
 
 
 async def test_a_run_without_hoot_has_no_hoot_block(tmp_path):

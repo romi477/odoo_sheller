@@ -222,12 +222,41 @@ _HOOT_LINES = (
     ("failed", re.compile(r"\[HOOT\] Test " + _HOOT_NAME + r" failed:\s*$")),
     ("passed_all", re.compile(r"\[HOOT\] Passed (\d+) tests \(")),
     ("failed_some", re.compile(r"\[HOOT\] Failed (\d+) tests \((\d+) passed")),
+    # A filter id with no test or suite behind it, dropped before the run.
+    # Logged without the prefix: the logger is still at its default level.
+    ("dropped", re.compile(r'Test runner did not find job with ID "(?P<name>-?[0-9a-f]+)"')),
 )
 
 
 # Where Odoo's log starts a new record: `2026-10-14 21:22:19,878 `. A line
 # without it continues the record before.
 _LOG_RECORD = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} ")
+
+
+def hoot_hash(text: str) -> str:
+    """The id Odoo hands Hoot for a filter: `_generate_hash` in
+    web/tests/test_js.py, Hoot's own `generateHash` over a job's full name."""
+    value = 0
+    for char in text:
+        value = ((value << 5) - value + ord(char)) & 0xFFFFFFFF
+
+    return f"{value:08x}"
+
+
+def hoot_filters(params: str) -> dict[str, str]:
+    """What params include, by the id Odoo puts in Hoot's URL for each.
+
+    `_get_filters` in web/tests/test_js.py: split before an `@`, strip, and a
+    leading `-` excludes. An excluded id Hoot does not know narrows nothing,
+    so only the included ones are kept.
+    """
+    included = {}
+    for part in re.split(r",(?=-?@)", params):
+        part = part.strip()
+        if part and not part.startswith("-"):
+            included[hoot_hash(part)] = part
+
+    return included
 
 
 def parse_hoot_line(line: str) -> tuple[str, object] | None:
@@ -323,6 +352,11 @@ class Session:
         # It outlives `run_test` when the run blows its ceiling.
         self._run: dict | None = None
         self._hoot: dict | None = None
+        # What this run's params include, by Hoot id, and whether the run was
+        # already stopped for one Hoot did not know.
+        self._hoot_filters: dict[str, str] = {}
+        self._hoot_stopping = False
+        self._stop_task: asyncio.Task | None = None
         # The failed Hoot test whose reasons are being read, and the lines so far.
         self._hoot_reason_for: str | None = None
         self._hoot_reason: list[str] = []
@@ -666,6 +700,8 @@ class Session:
         self._test_failed = []
         self._hoot = None
         self._hoot_reason_for = None
+        self._hoot_filters = hoot_filters(params) if params else {}
+        self._hoot_stopping = False
         self._test_module = module
         self._run = {"window": window, "discarded_pending": discarded_pending}
         try:
@@ -952,9 +988,39 @@ class Session:
             # One per browser test, and a class or a module can run several.
             for key, count in value.items():
                 self._hoot[key] = (self._hoot[key] or 0) + count
+        elif kind == "dropped":
+            self._note_dropped_filter(value)
         elif kind == "running" and self._test_progress is not None:
             self._test_progress["current"] = value
             self._emit_test_progress()
+
+    def _note_dropped_filter(self, hoot_id: str) -> None:
+        """Hoot dropped a filter id it has nothing for.
+
+        With no include filter left, Hoot runs every test it has: a typo in
+        params is not a narrower run but every module's JS suite, far past
+        any ceiling, ending in a timeout with nothing to show. So a dropped id
+        that is one of ours stops the run at once; one that is not — 20 adds
+        an id per module of the run — is only noted.
+        """
+        name = self._hoot_filters.get(hoot_id)
+        unknown = self._hoot.setdefault("unknown_filters", [])
+        if (name or hoot_id) not in unknown:
+            unknown.append(name or hoot_id)
+        pid = (self.hello or {}).get("pid")
+        if name is None or self._hoot_stopping or not pid:
+
+            return
+        self._hoot_stopping = True
+        self.journal.write(
+            "interrupt", actor={"kind": "daemon"}, reason="hoot_unknown_filter",
+            filters=[name],
+        )
+        self._stop_task = asyncio.get_running_loop().create_task(self._send_interrupt(pid))
+
+    async def _send_interrupt(self, pid: int) -> None:
+        with contextlib.suppress(Exception):
+            await send_signal(self.target, pid, "INT")
 
     def _end_hoot_reason(self) -> None:
         """File the reasons read so far under the failed test they belong to."""
