@@ -62,6 +62,8 @@ def test_each_file_covers_python_and_xml(major):
         (18, "<list"),
         (19, "models.Constraint"),
         (20, "ir.access"),
+        (20, '<i class="oi" data-icon='),
+        (20, "addons/web/tooling/icons/icons_wishlist.txt"),
     ],
 )
 def test_the_spellings_that_move_are_where_they_belong(major, says):
@@ -78,8 +80,24 @@ def test_the_common_part_says_how_module_code_is_written_on_any_major():
     text = section.group(1)
     for says in (
         "_inherit", "xpath", "UserError", "ValidationError", "_()",
-        "@api.constrains", "ir.model.access.csv", "_logger", "os_run_test",
+        "@api.constrains", "access row", "_logger", "os_run_test",
         "blank line before the final `return`",
     ):
         assert says in text, says
     assert common.index("## How module code is written") < common.index("## On every major")
+
+
+def test_the_common_part_names_no_file_that_a_major_renames():
+    """It goes in front of every major. 20 has no `ir.model.access.csv` and no
+    `ir.rule`; naming them here would contradict the file that follows."""
+    common = rules.common()
+    for gone_in_20 in ("ir.model.access.csv", "ir.rule"):
+        assert gone_in_20 not in common, gone_in_20
+
+
+def test_odoo_20_says_font_awesome_draws_nothing():
+    """A `fa fa-*` class is no error on 20, only an empty space where the icon
+    was: the one change an agent cannot notice from a log."""
+    text = (rules.RULES / "20.md").read_text()
+    for says in ("fa fa-", "icon=", "oi-filled", "oi-fw", "snake_case", ".oi", "grep -rnE"):
+        assert says in text, says

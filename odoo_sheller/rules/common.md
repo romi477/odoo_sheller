@@ -18,9 +18,10 @@ over memory alike.
 - An error a user sees is `UserError` or `ValidationError`, its message in
   `_()`; so is every other string a user reads. Integrity is an
   `@api.constrains` method or a database constraint, not a check in `create`.
-- A new model needs its row in `security/ir.model.access.csv`, and a
-  multi-company one its `ir.rule`. The shell is superuser, so a missing one
-  never shows in a session — only to the first real user.
+- A new model needs its access row, and a multi-company one a record rule
+  limiting it to the user's companies; your major's rules name the file.
+  The shell is superuser, so a missing one never shows in a session — only
+  to the first real user.
 - Log with `_logger = logging.getLogger(__name__)`, never `print`.
 - Prove a change with Odoo's own tests (`TransactionCase`, `HttpCase`), run
   through os_run_test.

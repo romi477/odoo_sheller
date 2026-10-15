@@ -24,6 +24,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   on any major: extend rather than edit, the ORM before SQL, `UserError` and
   `_()`, an access row for every new model, `_logger`, Odoo's own tests, and
   a blank line before a method's final `return`.
+- Odoo 20's rules cover icons: Font Awesome is gone and a `fa fa-*` class
+  draws an empty space without an error, so icons are Material Symbols
+  (`<i class="oi" data-icon=…>`, `icon="name"` on a button), limited to the
+  names in `addons/web/tooling/icons/icons_wishlist.txt`.
 - Rules for the Odoo major a session runs. The first session an agent opens
   or adopts on 15 through 20 comes with `rules`: what that major expects of
   Python and XML — `attrs` or Python modifiers, `<tree>` or `<list>`,
