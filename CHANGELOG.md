@@ -14,7 +14,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Python and XML — `attrs` or Python modifiers, `<tree>` or `<list>`,
   `_sql_constraints` or `models.Constraint`, `groups_id` or `group_ids`.
   Later sessions on the same major point at `os_help('odoo_<major>')`
-  instead of repeating them.
+  instead of repeating them — worded for a server shared by several
+  conversations, as Claude Desktop's is.
 - `os_help('tests')` says how a new JS test file reaches the web process
   without a restart: clear the assets cache and signal it. Without the
   signal the web process never sees the file, and a deleted one blanks the
@@ -22,12 +23,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Hoot runs headless through `os_run_test`: `params` goes on the test tag
   as `[params]`, which Hoot reads as a filter —
   `os_run_test("web.WebSuite.test_unit_desktop", params="@my_module")`. The
-  answer carries `hoot` with Hoot's own counts and the ids of the tests that
-  failed, each one ready to pass back as `params`. Needs Chromium and
+  answer carries `hoot`: Hoot's own counts, summed over every browser test
+  in the run; the ids of the tests that failed, each one ready to pass back
+  as `params`, whichever quotes Hoot put around it; and `reasons`, each
+  failure's assertions, clipped. A filter Hoot has nothing for would widen
+  the run to every JS test there is, so the session stops it and names it in
+  `hoot.unknown_filters`. `failed` entries of a run with params carry them,
+  balanced brackets are allowed in them, params on 15 are refused as
+  `params_unsupported`, and they raise a method's default ceiling to a
+  class's without lowering a module's. On 17 to 19 each run first drops the
+  process's cached asset file lists, so a reused session sees a new test
+  file. The Markdown transcript shows Hoot's counts. Needs Chromium and
   `websocket-client` in the container's Odoo Python.
 
 ### Fixed
 
+- A test run that blows its ceiling is booked, when its result finally
+  lands, with what it logged: `failed`, its `stderr` and `hoot`. It used to
+  be the bare frame — `tests_run: 1` and nothing to act on — which is what
+  `os_test_result` read back.
+- A run's log is parsed to its end. Lines the stderr reader caught up on
+  after the result frame landed reached the run's log but were never read,
+  so a failure logged last could be missing from `failed`.
 - A session id never reads as a JSON number. About one session in 280 got an
   id like `274327107366`, and about as many one like `27432710e366`; an
   agent's host could send it back as a JSON number, every MCP tool refused it
