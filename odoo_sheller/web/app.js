@@ -609,6 +609,52 @@ function showBuildError(message) {
   element.textContent = message || '';
 }
 
+function showBuildProbe(text, {error = false} = {}) {
+  const result = document.querySelector('.odoosh-probe-result');
+  result.hidden = !text;
+  result.textContent = text || '';
+  result.classList.toggle('error', error);
+}
+
+// A probe answered for the form as it was: a reset or another probe since then
+// makes the answer about something no longer there.
+let buildProbeSerial = 0;
+
+// What the build in the form says it is — while a card is being changed, before
+// anything is saved. The card keeps what its own last probe said: the form is
+// not the card yet.
+async function probeBuildForm() {
+  const form = buildFormElement();
+  const build = form.querySelector('.odoosh-build').value.trim();
+  const host = form.querySelector('.odoosh-host').value.trim();
+  if (!build || !host) {
+    showBuildError('A build needs its id and its hostname.');
+
+    return;
+  }
+  const serial = ++buildProbeSerial;
+  showBuildProbe('probing build…');
+  let text;
+  let error = false;
+  try {
+    const probe = await withAdminRetry(() => api.post(
+      '/api/targets/probe', {kind: 'odoosh', build, host}, adminHeaders(),
+    ));
+    if (probe.ok && probe.supported) {
+      text = [probe.stage, `Odoo ${probe.odoo_version}`, probe.db_name].filter(Boolean).join(' · ');
+    } else {
+      text = probe.error || 'The probe failed.';
+      error = true;
+    }
+  } catch (failure) {
+    text = failure.message;
+    error = true;
+  }
+  if (serial === buildProbeSerial) {
+    showBuildProbe(text, {error});
+  }
+}
+
 async function saveBuildForm() {
   const form = buildFormElement();
   const name = form.querySelector('.odoosh-name').value.trim();
@@ -649,9 +695,13 @@ function resetBuildForm() {
   form.querySelector('.odoosh-name').value = '';
   form.querySelector('.odoosh-build').value = '';
   form.querySelector('.odoosh-host').value = '';
-  form.querySelector('.odoosh-add').textContent = 'Probe';
+  form.querySelector('.odoosh-add').hidden = false;
+  form.querySelector('.odoosh-probe').hidden = true;
+  form.querySelector('.odoosh-save').hidden = true;
   form.querySelector('.odoosh-cancel').hidden = true;
+  buildProbeSerial += 1;
   showBuildError('');
+  showBuildProbe('');
 }
 
 function editBuild(entry) {
@@ -666,7 +716,11 @@ function editBuild(entry) {
   form.querySelector('.odoosh-name').value = entry.name === entry.build ? '' : entry.name;
   form.querySelector('.odoosh-build').value = entry.build;
   form.querySelector('.odoosh-host').value = entry.host;
-  form.querySelector('.odoosh-add').textContent = 'Save changes';
+  // As a server card is changed: Probe asks and writes nothing, Save changes
+  // writes. The add form's one key does both, which is right for a new card.
+  form.querySelector('.odoosh-add').hidden = true;
+  form.querySelector('.odoosh-probe').hidden = false;
+  form.querySelector('.odoosh-save').hidden = false;
   form.querySelector('.odoosh-cancel').hidden = false;
   form.scrollIntoView({block: 'nearest'});
   form.querySelector('.odoosh-name').focus();
@@ -4244,9 +4298,16 @@ Object.keys(COMPOSERS).forEach((mode) => {
 {
   const form = buildFormElement();
   form.querySelector('.odoosh-add').addEventListener('click', saveBuildForm);
+  form.querySelector('.odoosh-probe').addEventListener('click', probeBuildForm);
+  form.querySelector('.odoosh-save').addEventListener('click', saveBuildForm);
   form.querySelector('.odoosh-cancel').addEventListener('click', resetBuildForm);
   form.querySelectorAll('input').forEach((input) => {
-    input.addEventListener('input', () => showBuildError(''));
+    input.addEventListener('input', () => {
+      // What was probed is no longer what the form says.
+      buildProbeSerial += 1;
+      showBuildError('');
+      showBuildProbe('');
+    });
   });
 }
 

@@ -2073,6 +2073,33 @@ def test_a_build_card_is_edited_like_a_server_card(app_js):
     assert "composerEditing('odoosh', null)" in reset.group(0)
 
 
+def test_editing_a_build_offers_probe_save_and_cancel_like_a_server(app_js):
+    """Probe asks the build in the form and writes nothing; Save changes writes."""
+    form = re.search(r'<div class="odoosh-form">(.*?)</div>', _page(), re.DOTALL).group(1)
+    buttons = re.findall(r'<button[^>]*class="([^"]+)"[^>]*>([^<]*)</button>', form)
+    assert buttons == [
+        ("odoosh-add", "Probe"),
+        ("odoosh-probe", "Probe"),
+        ("odoosh-save primary", "Save changes"),
+        ("odoosh-cancel", "Cancel"),
+    ]
+    for marker in ("odoosh-probe", "odoosh-save", "odoosh-cancel"):
+        assert re.search(rf'class="{marker}[^"]*" hidden', form), marker
+    assert 'class="odoosh-probe-result probe-note"' in _page()
+
+    edit = re.search(r"function editBuild\(.*?\n\}", app_js, re.DOTALL).group(0)
+    reset = re.search(r"function resetBuildForm\(.*?\n\}", app_js, re.DOTALL).group(0)
+    for marker in ("odoosh-add", "odoosh-probe", "odoosh-save", "odoosh-cancel"):
+        assert f"'.{marker}'" in edit and f"'.{marker}'" in reset, marker
+    probe = re.search(r"async function probeBuildForm\(.*?\n\}", app_js, re.DOTALL)
+    assert probe is not None
+    body = probe.group(0)
+    assert "'/api/targets/probe'" in body
+    assert "withAdminRetry(" in body and "adminHeaders()" in body
+    assert "api.put(" not in body and "'/api/targets'," not in body, "a probe writes nothing"
+    assert "patchBuild(" not in body, "what the form holds is not yet the card"
+
+
 def test_each_kind_of_card_edits_in_its_own_form(app_js):
     render = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL)
     assert "kind.edit(entry)" in render.group(0)

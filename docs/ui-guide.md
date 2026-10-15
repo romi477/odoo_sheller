@@ -139,7 +139,10 @@ and whether it is `staging` or `production`. Nothing is opened by probing.
 The name is optional, and a card without one is called by its build id. It is
 worth giving: odoo.sh makes a new build, with a new hostname, on every push,
 and **Edit** puts the card back in the form to follow it — name, build and
-hostname, saved over the card. The name is what stays. A card with a name of
+hostname. Changing a card offers what changing a server card does: **Probe**
+asks the build in the form and writes nothing, the card keeping what its own
+last probe said; **Save changes** writes over the card; **Cancel** drops the
+change. The name is what stays. A card with a name of
 its own also says which build it is, under its title. Two cards are never
 called the same, and a name the daemon refuses is said under the form.
 

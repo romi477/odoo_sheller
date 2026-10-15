@@ -794,7 +794,8 @@ button.region-toggle:active:not(:disabled) {
   margin-top: 14px;
 }
 
-button.ssh-save {
+button.ssh-save,
+button.odoosh-save {
   border-color: var(--border);
 }
 
