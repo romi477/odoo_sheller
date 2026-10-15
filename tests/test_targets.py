@@ -11,7 +11,7 @@ import stat
 
 import pytest
 
-from odoo_sheller.targets import TargetsError, TargetStore
+from odoo_sheller.targets import TargetsError, TargetStore, odoosh_stage
 
 
 @pytest.fixture
@@ -36,6 +36,7 @@ def test_an_odoosh_card_is_named_by_its_build(store):
         "name": "36887345",
         "build": "36887345",
         "host": "build-36887345.dev.odoo.com",
+        "stage": None,
     }
     assert store.get("odoosh-36887345") == card
     assert store.list() == [card]
@@ -161,7 +162,7 @@ def test_a_build_card_is_changed_whole_and_keeps_its_place(store):
     card = store.update("odoosh-1", {"name": "acme staging", "build": "7", "host": "g.example.com"})
     assert card == {
         "id": "odoosh-7", "kind": "odoosh", "name": "acme staging",
-        "build": "7", "host": "g.example.com",
+        "build": "7", "host": "g.example.com", "stage": None,
     }
     assert [c["id"] for c in store.list()] == ["odoosh-2", "odoosh-7"]
     with pytest.raises(KeyError):
@@ -187,8 +188,78 @@ def test_a_build_card_change_that_is_refused_changes_nothing(store):
     with pytest.raises(ValueError):
         store.update("odoosh-1", {"build": "-oProxyCommand=x", "name": "new"})
     with pytest.raises(ValueError, match="stage"):
-        store.update("odoosh-1", {"stage": "staging"})
+        store.update("odoosh-1", {"stage": "development"})
+    with pytest.raises(ValueError, match="access"):
+        store.update("odoosh-1", {"access": "ssh x@y"})
     assert on_disk(store) == before
+
+
+def test_a_build_may_declare_its_stage(store):
+    """As a server card does. The build reports one too; which of the two the
+    session goes by is `odoosh_stage`'s answer, not the card's."""
+    card = store.add_odoosh("1", "a.example.com", stage="staging")
+    assert card["stage"] == "staging"
+    assert on_disk(store)["odoosh"] == [
+        {"build": "1", "host": "a.example.com", "stage": "staging"}
+    ]
+
+
+def test_a_build_written_before_stages_declares_none(store):
+    """Such a card goes by what the build reports, as it always did."""
+    store.add_odoosh("1", "a.example.com")
+    assert store.get("odoosh-1")["stage"] is None
+    assert on_disk(store)["odoosh"] == [{"build": "1", "host": "a.example.com"}]
+
+
+def test_adding_a_build_again_without_a_stage_keeps_the_stage_it_had(store):
+    store.add_odoosh("1", "a.example.com", stage="production")
+    assert store.add_odoosh("1", "b.example.com")["stage"] == "production"
+    assert store.add_odoosh("1", "b.example.com", stage="staging")["stage"] == "staging"
+
+
+@pytest.mark.parametrize("stage", ["development", "dev", "Production", ""])
+def test_a_build_stage_that_is_not_one_to_declare_is_refused(store, stage):
+    with pytest.raises(ValueError, match="stage"):
+        store.add_odoosh("1", "a.example.com", stage=stage)
+    assert store.list() == []
+
+
+def test_a_build_card_stage_is_changed_like_any_field(store):
+    store.add_odoosh("1", "a.example.com", name="acme")
+    card = store.update("odoosh-1", {"stage": "staging"})
+    assert (card["name"], card["stage"]) == ("acme", "staging")
+    assert store.update("odoosh-1", {"name": "acme 2"})["stage"] == "staging"
+
+
+@pytest.mark.parametrize(
+    ("declared", "reported", "stage"),
+    [
+        (None, "production", "production"),
+        (None, "staging", "staging"),
+        (None, None, None),
+        ("production", "staging", "production"),
+        ("production", "dev", "production"),
+        ("production", None, "production"),
+        ("staging", "production", "production"),
+        ("staging", "dev", "dev"),
+        ("staging", None, "staging"),
+    ],
+)
+def test_a_build_goes_by_the_stricter_of_its_card_and_itself(declared, reported, stage):
+    """Production if either says so. A human may close a build further than it
+    says it is, never open one: a card cannot talk a production build out of
+    its guard. Otherwise what the build says, since it knows."""
+    assert odoosh_stage(declared, reported) == stage
+
+
+def test_a_build_entry_whose_stage_is_not_one_is_reported_and_left_alone(store):
+    content = json.dumps(
+        {"version": 1, "odoosh": [{"build": "1", "host": "h", "stage": "live"}]}
+    )
+    store.path.write_text(content, encoding="utf-8")
+    with pytest.raises(TargetsError):
+        store.list()
+    assert store.path.read_text(encoding="utf-8") == content
 
 
 def test_a_build_entry_whose_name_is_not_text_is_reported_and_left_alone(store):

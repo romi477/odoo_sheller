@@ -19,7 +19,7 @@ from odoo_sheller.journal import (
     target_from_records,
 )
 from odoo_sheller.session import Session, SessionDead
-from odoo_sheller.targets import TargetStore
+from odoo_sheller.targets import TargetStore, odoosh_stage
 from odoo_sheller.transport import (
     DOCKER,
     ODOOSH,
@@ -195,7 +195,7 @@ class Registry:
         if card["kind"] == "ssh":
             target = await self._ssh_target(card)
         else:
-            target = await self._odoosh_target(card["build"], card["host"])
+            target = await self._odoosh_target(card["build"], card["host"], card["stage"])
 
         return replace(target, card_id=card["id"])
 
@@ -224,14 +224,16 @@ class Registry:
             database=launch.database or probe.get("db_name"),
         )
 
-    async def _odoosh_target(self, build: str, host: str) -> Target:
+    async def _odoosh_target(self, build: str, host: str, declared: str | None) -> Target:
         """Ask the build what it is before opening anything in it.
 
         The stage comes from here rather than from the request: a caller that
         could name its own stage would make the production guard decorative,
         and production differs from staging by the digits in a build id. The
-        probe doubles as validation — an unsupported version is refused now
-        instead of on the first command.
+        card's own stage only adds to it — the stricter of the two — so a
+        human can close a build further, never open one. The probe doubles as
+        validation — an unsupported version is refused now instead of on the
+        first command.
         """
         probe = await probe_odoosh(build, host)
         if not probe.get("supported"):
@@ -241,7 +243,7 @@ class Registry:
             kind=ODOOSH,
             build=build,
             host=host,
-            stage=probe.get("stage"),
+            stage=odoosh_stage(declared, probe.get("stage")),
             # Informational: the wrapper picks the database, and the hello
             # frame confirms it. Set here so the session reads right from the
             # moment it is announced, before hello has arrived.

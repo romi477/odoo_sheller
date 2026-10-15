@@ -1105,7 +1105,7 @@ def test_a_card_is_written_only_with_the_admin_key(client):
     assert written.status_code == 200
     assert written.json() == {
         "id": "odoosh-36887345", "kind": "odoosh", "name": "36887345",
-        "build": "36887345", "host": "build.dev.odoo.com",
+        "build": "36887345", "host": "build.dev.odoo.com", "stage": "production",
     }
     assert client.get("/api/targets").json() == [written.json()]
 
@@ -1154,7 +1154,7 @@ def test_a_build_card_follows_a_new_build_under_its_name(client):
     assert response.status_code == 200
     assert response.json() == {
         "id": "odoosh-36887399", "kind": "odoosh", "name": "acme staging",
-        "build": "36887399", "host": "next.dev.odoo.com",
+        "build": "36887399", "host": "next.dev.odoo.com", "stage": "production",
     }
     assert [card["id"] for card in client.get("/api/targets").json()] == ["odoosh-36887399"]
 
@@ -1169,9 +1169,27 @@ def test_a_build_card_cannot_take_another_card_s_build(client):
 
 def test_a_build_card_has_no_ssh_field_to_change(client):
     client.post("/api/targets", json=BUILD, headers=ADMIN)
-    response = client.put("/api/targets/odoosh-36887345", json={"stage": "staging"}, headers=ADMIN)
+    response = client.put("/api/targets/odoosh-36887345", json={"access": "ssh a@b"}, headers=ADMIN)
     assert response.status_code == 422
-    assert "stage" in str(response.json()["detail"])
+    assert "access" in str(response.json()["detail"])
+
+
+def test_a_build_declares_production_unless_told_otherwise(client):
+    """The default a server card has, and for the same reason: the guard it
+    picks is the strictest."""
+    assert client.post("/api/targets", json=BUILD, headers=ADMIN).json()["stage"] == "production"
+    staging = client.post("/api/targets", json={**BUILD, "build": "1", "stage": "staging"}, headers=ADMIN)
+    assert staging.json()["stage"] == "staging"
+
+
+def test_a_build_stage_is_changed_and_checked(client):
+    client.post("/api/targets", json=BUILD, headers=ADMIN)
+    card = "/api/targets/odoosh-36887345"
+    assert client.put(card, json={"stage": "staging"}, headers=ADMIN).json()["stage"] == "staging"
+    refused = client.put(card, json={"stage": "dev"}, headers=ADMIN)
+    assert refused.status_code == 422
+    assert "stage" in str(refused.json()["detail"])
+    assert client.post("/api/targets", json={**BUILD, "stage": "dev"}, headers=ADMIN).status_code == 422
 
 
 @pytest.mark.parametrize(

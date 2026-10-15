@@ -276,8 +276,9 @@ Rollback is the default everywhere; commit is always an explicit, confirmed act.
   is out of scope for the MVP, so journals stay local, stay out of git, and must
   be reviewed before being shared.
 - Production guards exist only where the target says what it is. A local
-  database is never guessed at. An odoo.sh build reports `$ODOO_STAGE`, so
-  there: only a human opens a remote target (no MCP tool takes a host, a build or
+  database is never guessed at. An odoo.sh build reports `$ODOO_STAGE`, and
+  its card may declare a stage too — the stricter of the two wins, so a card
+  can make a build production and never take production away. There: only a human opens a remote target (no MCP tool takes a host, a build or
   a card, and the daemon refuses an open that does not come from its own page —
   a bare `curl` — unless it carries the admin key), commit is off until granted even for a human
   owner, and on `production` an agent never writes (`commit_forbidden`): only a

@@ -460,6 +460,36 @@ async def test_opening_an_odoosh_build_takes_the_stage_from_the_instance(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("declared", "reported", "stage"),
+    [("production", "staging", "production"), ("staging", "production", "production"),
+     ("staging", None, "staging")],
+)
+async def test_opening_a_build_goes_by_the_stricter_of_its_card_and_itself(
+    tmp_path, monkeypatch, declared, reported, stage
+):
+    """The card may close a build further than the build says it is, never
+    open it: a production build stays production whatever its card says."""
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+
+    async def fake_probe(build, host, runner=None):
+
+        return {
+            "ok": True, "supported": True, "stage": reported,
+            "db_name": "db", "odoo_version": "19.0", "error": None,
+        }
+
+    monkeypatch.setattr("odoo_sheller.registry.probe_odoosh", fake_probe)
+
+    registry = Registry(journal_root=tmp_path, targets=TargetStore(tmp_path / "t.json"))
+    card = registry.targets.add_odoosh("99", "build-99.dev.odoo.com", stage=declared)
+    await registry.open(target_id=card["id"])
+
+    assert captured["target"].stage == stage
+
+
+@pytest.mark.asyncio
 async def test_opening_an_odoosh_build_refuses_an_unsupported_instance(
     tmp_path, monkeypatch
 ):

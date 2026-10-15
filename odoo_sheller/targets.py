@@ -6,13 +6,15 @@ for nothing. One key per kind of target:
 
     {"version": 1,
      "odoosh": [{"name": "acme staging", "build": "36887345",
-                 "host": "build-36887345.dev.odoo.com"}],
+                 "host": "build-36887345.dev.odoo.com", "stage": "staging"}],
      "ssh": [{"id": "ssh-3f9a01cc", "name": "acme prod",
               "access": "ssh -i ~/.ssh/acme.pem ubuntu@acme.example.com sudo -n -u odoo -H",
               "launch": "/opt/odoo/env/bin/python /opt/odoo/odoo-bin shell -c /opt/odoo/odoo.conf -d acme",
               "stage": "production"}]}
 
 A build's name is optional, and a build without one is called by its build.
+So is its stage: a build reports one of its own, and a card written before
+builds had a stage goes by that alone (`odoosh_stage`).
 An ssh card holds what its author *wrote*, not what it parses to: they edit it
 later, and `~` is theirs. It is parsed (`recipe.py`) when it is saved, to refuse
 what the grammar refuses, and again wherever it is used.
@@ -61,7 +63,8 @@ STAGES = ("production", "staging")
 DEFAULT_STAGE = "production"
 MAX_NAME = 60
 SSH_FIELDS = ("name", "access", "launch", "stage")
-ODOOSH_FIELDS = ("name", "build", "host")
+ODOOSH_FIELDS = ("name", "build", "host", "stage")
+PRODUCTION = "production"
 
 
 class TargetsError(Exception):
@@ -89,6 +92,21 @@ def _checked_name(name: str, taken: list[str]) -> str:
     return name
 
 
+def odoosh_stage(declared: str | None, reported: str | None) -> str | None:
+    """The stage a build is opened as: its card's or its own, the stricter.
+
+    Production if either says so. A human may close a build further than it
+    says it is, never open one: a card that could talk a production build out
+    of its guard would make the guard decorative. Otherwise what the build
+    reports, since it knows; the card's, when it reports nothing.
+    """
+    if PRODUCTION in (declared, reported):
+
+        return PRODUCTION
+
+    return reported or declared
+
+
 def _card(entry: dict) -> dict:
     """What the API calls an odoo.sh card. The id is derived: a build is unique."""
 
@@ -98,6 +116,7 @@ def _card(entry: dict) -> dict:
         "name": _build_name(entry),
         "build": entry["build"],
         "host": entry["host"],
+        "stage": entry.get("stage"),
     }
 
 
@@ -174,6 +193,7 @@ class TargetStore:
                 and isinstance(entry.get("build"), str)
                 and isinstance(entry.get("host"), str)
                 and isinstance(entry.get("name", ""), str)
+                and entry.get("stage") in (None, *STAGES)
             ):
                 raise self._refuse("has an odoosh entry without a build and a host")
         for entry in data["ssh"]:
@@ -265,7 +285,8 @@ class TargetStore:
 
     def _checked_odoosh(self, data: dict, fields: dict, own_build: str | None) -> dict:
         """An odoo.sh entry as it is stored, or ValueError saying what is wrong.
-        A name left empty is no name: the entry has none."""
+        A name left empty is no name: the entry has none. No stage is no
+        declaration: the build's own decides."""
         build = check_ssh_name("build", fields["build"])
         host = check_ssh_name("host", fields["host"])
         others = [e for e in data["odoosh"] if e["build"] not in (build, own_build)]
@@ -279,18 +300,33 @@ class TargetStore:
             entry = {"name": _checked_name(name, [_build_name(e) for e in others]), **entry}
         elif any(_build_name(e).casefold() == build.casefold() for e in others):
             raise ValueError(f"a card named {build!r} already exists")
+        stage = fields.get("stage")
+        if stage is not None:
+            if stage not in STAGES:
+                raise ValueError(f"stage must be one of {', '.join(STAGES)}")
+            entry["stage"] = stage
 
         return entry
 
-    def add_odoosh(self, build: str, host: str, name: str | None = None) -> dict:
+    def add_odoosh(
+        self,
+        build: str,
+        host: str,
+        name: str | None = None,
+        stage: str | None = None,
+    ) -> dict:
         """Adds a build, or updates the one already there and moves it first.
-        Without a name, one it already had is kept: adding again is not a
-        request to forget it."""
+        Without a name or a stage, one it already had is kept: adding again is
+        not a request to forget it."""
         data = self._read()
         known = next((e for e in data["odoosh"] if e["build"] == build), {})
         if not (name or "").strip():
             name = known.get("name")
-        entry = self._checked_odoosh(data, {"name": name, "build": build, "host": host}, None)
+        if stage is None:
+            stage = known.get("stage")
+        entry = self._checked_odoosh(
+            data, {"name": name, "build": build, "host": host, "stage": stage}, None
+        )
         data["odoosh"] = [
             entry,
             *(e for e in data["odoosh"] if e["build"] != build),
@@ -340,7 +376,7 @@ class TargetStore:
         """What can change on a card, checked whole afterwards: a change that
         makes the card refused changes nothing.
 
-        An odoo.sh card's name, build and host. odoo.sh gives every push a new
+        An odoo.sh card's name, build, host and stage. odoo.sh gives every push a new
         build and a new hostname, and the card with the name on it is what
         follows them. Its id is derived from the build, so a new build is a new
         id, and the card returned carries it; it keeps its place in the list.

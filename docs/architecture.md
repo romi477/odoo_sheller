@@ -695,7 +695,14 @@ Listing databases is impossible there in any case: the instance user gets
 The stage is read here, before a session exists, and taken from the probe
 rather than the request when one is opened — a caller that could name its own
 stage would make the commit guard in `docs/security.md` decorative, and
-production differs from staging by the digits in a build id alone.
+production differs from staging by the digits in a build id alone. A build card
+may declare a stage as a server card does (`production` or `staging`,
+`production` when `POST /api/targets` names none), and the session goes by the
+stricter of the card's and the build's (`targets.odoosh_stage`): production if
+either says so, otherwise what the build reports, and the card's only when the
+build reports nothing. A card can close a build further than it says it is,
+never open one. A card written before builds had a stage declares none and
+goes by the build alone, as it always did.
 
 A second one-shot, `GET /api/containers/{container}/tests?module=`, lists
 test classes and methods for one addon technical name. It walks files on

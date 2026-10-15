@@ -129,8 +129,11 @@ wrong in both directions.
 
 **On odoo.sh there is a guard, because the instance says what it is.**
 `$ODOO_STAGE` is readable over SSH before a session is opened, so the kind of
-instance is a fact rather than a guess. Three things follow, and they are the
-whole of the remote safety story:
+instance is a fact rather than a guess. The build's card may declare a stage
+too, and the session goes by the stricter of the two: a human can put a
+development build behind the production guard, and a card that says `staging`
+cannot take that guard off a build that reports `production`. Three things
+follow, and they are the whole of the remote safety story:
 
 - **Only a human opens a remote target, from the UI.** Two things hold this.
   `os_open_session` takes a container, a database and an odoo_bin, and no host,

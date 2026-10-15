@@ -162,6 +162,9 @@ class OdooshCardBody(BaseModel):
     host: str
     # What the card is called; without one, it is called by its build.
     name: str | None = None
+    # As on a server card, the strictest by default. The build reports a stage
+    # too, and the stricter of the two is the one a session goes by.
+    stage: str = DEFAULT_STAGE
 
     @field_validator("build", "host")
     @classmethod
@@ -628,7 +631,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         try:
             if body.kind == "odoosh":
 
-                return cards().add_odoosh(body.build, body.host, body.name)
+                return cards().add_odoosh(body.build, body.host, body.name, body.stage)
 
             return present(
                 cards().add_ssh(body.name, body.access, body.launch, body.stage)
