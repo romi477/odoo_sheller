@@ -1881,6 +1881,40 @@ async def test_a_hoot_run_reports_its_own_counts_and_failed_tests(tmp_path):
     await session.close()
 
 
+# The result frame overtakes the log: stdout and stderr are separate pipes
+# with separate readers, and Hoot's summary is the last thing it logs.
+RUN_HOOT_TAIL_AFTER_RESULT_FAKE = RUN_HOOT_FAKE.replace(
+    "    sys.stderr.write(H % (\"INFO\", \"Failed 1 tests (4 passed, total time: 00:00:00)\"))\n"
+    "    sys.stderr.flush()\n"
+    "    time.sleep(0.1)\n",
+    "    sys.stderr.flush()\n"
+    "    time.sleep(0.1)\n",
+).replace(
+    "                                 \"params\": frame.get(\"params\")}) + \"\\n\")\n"
+    "    sys.stdout.flush()\n",
+    "                                 \"params\": frame.get(\"params\")}) + \"\\n\")\n"
+    "    sys.stdout.flush()\n"
+    "    time.sleep(0.02)\n"     # inside the session's 0.05s drain
+    "    sys.stderr.write(H % (\"INFO\", \"Failed 1 tests (4 passed, total time: 00:00:00)\"))\n"
+    "    sys.stderr.flush()\n",
+)
+
+
+async def test_the_log_tail_that_arrives_after_the_result_is_still_read(tmp_path):
+    """The session goes READY the moment the result lands, but the stderr
+    reader may still be behind: the lines it reads during the drain belong to
+    the run and are parsed like the rest, or Hoot's summary is lost."""
+    assert RUN_HOOT_TAIL_AFTER_RESULT_FAKE != RUN_HOOT_FAKE
+    session = await make_session(tmp_path, script=RUN_HOOT_TAIL_AFTER_RESULT_FAKE)
+    await session.start()
+    result = await session.run_test(
+        "web", "WebSuite", "test_unit_desktop", params="@web/a"
+    )
+    assert result["hoot"]["passed"] == 4
+    assert result["hoot"]["failed"] == 1
+    await session.close()
+
+
 async def test_a_run_without_hoot_has_no_hoot_block(tmp_path):
     session = await make_session(tmp_path, script=RUN_TEST_STDERR_FAKE)
     await session.start()

@@ -851,7 +851,12 @@ class Session:
             self._note_test_line(text)
 
     def _note_test_line(self, line: str) -> None:
-        if self._test_progress is None:
+        # `_test_module` lasts as long as the run's own window: into the drain
+        # after the result, when the session is READY again and the progress
+        # card already gone. The stderr reader can be behind the result frame,
+        # and what it reads then — Hoot's summary is the last line Hoot
+        # logs — belongs to the run.
+        if self._test_module is None and self._test_progress is None:
 
             return
         self._note_hoot_line(line)
@@ -864,6 +869,9 @@ class Session:
             failed = {"test": rerun_spec(self._test_module, description), "kind": kind}
             if failed not in self._test_failed:
                 self._test_failed.append(failed)
+        if self._test_progress is None:
+
+            return
         self._test_progress[_PROGRESS_COUNTER[kind]] += 1
         if kind == "start":
             self._test_progress["current"] = description
@@ -883,7 +891,7 @@ class Session:
             self._hoot["failed_tests"].append(value)
         elif kind == "summary":
             self._hoot.update(value)
-        elif kind == "running":
+        elif kind == "running" and self._test_progress is not None:
             self._test_progress["current"] = value
             self._emit_test_progress()
 
