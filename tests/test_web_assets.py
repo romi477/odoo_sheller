@@ -3704,3 +3704,78 @@ def test_a_card_written_before_stages_is_edited_as_what_its_build_said(app_js):
     body = form_stage.group(0)
     assert "entry.stage" in body
     assert "reported && reported !== 'production' ? 'staging' : 'production'" in body
+
+
+# --- the container switch: agents may commit on this container --------------
+
+
+def _container_card() -> str:
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+
+    return re.search(r'<template id="container-card">(.*?)</template>', html, re.DOTALL).group(1)
+
+
+def test_the_container_card_carries_the_agent_commit_switch_after_the_name():
+    """On the name line, right after the name: it belongs to the container,
+    not to the database picked below — it covers every one of them."""
+    card = _container_card()
+    name_line = re.search(r'<span class="name-line">(.*?)\n\s*</span>\n\s*</div>', card, re.DOTALL)
+    assert name_line is not None
+    text = name_line.group(1)
+    assert text.index('class="name mono"') < text.index('class="agent-commit"')
+    switch = re.search(r'<button[^>]*class="agent-commit".*?</button>', text, re.DOTALL).group(0)
+    assert 'role="switch"' in switch and 'aria-checked="false"' in switch
+    assert "agents may commit" in switch
+    assert 'class="scope">global<' in switch
+    title = re.search(r'title="([^"]*)"', switch).group(1)
+    assert "Global" in title and "Grant commit" in title, (
+        "off is the usual way, and the title has to say so"
+    )
+
+
+def test_the_agent_commit_warning_says_advanced_global_and_starts_hidden():
+    card = _container_card()
+    warning = re.search(r'<p class="agent-commit-warning"[^>]*>.*?</p>', card, re.DOTALL)
+    assert warning is not None
+    text = warning.group(0)
+    assert " hidden" in text.split(">", 1)[0]
+    for says in ("ADVANCED", "GLOBAL", "any database", "remote"):
+        assert says in text, says
+    assert card.index("agent-commit-warning") < card.index('<div class="picker"'), (
+        "under the facts, above the database picker"
+    )
+
+
+def test_the_switch_is_set_with_the_admin_key(app_js):
+    body = re.search(r"async function toggleAgentCommit\(.*?\n\}\n", app_js, re.DOTALL)
+    assert body is not None
+    text = body.group(0)
+    assert "/api/agent-commit/" in text
+    assert "withAdminRetry" in text and "adminHeaders()" in text
+    assert "api.put" in text and "api.del" in text
+
+
+def test_the_switch_click_does_not_reach_the_card(app_js):
+    body = re.search(
+        r"card\.querySelector\('\.agent-commit'\)\.addEventListener.*?\n  \}\);", app_js, re.DOTALL
+    )
+    assert body is not None
+    assert "stopPropagation" in body.group(0)
+
+
+def test_the_cards_show_what_the_daemon_says_about_the_switch(app_js):
+    body = re.search(r"function renderContainers\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert "container.agent_commit" in body
+    assert "agent-commit-warning" in body
+
+
+def test_a_policy_event_keeps_where_the_right_came_from(app_js):
+    for block in re.findall(r"message\.kind === 'policy'\) \{.*?\}", app_js, re.DOTALL):
+        assert "commit_grant" in block
+
+
+def test_the_switch_is_amber_when_on():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    block = re.search(r'\.agent-commit\[aria-checked="true"\][^{]*\{.*?\}', css, re.DOTALL)
+    assert block is not None
+    assert "var(--amber)" in block.group(0)

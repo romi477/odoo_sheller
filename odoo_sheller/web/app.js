@@ -1514,6 +1514,11 @@ function buildContainerCard(name) {
     event.stopPropagation();
     copyTarget(name);
   });
+  card.querySelector('.agent-commit').addEventListener('click', (event) => {
+    // A switch, not a way into the picker: the card's own click must not see it.
+    event.stopPropagation();
+    toggleAgentCommit(name);
+  });
   card.querySelector('.close-connected').addEventListener(
     'click', () => closeSessionsForTarget(name),
   );
@@ -1577,6 +1582,8 @@ function renderContainers() {
     card.classList.toggle('probing', Boolean(container.probing));
     setText(card.querySelector('.meta'), `${container.image || 'unknown image'} · ${container.status || ''}`);
     card.querySelector('.open').disabled = !container.probe?.ok || !container.probe?.supported;
+    // `.agent-commit-warning` follows the switch: shown only while it is on.
+    showAgentCommit(card, Boolean(container.agent_commit));
     // A version nothing has run on here is let through, so it is not an error:
     // a badge, and the whole sentence on hover.
     const untested = card.querySelector('.untested');
@@ -1833,6 +1840,37 @@ function fillPicker(card, container) {
 /// is transcription, and a name like `integra_db_19_presta` is where that goes
 /// wrong. Everything else the probe found — image, status, config path — says
 /// nothing about how to work in the session, so it stays on the card.
+function showAgentCommit(card, on) {
+  card.querySelector('.agent-commit').setAttribute('aria-checked', String(on));
+  card.querySelector('.agent-commit-warning').hidden = !on;
+}
+
+// Every agent session on this container may commit while it is on: a human's
+// grant made ahead of time, so it takes the admin key like writing a card.
+// The daemon answers with the state it now holds, and that is what is shown.
+async function toggleAgentCommit(name) {
+  const container = state.containers.find((item) => item.name === name);
+  const card = state.containerCards.get(name);
+  if (!container || !card) {
+
+    return;
+  }
+  const button = card.querySelector('.agent-commit');
+  const path = `/api/agent-commit/${encodeURIComponent(name)}`;
+  button.disabled = true;
+  try {
+    const answer = await withAdminRetry(() => (container.agent_commit
+      ? api.del(path, adminHeaders())
+      : api.put(path, {}, adminHeaders())));
+    container.agent_commit = answer.on;
+  } catch (error) {
+    noticeDialog(`Could not change "agents may commit" on ${name}: ${error.message}`);
+  } finally {
+    button.disabled = false;
+    showAgentCommit(card, Boolean(container.agent_commit));
+  }
+}
+
 function copyTarget(name) {
   const container = state.containers.find((item) => item.name === name);
   const card = document.querySelector(`.card[data-container="${CSS.escape(name)}"]`);
@@ -2354,6 +2392,7 @@ function connectSocket(id) {
       current.info.owner = message.owner;
     } else if (message.kind === 'policy') {
       current.info.allow_commit = message.allow_commit;
+      current.info.commit_grant = message.commit_grant ?? null;
     } else if (message.kind === 'test_progress') {
       // One event per test, not per log line — but a module still has
       // hundreds, so only the card is redrawn, never the feed under it.
@@ -4154,6 +4193,7 @@ function connectRegistrySocket() {
       record.info.owner = message.owner;
     } else if (message.kind === 'policy') {
       record.info.allow_commit = message.allow_commit;
+      record.info.commit_grant = message.commit_grant ?? null;
     } else if (message.kind === 'state') {
       record.info.state = message.state;
       record.info.activity = message.activity ?? null;

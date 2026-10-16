@@ -200,6 +200,15 @@
             <div class="identity">
               <span class="name-line">
                 <span class="name mono"></span>
+                <!-- Global: every agent session on this container, every
+                     database in it. Off is the usual way, a grant per session. -->
+                <button
+                  type="button"
+                  class="agent-commit"
+                  role="switch"
+                  aria-checked="false"
+                  title="Global — covers every agent session on this container, now and later, on any database in it. Off is the usual way: grant commit to one session at a time with Grant commit in that session."
+                ><span class="track" aria-hidden="true"></span>agents may commit <span class="scope">global</span></button>
                 <span class="badge untested" hidden>untested</span>
                 <span class="badge connected" hidden></span>
               </span>
@@ -216,6 +225,7 @@
             <span class="meta"></span>
             <p class="probe-note">probing container…</p>
           </div>
+          <p class="agent-commit-warning" hidden><b>ADVANCED · GLOBAL</b> Every agent session in this container may commit, to any database, without asking you first — until you turn this off. Survives restarts. Never applies to remote targets.</p>
           <div class="picker" hidden>
             <select class="databases"></select>
             <input class="database-manual mono" placeholder="database name" hidden>
