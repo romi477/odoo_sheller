@@ -1156,7 +1156,7 @@ def test_the_narrow_layout_keeps_a_row_on_one_line(app_js):
     can do without instead, so every cell left has a track of its own and
     the header still names them."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    narrow = re.search(r"@media \(max-width: 760px\) \{(.*?)\n\}", css, re.DOTALL)
+    narrow = re.search(r"@container journals \(max-width: [\d.]+px\) \{(.*?)\n\}", css, re.DOTALL)
     assert narrow is not None
     block = re.sub(r"/\*.*?\*/", "", narrow.group(1), flags=re.DOTALL)
     rules = re.findall(r"([^{}]*)\{([^{}]*)\}", block)
@@ -3815,3 +3815,18 @@ def test_the_agent_commit_warning_spans_the_card():
     block = re.search(r"\.agent-commit-warning\s*\{([^}]*)\}", css)
     assert block is not None
     assert "max-width" not in block.group(1)
+
+
+def test_the_narrow_journal_row_follows_the_list_not_the_window():
+    """The full row needs about 966px. Keyed to a 760px window it was clipped
+    from 761px up to about 1100px — export and trash past the right edge of a
+    list whose scrollbar is hidden. The list's own width decides instead,
+    which also covers a list narrowed by an open preview."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    groups = re.search(r"#journal-groups\s*\{([^}]*)\}", css).group(1)
+    assert "container: journals / inline-size" in groups
+    narrow = re.search(r"@container journals \(max-width: ([\d.]+)px\)", css)
+    assert narrow is not None
+    assert float(narrow.group(1)) >= 966
+    window = re.search(r"@media \(max-width: 760px\) \{(.*?)\n\}", css, re.DOTALL).group(1)
+    assert ".journal-row" not in window

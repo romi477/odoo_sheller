@@ -2199,6 +2199,9 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  /* The rows below choose their columns by this list's width, not the
+     window's: see the @container rule after them. */
+  container: journals / inline-size;
   scrollbar-width: none;
   font-size: 12px;
 }
@@ -2359,6 +2362,25 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
   color: inherit;
 }
 
+/* The full row needs about 966px, more than a 1024px window leaves this list,
+   and its scrollbar is hidden, so export and trash were simply cut off. Below
+   that a row drops the session id, duration and size — the id is still in the
+   title of the preview it opens — and the rest stays on one line under a
+   header that still lines up with it. Keyed to the list, so a list narrowed by
+   an open preview gets the same. */
+@container journals (max-width: 980px) {
+  .journal-row,
+  .journal-columns {
+    grid-template-columns: 16ch 11ch 12ch 9ch auto 1.4rem;
+    overflow-x: auto;
+  }
+
+  .journal-row > .journal-wide,
+  .journal-columns > .journal-wide {
+    display: none;
+  }
+}
+
 .journal-export-links a:hover,
 .journal-copy:hover:not(:disabled) {
   border-color: transparent;
@@ -2428,21 +2450,6 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
 
   .picker {
     flex-wrap: wrap;
-  }
-
-  /* Nine cells do not fit, and wrapping them stacked the export links one
-     word per line under the timestamp. A row drops the session id, duration
-     and size instead — the id is still in the title of the preview it opens —
-     so the rest stays on one line and the header still lines up with it. */
-  .journal-row,
-  .journal-columns {
-    grid-template-columns: 16ch 11ch 12ch 9ch auto 1.4rem;
-    overflow-x: auto;
-  }
-
-  .journal-row > .journal-wide,
-  .journal-columns > .journal-wide {
-    display: none;
   }
 }
 
