@@ -17,8 +17,10 @@ Both of them are local containers. An agent cannot open a session on a remote
 instance at all — see [Sessions it did not open](#sessions-it-did-not-open).
 
 - **Opens its own.** `os_open_session` creates a session with `owner: agent`
-  and `allow_commit: false`. It behaves exactly like a human-opened session
-  from the daemon's point of view — same registry, same journal, same rules.
+  and leaves `allow_commit` to the daemon: without the right, unless a human
+  switched that container on for agents (below). It behaves exactly like a
+  human-opened session from the daemon's point of view — same registry, same
+  journal, same rules.
 - **Is handed one.** A human opens a session in the browser, works in it,
   then presses **Grant access**. That copies `{"session_id", "write_key"}`
   for the agent to use with `os_attach_session`. The process, its namespace,
@@ -32,6 +34,21 @@ made with an agent's own key, a session opened for an agent with the right
 already in it, and a handover to "a human" made with an agent's key — all as
 `needs_a_human`. The key that comes back from such a handover would type as a
 human, and a local human commits without asking anyone.
+
+The one standing grant is a human's too. The container card has a switch,
+*agents may commit*; while it is on, every agent session on that local
+container opens with the right, and `os_session` shows
+`commit_grant: "container"` (a grant made in one session reads `"session"`).
+It never applies to a remote target. The human can turn it off at any moment,
+and the right goes with it mid-session — `commit_not_allowed` then means back
+to the ritual.
+
+A client that drives the HTTP API itself — a migration runner — can read
+`GET /api/agent-commit` with no key before it opens anything, and should open
+its writing side with `allow_commit` left out. `allow_commit: true` from an
+agent is accepted only where the switch is on; `allow_commit: false` is an
+opt-out the switch honours for that session's life, which is what a read-only
+side wants. `os_run_test`'s own session sends `false`: it never commits.
 
 ## Tools
 

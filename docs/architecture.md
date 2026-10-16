@@ -618,6 +618,28 @@ to be a human when it opens a session of its own: the browser opens sessions
 with no credential either, and the daemon cannot tell the two apart — the
 keys guard against accidents, not against a client set on lying.
 
+**A container switch is that grant, made ahead of time.** A human can turn on
+*agents may commit* for a local container (`PUT /api/agent-commit/{name}`,
+admin key; `DELETE` turns it off; `GET /api/agent-commit` lists them with no
+key, and `/api/containers` carries `agent_commit` on each). The store is
+`~/.odoo-sheller/agent-commit.json` (`agent_commit.py`), keyed by docker's
+name for the container; an open that names a container by id is resolved with
+`docker inspect`, and only when some container is switched on. The registry
+gives each local session a predicate for its container, and a remote session
+none — so `_starts_with_commit` is true for an agent on a switched-on
+container, at open and after a handover. `allow_commit` at open then means:
+absent, the switch decides; `true`, accepted from an agent only where the
+switch is on (elsewhere still `needs_a_human`); `false`, an opt-out the switch
+honours for the session's life. Flipping the switch sweeps the live local
+sessions on that container at once: on grants every agent session that has
+not opted out, a hand-revoked one included; off revokes from every agent
+session, whatever gave the right. Each change is a `policy_changed` with
+`reason: "container switch on" | "container switch off"`. Where a right came
+from is `commit_grant` — `"container"`, `"session"`, or `null` — in the
+session description, `session_open` and every `policy` event. A switch file
+that cannot be read counts as nothing switched on for opening sessions, and is
+reported by the switch routes as `agent_commit_unusable`.
+
 `GET /api/sessions/{id}` with a key reports what that key is worth there —
 `key_status`: `owner`, `former_owner` or `invalid` — and nothing about any
 other key. `os_attach_session` checks it once, so a wrong key is refused at

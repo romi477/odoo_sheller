@@ -48,6 +48,38 @@ with the right already granted, either. What stays open is a program that
 says it is a human when it opens a session of its own: the browser opens
 sessions with no credential, and nothing tells the two apart.
 
+**A standing grant on a local container is the one exception, and a human
+makes it.** The card of a local container has a switch, *agents may commit*.
+While it is on, every agent session on that container holds the right without
+a grant per session — any agent, any database in it — until a human turns it
+off. It exists for a tool a human drives that reopens its sessions over and
+over: a migration that upgrades a database reopens its target before every
+upgrade, and a click per session would be ceremony, not a decision. Turning it
+on or off takes the admin key, the same as writing a card, and no MCP tool does
+either; reading which containers are on needs no key, since it grants nothing.
+What it widens is exactly that: an agent there commits without asking first.
+What it never does:
+
+- it never applies to a remote target. It is matched by target kind before any
+  name: an odoo.sh build or an ssh card is never covered, whatever it is
+  called — a card's name is free text and can equal a container's;
+- it never lifts the production rule. Local targets have no stage today; if
+  one ever has, `commit_forbidden` still wins;
+- it never overrides `allow_commit: false` at open. That is a caller saying it
+  does not want the right — a migration's read-only source side — and the
+  switch honours it for the session's life: neither the open nor turning the
+  switch on later gives it the right. A handover starts afresh.
+
+Turning it off takes the right from every agent session on that container,
+whatever gave it — a grant made in that session by hand included — so that
+off leaves no agent able to commit there. A commit already past the check when
+it went off finishes: the daemon cannot recall a write in flight, the same as
+with a per-session revoke. The switch is keyed by the container's name, which
+outlives `docker compose down/up`; a different container started later under
+the same name inherits it. The journal of every session it changes records
+the change and its reason, and a session that opened with the right says it
+came from the container (`commit_grant`).
+
 **The admin key exists for the same reason, one level up.** It's needed to
 act on a session you never owned, or to delete a journal file — actions
 where "any local process can do this anyway" isn't quite true, because they
@@ -371,7 +403,7 @@ the user. Guards that can be absent without anyone noticing are not guards.
 | Whatever pastes a recipe into the form | Nothing: the form shows what the recipe means, and the grammar refuses what would act on this machine | Run a command locally through an ssh option, a quoted `;`, or `su`; weaken host key checking |
 | A web page in your browser, on any site | Nothing: a request from it names another `Host`, or carries another `Origin`, and is refused as `foreign_host` or `foreign_origin` — a socket at the handshake | Reach the API or the event streams, or make the daemon run a command through an `ssh` argument |
 | A browser tab that isn't a session's owner | Watch that session's output live | Type into it, commit, or grant itself commit rights |
-| An agent with a session of its own | Run code, rollback, read journals it can reach | Commit, without a human granting it first — a grant, or a handover to a human, made with its own key is refused as `needs_a_human`; act on a session it wasn't opened in or handed |
+| An agent with a session of its own | Run code, rollback, read journals it can reach; commit on a local container a human switched on for agents | Commit elsewhere without a human granting it first — a grant, or a handover to a human, made with its own key is refused as `needs_a_human`; turn the container switch on; act on a session it wasn't opened in or handed |
 | An agent handed a remote session | Run code, run tests, rollback, read the instance | Open a remote target itself; commit until granted; commit at all on `production`, whoever grants what |
 | Anyone holding the admin key | Act on any session or journal, including ones they don't own | Bypass Commit's requirement for a human confirmation on a human-owned session |
 | Anyone using the desktop terminal | Run anything `$SHELL -l` can run, as the user who launched the app | Nothing the same user couldn't run in Terminal.app |

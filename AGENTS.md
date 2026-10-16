@@ -259,6 +259,11 @@ grant `allow_commit` — but never type into a session they do not own. Handover
 keeps the process, namespace and open transaction; only the right to type moves.
 `odoo_sheller/mcp.py` is the agent's client, over stdio, with no logic of its own.
 
+A human may also switch a local container on for agents (*agents may commit*,
+admin key, `agent_commit.py`): every agent session there then holds the right
+until it is turned off; never on a remote target, and `allow_commit: false` at
+open opts a session out.
+
 Keys are an accident guard, not a security boundary: daemon and agent run as the
 same user. Details: `docs/agent-guide.md`, `docs/architecture.md`.
 

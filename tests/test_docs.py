@@ -364,3 +364,14 @@ def test_security_says_the_production_gate_is_on_the_commit_tool_not_on_code():
     text = " ".join((DOCS / "security.md").read_text(encoding="utf-8").split())
     assert "The gate is on the commit tool" in text
     assert "env.cr.commit()" in text
+
+
+def test_security_documents_the_container_switch():
+    text = read("security.md")
+    for says in ("agents may commit", "admin key", "never applies to a remote", "allow_commit: false"):
+        assert says in text, says
+
+
+def test_the_readme_api_table_lists_the_switch_routes():
+    text = README.read_text(encoding="utf-8")
+    assert "/api/agent-commit" in text

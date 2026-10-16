@@ -605,7 +605,9 @@ answers `409` until that command's result finally arrives. Use `interrupt`, or
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/health` | liveness and version; no session data, no admin key |
-| `GET` | `/api/containers` | running containers |
+| `GET` | `/api/containers` | running containers, each with `agent_commit`: whether a human switched it on for agents |
+| `GET` | `/api/agent-commit` | the local containers switched on for agents, `[{"container", "since"}]`. No key |
+| `PUT` / `DELETE` | `/api/agent-commit/{container}` | switch a container on / off for agents; answers with the sessions whose right changed. Admin key |
 | `POST` | `/api/probe` | probe one container |
 | `GET` | `/api/targets` | the cards — remote instances a human wrote down — odoo.sh then ssh, each newest first. No key: a card's text is not what stands between a local caller and the server — opening it is what is guarded |
 | `POST` | `/api/targets` | write a card down. `{"kind": "odoosh", "build", "host"}`, or `{"kind": "ssh", "name", "access", "launch", "stage"?}` — a server someone reaches by ssh: Access is how to arrive (`ssh -i KEY user@host sudo -n -u odoo -H`), Launch is what to run there (`/abs/python /abs/odoo-bin shell -c /abs/odoo.conf --no-http -d acme`; a database is named with `-d` here, and a request that still sends a `database` is a `422`), `stage` is `production` (the default; only a human commits, once, after typing the name) or `staging` (commit off until granted). A recipe the grammar refuses is `422` with `field`. Admin key |

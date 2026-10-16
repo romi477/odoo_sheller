@@ -7,6 +7,38 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+#### Agents may commit on a container a human switched on
+
+Since 1.8.3 an agent's session gets the right to commit only from a human, one
+session at a time — and an agent's open with `allow_commit: true` is refused.
+A tool a human drives that reopens its sessions all the time, such as a
+migration that reopens its target before every upgrade, had no way through.
+A local container's card now has a switch, **agents may commit**, tagged
+**GLOBAL**: while it is on, every agent session on that container holds the
+right, on any database in it, until a human turns it off. It survives restarts,
+is keyed by the container's name, and never applies to an odoo.sh build or an
+ssh card, whatever it is called. An **ADVANCED · GLOBAL** note on the card says
+so while it is on.
+
+- `GET /api/agent-commit` lists the switched-on containers with no key, so a
+  client learns it was allowed before it opens a session; `PUT` and `DELETE
+  /api/agent-commit/{container}` turn one on and off with the admin key and
+  answer with the sessions whose right changed. `/api/containers` carries
+  `agent_commit` on each container.
+- Flipping the switch reaches open sessions at once: on grants every agent
+  session on the container, off takes the right from every one, whatever gave
+  it. A commit already past the check finishes.
+- `allow_commit` at open, from an agent: left out, the switch decides; `true`,
+  accepted only where the switch is on; `false`, an opt-out the switch honours
+  for the session's life — a read-only side stays read-only.
+- `commit_grant` — `"container"` or `"session"` — says where a right came from,
+  in the session description, `os_session`, the journal and policy events.
+- `os_open_session` no longer sends `allow_commit: false`, so Claude gets the
+  right where a human switched it on; `os_run_test`'s own session still opts
+  out. `os_help('commit')` explains the switch.
+
 ## [1.10.0] — 2026-10-15
 
 An agent gets the rules of the Odoo major it works on with its session — what
