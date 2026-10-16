@@ -152,6 +152,26 @@ def _ssh_card(entry: dict) -> dict:
     }
 
 
+def write_json_atomically(path: Path, data: dict, prefix: str) -> None:
+    """Replace `path` with `data`, whole or not at all, never readable by others."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # mkstemp creates the file 0600, which is the mode it keeps.
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=prefix, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+            handle.write("\n")
+            # Data to disk before the name is swapped: a rename that gets
+            # there first, then a power cut, leaves an empty file.
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary)
+        raise
+
+
 class TargetStore:
     def __init__(self, path: Path = TARGETS_PATH, is_file: Callable[[str], bool] = os.path.isfile):
         self.path = Path(path)
@@ -218,24 +238,7 @@ class TargetStore:
         return data
 
     def _write(self, data: dict) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        # mkstemp creates the file 0600, which is the mode it keeps.
-        fd, temporary = tempfile.mkstemp(
-            dir=self.path.parent, prefix=".targets-", suffix=".tmp"
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(data, handle, indent=2)
-                handle.write("\n")
-                # Data to disk before the name is swapped: a rename that gets
-                # there first, then a power cut, leaves an empty `targets.json`.
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, self.path)
-        except BaseException:
-            with contextlib.suppress(FileNotFoundError):
-                os.unlink(temporary)
-            raise
+        write_json_atomically(self.path, data, prefix=".targets-")
 
     def _build_of(self, target_id: str) -> str:
         if not target_id.startswith(ODOOSH_PREFIX):
