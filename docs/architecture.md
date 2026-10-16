@@ -624,7 +624,8 @@ admin key; `DELETE` turns it off; `GET /api/agent-commit` lists them with no
 key, and `/api/containers` carries `agent_commit` on each). The store is
 `~/.odoo-sheller/agent-commit.json` (`agent_commit.py`), keyed by docker's
 name for the container; an open that names a container by id is resolved with
-`docker inspect`, and only when some container is switched on. The registry
+`docker inspect` at every local open, so a switch turned on later still finds
+the session. The registry
 gives each local session a predicate for its container, and a remote session
 none — so `_starts_with_commit` is true for an agent on a switched-on
 container, at open and after a handover. `allow_commit` at open then means:

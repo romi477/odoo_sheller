@@ -2122,6 +2122,20 @@ def test_an_agent_may_open_with_commit_where_the_switch_is_on(client):
               "allow_commit": True},
     )
     assert response.status_code == 200
+    # Forwarded as "let the switch decide", never as a grant: the session asks
+    # the switch when it is built, so one turned off while the probe and the
+    # spawn ran is not outlived by a right taken at the door.
+    assert client.registry.open_kwargs["allow_commit"] is None
+
+
+def test_the_admin_key_still_opens_an_agent_with_commit_granted(client):
+    response = client.post(
+        "/api/sessions",
+        json={"container": "mig18", "database": "db", "owner": {"kind": "agent"},
+              "allow_commit": True},
+        headers={"X-OS-Admin-Key": ADMIN_KEY},
+    )
+    assert response.status_code == 200
     assert client.registry.open_kwargs["allow_commit"] is True
 
 

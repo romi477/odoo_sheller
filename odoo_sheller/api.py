@@ -858,41 +858,48 @@ def create_app(registry: Registry | None = None) -> FastAPI:
                     ),
                 },
             )
+        allow_commit = body.allow_commit
         if (
             body.allow_commit
             and body.owner is not None
             and body.owner.kind == "agent"
             and not is_admin(x_os_admin_key)
+        ):
             # A container a human switched on for agents: that switch is the
             # grant, made ahead of time, and the session would hold the right
             # anyway. Never a card — a remote target is not a container, and
             # its name is free text that can equal one.
-            and not (
-                body.target_id is None
-                and await app.state.registry.agent_commit_allows(body.container)
-            )
-        ):
-            # The grant ritual, skipped at the door: an agent's session that
-            # opens with the right already in it was never granted anything.
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "needs_a_human",
-                    "act": "open an agent's session with commit already granted",
-                    "recovery": (
-                        "open it without allow_commit; a human grants the right "
-                        "later, from the UI — or turns on 'agents may commit' "
-                        "for this container, and its sessions open with it"
-                    ),
-                },
-            )
+            if body.target_id is None and await app.state.registry.agent_commit_allows(
+                body.container
+            ):
+                # Passed on as "let the switch decide", not as a grant. The
+                # session asks the switch when it is built, with no wait before
+                # the registry holds it; a `True` carried from here would
+                # outlive a switch turned off while the probe and the spawn ran.
+                allow_commit = None
+            else:
+                # The grant ritual, skipped at the door: an agent's session
+                # that opens with the right already in it was never granted
+                # anything.
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "needs_a_human",
+                        "act": "open an agent's session with commit already granted",
+                        "recovery": (
+                            "open it without allow_commit; a human grants the right "
+                            "later, from the UI — or turns on 'agents may commit' "
+                            "for this container, and its sessions open with it"
+                        ),
+                    },
+                )
         try:
             session = await app.state.registry.open(
                 container=body.container,
                 database=body.database,
                 odoo_bin=body.odoo_bin,
                 owner=body.owner.model_dump() if body.owner else None,
-                allow_commit=body.allow_commit,
+                allow_commit=allow_commit,
                 replace=body.replace,
                 client_token=body.client_token,
                 autoclose=body.autoclose,

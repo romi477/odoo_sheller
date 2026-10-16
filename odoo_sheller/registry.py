@@ -413,9 +413,10 @@ class Registry:
             return False
 
     async def _docker_name(self, container: str | None) -> str | None:
-        """The name a switch would be keyed by. Asks docker only when there is
-        a switch to match: an open should not pay for a lookup of nothing."""
-        if not container or not self._any_switched_on():
+        """The name a switch is keyed by, resolved at open whether or not any
+        switch is on yet: one turned on later is matched against it, and an
+        id kept instead would leave this session out of that sweep for good."""
+        if not container:
 
             return container
 
@@ -439,8 +440,6 @@ class Registry:
         """
         if on:
             self.agent_commit.turn_on(container)
-        else:
-            self.agent_commit.turn_off(container)
         changed = []
         for session in list(self.sessions.values()):
             if (
@@ -450,6 +449,11 @@ class Registry:
                 and session.apply_container_switch(on)
             ):
                 changed.append(session.id)
+        if not on:
+            # After the sweep: off is how a human takes the right back, and a
+            # file that cannot be written must not leave agents holding it
+            # while the error goes back to them.
+            self.agent_commit.turn_off(container)
 
         return changed
 
