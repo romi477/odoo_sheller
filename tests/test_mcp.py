@@ -2212,3 +2212,24 @@ def test_the_tests_guidance_says_how_to_run_hoot_headless():
     assert "web.assets_unit_tests" in tests
     assert "failed_tests" in tests
     assert "websocket-client module is not installed" in tests
+
+
+# --- the container switch -----------------------------------------------------
+
+
+async def test_open_session_leaves_the_commit_right_to_the_daemon(wired):
+    """Sending false would be an opt-out the switch honours, and Claude would
+    never get the right a human gave every agent on that container."""
+    await server.os_open_session(container="c", database="db")
+    assert wired.open_kwargs["allow_commit"] is None
+
+
+async def test_a_test_session_still_opts_out_of_commit(wired):
+    await server.os_run_test("sale.TestSaleOrder", container="c", database="db")
+    assert wired.open_kwargs["allow_commit"] is False
+
+
+def test_commit_help_explains_the_container_switch():
+    text = server.HELP["commit"]
+    for says in ("agents may commit", "commit_grant", "container", "remote"):
+        assert says in text, says

@@ -205,7 +205,7 @@ Writing to the database is a separate, granted right, and it gates os_commit
 only — running code is never gated by it. os_exec always works once you own a
 ready session; the only question is whether persisting it is allowed yet.
 
-Your sessions open with the right off, and os_commit answers
+Your sessions usually open with the right off, and os_commit answers
 `commit_not_allowed` until it is granted. The first time that happens:
 
 1. Stop. Do not retry os_commit — spinning on it will not see the grant.
@@ -220,6 +220,13 @@ Once granted, the right stays granted — call os_commit directly for any later
 commit in this same session, with no need to repeat this ritual first. It
 lasts until the human revokes it, and does not survive a handover: check
 again after one, the same way as the first time.
+
+A human may also turn on "agents may commit" for a local container, in the
+UI. Every agent session on that container then opens with the right, and
+os_session shows `commit_grant: "container"` — the human's standing grant —
+where a grant made in that one session reads `"session"`. They can turn it off
+at any moment, and the right goes with it mid-session: on `commit_not_allowed`
+go back to the steps above. It never applies to a remote target.
 
 Uncommitted work travels with a session when ownership moves, and this is not
 left to your memory: os_session reports `inherited_pending`, and the first
@@ -903,7 +910,8 @@ async def os_open_session(
             "odoo_bin": odoo_bin,
             "replace": replace,
             "owner": {"kind": "agent", "label": AGENT_LABEL},
-            "allow_commit": False,
+            # Left out, not false: false is an opt-out the daemon honours, and
+            # would keep the right from a container a human switched on.
         },
     )
     if opened.get("error"):
