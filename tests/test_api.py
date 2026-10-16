@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from odoo_sheller import journal
+from odoo_sheller.agent_commit import AgentCommitStore
 from odoo_sheller.api import create_app
 from odoo_sheller.registry import Registry
 from odoo_sheller.session import (
@@ -150,6 +151,8 @@ class FakeRegistry:
         self.admin_key = ADMIN_KEY
         self.past_target = None
         self.watchers = []
+        # Whether the container switch is on for whatever an open names.
+        self.allows = False
 
     def watch(self, queue):
         self.watchers.append(queue)
@@ -165,6 +168,18 @@ class FakeRegistry:
     def journal_file_for(self, session_id):
 
         return None
+
+    async def agent_commit_allows(self, container):
+
+        return self.allows
+
+    def set_agent_commit(self, container, on):
+        if on:
+            self.agent_commit.turn_on(container)
+        else:
+            self.agent_commit.turn_off(container)
+
+        return ["s1"] if on else []
 
     async def open(self, **kwargs):
         # Mirrors the real signature loosely on purpose: the point is to record
@@ -197,6 +212,7 @@ class FakeRegistry:
 def client(tmp_path):
     registry = FakeRegistry()
     registry.targets = TargetStore(tmp_path / "targets.json", is_file=lambda path: True)
+    registry.agent_commit = AgentCommitStore(tmp_path / "agent-commit.json")
     app = create_app(registry=registry)
     with TestClient(app, headers={"X-OS-Session-Key": OWNER_KEY}, base_url=LOCAL) as test_client:
         test_client.registry = registry
@@ -1930,6 +1946,9 @@ def test_an_agent_session_cannot_open_with_commit_already_granted(client):
     )
     assert response.status_code == 403
     assert response.json()["detail"]["error"] == "needs_a_human"
+    assert "agents may commit" in response.json()["detail"]["recovery"], (
+        "the refusal names the switch that would let it through"
+    )
     assert not hasattr(client.registry, "open_kwargs"), "nothing may be opened"
 
     allowed = client.post(
@@ -2016,3 +2035,109 @@ def test_a_closed_session_is_found_without_reading_the_others(tmp_path, monkeypa
         assert client.get("/api/sessions/def456/history").status_code == 200
         assert client.get("/api/journals/def456", params={"fmt": "markdown"}).status_code == 200
     assert opened and all("def456" in name for name in opened), opened
+
+
+# --- the container switch: agents may commit on this container ----------------
+
+
+def test_reading_the_switches_needs_no_key(client):
+    client.registry.agent_commit.turn_on("mig18")
+    response = client.get("/api/agent-commit", headers={"X-OS-Session-Key": ""})
+    assert response.status_code == 200
+    assert [e["container"] for e in response.json()] == ["mig18"]
+
+
+def test_turning_a_switch_on_needs_the_admin_key(client):
+    response = client.put("/api/agent-commit/mig18")
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "admin_only"
+    assert client.registry.agent_commit.is_on("mig18") is False
+
+
+def test_turning_a_switch_off_needs_the_admin_key(client):
+    client.registry.agent_commit.turn_on("mig18")
+    response = client.delete("/api/agent-commit/mig18")
+    assert response.status_code == 403
+    assert client.registry.agent_commit.is_on("mig18") is True
+
+
+def test_turning_on_reports_the_sessions_it_changed(client):
+    response = client.put("/api/agent-commit/mig18", headers={"X-OS-Admin-Key": ADMIN_KEY})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["container"] == "mig18" and body["on"] is True
+    assert body["since"] and body["sessions"] == ["s1"]
+
+
+def test_turning_off_something_never_on_is_fine(client):
+    response = client.delete("/api/agent-commit/mig18", headers={"X-OS-Admin-Key": ADMIN_KEY})
+    assert response.status_code == 200
+    assert response.json() == {"container": "mig18", "on": False, "sessions": []}
+
+
+def test_a_name_docker_would_not_give_is_refused(client):
+    response = client.put("/api/agent-commit/-rf", headers={"X-OS-Admin-Key": ADMIN_KEY})
+    assert response.status_code == 422
+
+
+def test_an_unusable_switch_file_is_reported(client, tmp_path):
+    (tmp_path / "agent-commit.json").write_text("{nope")
+    for response in (
+        client.get("/api/agent-commit"),
+        client.put("/api/agent-commit/mig18", headers={"X-OS-Admin-Key": ADMIN_KEY}),
+    ):
+        assert response.status_code == 500
+        assert response.json()["detail"]["error"] == "agent_commit_unusable"
+    assert (tmp_path / "agent-commit.json").read_text() == "{nope"
+
+
+def _containers(monkeypatch, *names):
+    async def fake_list():
+
+        return [{"id": n, "name": n, "image": "odoo", "status": "Up"} for n in names]
+
+    monkeypatch.setattr("odoo_sheller.api.discovery.list_containers", fake_list)
+
+
+def test_the_container_listing_carries_the_switch(client, monkeypatch):
+    _containers(monkeypatch, "mig18", "integra19")
+    client.registry.agent_commit.turn_on("mig18")
+    listed = {c["name"]: c["agent_commit"] for c in client.get("/api/containers").json()}
+    assert listed == {"mig18": True, "integra19": False}
+
+
+def test_an_unusable_switch_file_does_not_hide_the_containers(client, monkeypatch, tmp_path):
+    _containers(monkeypatch, "mig18")
+    (tmp_path / "agent-commit.json").write_text("{nope")
+    response = client.get("/api/containers")
+    assert response.status_code == 200
+    assert response.json()[0]["agent_commit"] is False
+
+
+def test_an_agent_may_open_with_commit_where_the_switch_is_on(client):
+    client.registry.allows = True
+    response = client.post(
+        "/api/sessions",
+        json={"container": "mig18", "database": "db", "owner": {"kind": "agent"},
+              "allow_commit": True},
+    )
+    assert response.status_code == 200
+    assert client.registry.open_kwargs["allow_commit"] is True
+
+
+def test_the_switch_never_opens_a_card_with_commit(client):
+    client.registry.allows = True
+    response = client.post(
+        "/api/sessions",
+        json={"target_id": "ssh-1", "owner": {"kind": "agent"}, "allow_commit": True},
+        headers=PAGE,
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "needs_a_human"
+    assert not hasattr(client.registry, "open_kwargs")
+
+
+def test_an_open_without_allow_commit_forwards_none(client):
+    client.post("/api/sessions", json={"container": "mig18", "database": "db",
+                                       "owner": {"kind": "agent"}})
+    assert client.registry.open_kwargs["allow_commit"] is None

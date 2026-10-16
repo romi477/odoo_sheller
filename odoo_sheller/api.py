@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from odoo_sheller import discovery, journal
+from odoo_sheller.agent_commit import AgentCommitError
 from odoo_sheller.guard import LoopbackOnly
 from odoo_sheller.names import check_ssh_name
 from odoo_sheller.paths import web_dir
@@ -543,10 +544,69 @@ def create_app(registry: Registry | None = None) -> FastAPI:
     @app.get("/api/containers")
     async def containers():
         try:
-
-            return await discovery.list_containers()
+            listed = await discovery.list_containers()
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from None
+        # Whether a human switched each one on for agents. A switch file that
+        # cannot be read must not hide the containers; it reads as none here,
+        # and /api/agent-commit is where it is reported.
+        try:
+            on = {entry["container"] for entry in app.state.registry.agent_commit.entries()}
+        except AgentCommitError:
+            on = set()
+
+        return [{**container, "agent_commit": container.get("name") in on} for container in listed]
+
+    def switch_unusable(exc: AgentCommitError) -> HTTPException:
+
+        return HTTPException(
+            status_code=500,
+            detail={
+                "error": "agent_commit_unusable",
+                "message": str(exc),
+                "recovery": "fix ~/.odoo-sheller/agent-commit.json by hand, or remove it",
+            },
+        )
+
+    @app.get("/api/agent-commit")
+    async def agent_commit_list():
+        """The local containers a human opened to every agent's commit.
+
+        No key to read: a client — a migration runner — has to learn whether
+        it was allowed before it opens a session, and a list of names grants
+        nothing. Turning a switch on or off is a human's act, behind the key.
+        """
+        try:
+
+            return app.state.registry.agent_commit.entries()
+        except AgentCommitError as exc:
+            raise switch_unusable(exc) from None
+
+    @app.put("/api/agent-commit/{container}")
+    async def agent_commit_on(container: str, x_os_admin_key: str | None = Header(None)):
+        require_admin(x_os_admin_key)
+        registry = app.state.registry
+        try:
+            changed = registry.set_agent_commit(container, True)
+            since = next(
+                e["since"] for e in registry.agent_commit.entries() if e["container"] == container
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        except AgentCommitError as exc:
+            raise switch_unusable(exc) from None
+
+        return {"container": container, "on": True, "since": since, "sessions": changed}
+
+    @app.delete("/api/agent-commit/{container}")
+    async def agent_commit_off(container: str, x_os_admin_key: str | None = Header(None)):
+        require_admin(x_os_admin_key)
+        try:
+            changed = app.state.registry.set_agent_commit(container, False)
+        except AgentCommitError as exc:
+            raise switch_unusable(exc) from None
+
+        return {"container": container, "on": False, "sessions": changed}
 
     @app.post("/api/probe")
     async def probe(body: ProbeBody):
@@ -803,6 +863,14 @@ def create_app(registry: Registry | None = None) -> FastAPI:
             and body.owner is not None
             and body.owner.kind == "agent"
             and not is_admin(x_os_admin_key)
+            # A container a human switched on for agents: that switch is the
+            # grant, made ahead of time, and the session would hold the right
+            # anyway. Never a card — a remote target is not a container, and
+            # its name is free text that can equal one.
+            and not (
+                body.target_id is None
+                and await app.state.registry.agent_commit_allows(body.container)
+            )
         ):
             # The grant ritual, skipped at the door: an agent's session that
             # opens with the right already in it was never granted anything.
@@ -812,8 +880,9 @@ def create_app(registry: Registry | None = None) -> FastAPI:
                     "error": "needs_a_human",
                     "act": "open an agent's session with commit already granted",
                     "recovery": (
-                        "open it with allow_commit false; a human grants the "
-                        "right later, from the UI"
+                        "open it without allow_commit; a human grants the right "
+                        "later, from the UI — or turns on 'agents may commit' "
+                        "for this container, and its sessions open with it"
                     ),
                 },
             )
