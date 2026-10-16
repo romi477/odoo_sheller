@@ -594,7 +594,6 @@ button.region-toggle:active:not(:disabled) {
 .agent-commit-warning {
   margin: 8px 0 0;
   padding: 6px 10px;
-  max-width: 72ch;
   border-left: 2px solid var(--amber);
   border-radius: 0 4px 4px 0;
   background: color-mix(in oklch, var(--amber-dark) 45%, var(--panel));

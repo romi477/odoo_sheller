@@ -3806,3 +3806,12 @@ def test_the_switch_is_amber_when_on():
     block = re.search(r'\.agent-commit\[aria-checked="true"\][^{]*\{.*?\}', css, re.DOTALL)
     assert block is not None
     assert "var(--amber)" in block.group(0)
+
+
+def test_the_agent_commit_warning_spans_the_card():
+    """Capped at 72ch it sat in the left half of a wide card and wrapped onto
+    three lines beside empty space; it follows the card's width instead."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    block = re.search(r"\.agent-commit-warning\s*\{([^}]*)\}", css)
+    assert block is not None
+    assert "max-width" not in block.group(1)
