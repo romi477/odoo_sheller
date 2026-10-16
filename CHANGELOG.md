@@ -7,6 +7,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.11.0] — 2026-10-16
+
+A human can switch a local container on for agents: while *agents may commit*
+is on, every agent session on that container may commit, until it is turned
+off — for a tool a human drives that reopens its sessions over and over, such
+as a migration. It never reaches an odoo.sh build or an ssh card, and an
+agent's open with `allow_commit: false` stays without the right. Nothing is
+removed from the API or the MCP surface; `os_open_session` stops sending
+`allow_commit: false`, which the daemon now reads as an opt-out.
+
 ### Added
 
 #### Agents may commit on a container a human switched on
@@ -1716,6 +1726,7 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
+[1.11.0]: https://github.com/romi477/odoo_sheller/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/romi477/odoo_sheller/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/romi477/odoo_sheller/compare/v1.8.3...v1.9.0
 [1.8.3]: https://github.com/romi477/odoo_sheller/compare/v1.8.2...v1.8.3
