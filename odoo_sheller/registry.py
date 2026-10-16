@@ -10,7 +10,14 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from odoo_sheller.discovery import probe, probe_odoosh, probe_ssh, version_refusal
+from odoo_sheller.agent_commit import AgentCommitError, AgentCommitStore
+from odoo_sheller.discovery import (
+    container_name,
+    probe,
+    probe_odoosh,
+    probe_ssh,
+    version_refusal,
+)
 from odoo_sheller.journal import (
     JOURNAL_ROOT,
     Journal,
@@ -18,7 +25,7 @@ from odoo_sheller.journal import (
     journal_path,
     target_from_records,
 )
-from odoo_sheller.session import Session, SessionDead
+from odoo_sheller.session import Session, SessionDead, SessionState
 from odoo_sheller.targets import TargetStore, odoosh_stage
 from odoo_sheller.transport import (
     DOCKER,
@@ -123,10 +130,19 @@ class Registry:
         journal_root=JOURNAL_ROOT,
         admin_key: str | None = None,
         targets: TargetStore | None = None,
+        agent_commit: AgentCommitStore | None = None,
     ):
         # The cards a human wrote down. Only ever read from here; writing them
         # is the API's, behind the admin key.
         self.targets = targets if targets is not None else TargetStore()
+        # The local containers a human opened to every agent's commit. Beside
+        # the journals rather than at a fixed path, so a registry pointed at a
+        # scratch directory never reads the real one.
+        self.agent_commit = (
+            agent_commit
+            if agent_commit is not None
+            else AgentCommitStore(Path(journal_root).parent / "agent-commit.json")
+        )
         self.sessions: dict[str, Session] = {}
         self.subscribers: dict[str, list[asyncio.Queue]] = {}
         # Watchers of the registry itself. Per-session sockets cannot announce a
@@ -297,6 +313,11 @@ class Registry:
             target = await self._remote_target(target_id)
         else:
             target = await self._docker_target(container, database, odoo_bin)
+        switch: dict = {}
+        docker_name = None
+        if target.kind == DOCKER:
+            docker_name = await self._docker_name(target.container)
+            switch["container_switch"] = lambda: self._switched_on(docker_name)
         session_id = new_session_id()
         try:
             process = await spawn(build_command(target, bootstrap_source()))
@@ -332,7 +353,9 @@ class Registry:
                 allow_commit=allow_commit,
                 client_token=client_token,
                 autoclose=autoclose,
+                **switch,
             )
+            session.container_name = docker_name
             self.sessions[session_id] = session
             # Watchers need the id before hello: startup stderr is already
             # flowing, and POST /api/sessions still blocks on the registry.
@@ -369,6 +392,66 @@ class Registry:
         self._broadcast({"kind": "session_opened", "session": session.describe()})
 
         return session
+
+    def _any_switched_on(self) -> bool:
+        """Whether any container is switched on. A file that cannot be read
+        counts as none: it must not stop a session opening, and reading it as
+        nothing switched on is the safe way to be wrong. The API reports it."""
+        try:
+
+            return bool(self.agent_commit.entries())
+        except AgentCommitError:
+
+            return False
+
+    def _switched_on(self, name: str | None) -> bool:
+        try:
+
+            return self.agent_commit.is_on(name)
+        except AgentCommitError:
+
+            return False
+
+    async def _docker_name(self, container: str | None) -> str | None:
+        """The name a switch would be keyed by. Asks docker only when there is
+        a switch to match: an open should not pay for a lookup of nothing."""
+        if not container or not self._any_switched_on():
+
+            return container
+
+        return await container_name(container)
+
+    async def agent_commit_allows(self, container: str | None) -> bool:
+        """Whether a human switched this local container on for agents."""
+        if not container or not self._any_switched_on():
+
+            return False
+
+        return self._switched_on(await container_name(container))
+
+    def set_agent_commit(self, container: str, on: bool) -> list[str]:
+        """Switch a container on or off, and every open session on it with it.
+
+        Matched by target kind first: only a local Docker session is ever
+        swept, whatever a remote card happens to be called. A session still
+        starting is swept too — it is already the container's. Returns the
+        ids whose right changed.
+        """
+        if on:
+            self.agent_commit.turn_on(container)
+        else:
+            self.agent_commit.turn_off(container)
+        changed = []
+        for session in list(self.sessions.values()):
+            if (
+                session.target.kind == DOCKER
+                and session.container_name == container
+                and session.state not in (SessionState.CLOSED, SessionState.DEAD)
+                and session.apply_container_switch(on)
+            ):
+                changed.append(session.id)
+
+        return changed
 
     def get(self, session_id: str) -> Session:
 

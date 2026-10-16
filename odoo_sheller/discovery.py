@@ -483,6 +483,23 @@ def _gate_on_version(payload: dict) -> dict:
     return payload
 
 
+async def container_name(container: str, runner=None) -> str:
+    """Docker's name for a container a caller may have named by id.
+
+    A switch that lets agents commit is keyed by name (`agent_commit.py`),
+    and `docker exec` takes an id or an id prefix just as well. Anything that
+    goes wrong answers with what was given: a switch then simply does not
+    match, which is the safe way to be wrong.
+    """
+    runner = runner or _docker
+    code, out, _err = await runner(
+        [docker_bin(), "inspect", "--format", "{{.Name}}", container], None
+    )
+    name = out.strip().lstrip("/") if code == 0 else ""
+
+    return name or container
+
+
 async def probe(container: str, runner=None) -> dict:
     runner = runner or _docker
     argv = [docker_bin(), "exec", "-i", container, "python3", "-"]

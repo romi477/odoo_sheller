@@ -39,6 +39,17 @@ async def test_list_tests_uses_the_docker_override(monkeypatch):
     assert runner.calls[0][0][0] == "/custom/bin/docker"
 
 
+async def test_container_name_reads_the_name_docker_gives():
+    runner = fake_runner([(0, "/mig18\n", "")])
+    assert await discovery.container_name("3f2a", runner=runner) == "mig18"
+    assert runner.calls[0][0][1:] == ["inspect", "--format", "{{.Name}}", "3f2a"]
+
+
+async def test_container_name_falls_back_to_what_it_was_given():
+    runner = fake_runner([(1, "", "Error: No such object: 3f2a")])
+    assert await discovery.container_name("3f2a", runner=runner) == "3f2a"
+
+
 async def test_list_containers_parses_docker_ps_json_lines():
     payload = (
         '{"Names":"integra19","Image":"odoo:19","Status":"Up 2 hours","ID":"abc"}\n'

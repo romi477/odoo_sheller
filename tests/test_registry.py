@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from odoo_sheller.agent_commit import AgentCommitStore
 from odoo_sheller.journal import Journal, journal_path
 from odoo_sheller.registry import Registry, load_admin_key, new_session_id
 from odoo_sheller.session import SessionDead, SessionState
@@ -956,3 +957,134 @@ async def test_a_remote_session_remembers_the_card_it_was_opened_from(tmp_path, 
     build = registry.targets.add_odoosh("7", "build-7.dev.odoo.com")
     await registry.open(target_id=build["id"])
     assert captured["target"].card_id == build["id"] == "odoosh-7"
+
+
+# --- the container switch -----------------------------------------------------
+
+
+def _switch_registry(tmp_path, *on):
+    store = AgentCommitStore(tmp_path / "agent-commit.json")
+    for name in on:
+        store.turn_on(name)
+
+    return Registry(journal_root=tmp_path, agent_commit=store), store
+
+
+def _resolve(monkeypatch, names):
+    async def fake_name(container, runner=None):
+
+        return names.get(container, container)
+
+    monkeypatch.setattr("odoo_sheller.registry.container_name", fake_name)
+
+
+@pytest.mark.asyncio
+async def test_a_docker_open_is_given_the_switch_for_its_resolved_name(tmp_path, monkeypatch):
+    """An agent may name a container by id; the switch is keyed by name."""
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _resolve(monkeypatch, {"3f2a": "mig18"})
+    registry, _store = _switch_registry(tmp_path, "mig18")
+
+    session = await registry.open(container="3f2a", database="db", odoo_bin="/odoo-bin")
+
+    assert session.kwargs["container_switch"]() is True
+    assert session.container_name == "mig18"
+
+
+@pytest.mark.asyncio
+async def test_with_no_switch_on_no_name_is_looked_up(tmp_path, monkeypatch):
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+
+    async def must_not_run(container, runner=None):
+        raise AssertionError("docker inspect for nothing")
+
+    monkeypatch.setattr("odoo_sheller.registry.container_name", must_not_run)
+    registry, _store = _switch_registry(tmp_path)
+
+    session = await registry.open(container="mig18", database="db", odoo_bin="/odoo-bin")
+
+    assert session.container_name == "mig18"
+    assert session.kwargs["container_switch"]() is False
+
+
+@pytest.mark.asyncio
+async def test_a_remote_open_is_given_no_switch(tmp_path, monkeypatch):
+    """A server card's name is free text and can equal a container's."""
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _ssh_probe(monkeypatch, captured)
+    store = TargetStore(tmp_path / "t.json", is_file=lambda path: True)
+    switches = AgentCommitStore(tmp_path / "agent-commit.json")
+    switches.turn_on("mig18")
+    registry = Registry(journal_root=tmp_path, targets=store, agent_commit=switches)
+    card = store.add_ssh("mig18", access=SSH_ACCESS, launch=SSH_LAUNCH, stage="staging")
+
+    session = await registry.open(target_id=card["id"])
+
+    assert "container_switch" not in session.kwargs
+    assert getattr(session, "container_name", None) is None
+
+
+class _Swept:
+    def __init__(self, sid, target, name, state=SessionState.READY):
+        self.id = sid
+        self.target = target
+        self.container_name = name
+        self.state = state
+        self.applied = []
+
+    def apply_container_switch(self, on):
+        self.applied.append(on)
+
+        return True
+
+
+def test_set_agent_commit_sweeps_only_docker_sessions_on_that_container(tmp_path):
+    registry, store = _switch_registry(tmp_path)
+    docker = Target(container="mig18", database="db", odoo_bin="/odoo-bin")
+    sessions = {
+        "a": _Swept("a", docker, "mig18"),
+        "b": _Swept("b", docker, "mig18", SessionState.STARTING),
+        "c": _Swept("c", Target(container="other", database="db"), "other"),
+        "d": _Swept("d", Target(kind="ssh", label="mig18", database="db"), None),
+        "e": _Swept("e", docker, "mig18", SessionState.CLOSED),
+    }
+    registry.sessions.update(sessions)
+
+    assert registry.set_agent_commit("mig18", True) == ["a", "b"]
+    assert store.is_on("mig18") is True
+    assert sessions["c"].applied == [] and sessions["d"].applied == []
+    assert sessions["e"].applied == []
+
+    assert registry.set_agent_commit("mig18", False) == ["a", "b"]
+    assert store.is_on("mig18") is False
+    assert sessions["a"].applied == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_agent_commit_allows_resolves_and_is_false_on_an_empty_store(tmp_path, monkeypatch):
+    _resolve(monkeypatch, {"3f2a": "mig18"})
+    registry, store = _switch_registry(tmp_path)
+    assert await registry.agent_commit_allows("3f2a") is False
+    store.turn_on("mig18")
+    assert await registry.agent_commit_allows("3f2a") is True
+    assert await registry.agent_commit_allows(None) is False
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_switch_file_never_stops_a_session_opening(tmp_path, monkeypatch):
+    """It reads as nothing switched on: the safe way to be wrong."""
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _resolve(monkeypatch, {})
+    (tmp_path / "agent-commit.json").write_text("{nope")
+    registry = Registry(
+        journal_root=tmp_path, agent_commit=AgentCommitStore(tmp_path / "agent-commit.json")
+    )
+
+    session = await registry.open(container="mig18", database="db", odoo_bin="/odoo-bin")
+
+    assert session.kwargs["container_switch"]() is False
+    assert await registry.agent_commit_allows("mig18") is False
