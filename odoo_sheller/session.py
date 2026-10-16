@@ -6,6 +6,7 @@ import re
 import secrets
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import replace
 from enum import Enum
 
@@ -22,7 +23,7 @@ from odoo_sheller.protocol import (
     spec_of,
 )
 from odoo_sheller.rules import major_of
-from odoo_sheller.transport import PRODUCTION, Target, send_signal
+from odoo_sheller.transport import DOCKER, PRODUCTION, Target, send_signal
 
 
 class SessionState(str, Enum):
@@ -287,6 +288,7 @@ class Session:
         allow_commit: bool | None = None,
         client_token: str | None = None,
         autoclose: bool = False,
+        container_switch: Callable[[], bool] | None = None,
     ):
         self.id = session_id
         self.target = target
@@ -297,12 +299,29 @@ class Session:
         # a browser is opening its own, and both need to know which is theirs.
         self.client_token = client_token
         self.owner = dict(owner or HUMAN_OWNER)
+        # Whether a human has switched this session's container on for every
+        # agent (`agent_commit.py`). The registry passes one for a local
+        # container only; asked each time, so a switch flipped later is seen.
+        self._container_switch = container_switch or (lambda: False)
+        # Docker's name for the container, which is what a switch is keyed by.
+        # The registry sets it; None for a remote target, which no switch reaches.
+        self.container_name: str | None = None
+        # `allow_commit: false` at open is a caller saying it does not want the
+        # right — the migration runner's read-only source side. The switch
+        # honours that for the session's life; a handover starts afresh.
+        self.opted_out = allow_commit is False
+        # Where the right came from: "container" (the switch), "session" (a
+        # grant made in this session), None (no right, or a local human, who
+        # needs none). An agent tells a standing grant from a one-off by it.
+        self.commit_grant: str | None = None
         if allow_commit is None:
             self.allow_commit = self._starts_with_commit()
         else:
             self.allow_commit = allow_commit
         if target.stage == PRODUCTION:
             self.allow_commit = False
+        if self.allow_commit and not self._needs_no_grant():
+            self.commit_grant = "container" if self._switch_covers() else "session"
         # Held by whoever may execute code here. Rotated on every transfer, so a
         # previous owner's key stops working the moment ownership moves.
         self.write_key = secrets.token_urlsafe(24)
@@ -401,6 +420,7 @@ class Session:
             "inherited_pending": self.inherited_pending,
             "owner": dict(self.owner),
             "allow_commit": self.allow_commit,
+            "commit_grant": self.commit_grant,
             "client_token": self.client_token,
             "activity": self._activity,
             "test_progress": dict(self._test_progress) if self._test_progress else None,
@@ -428,6 +448,7 @@ class Session:
             "session_open",
             owner=dict(self.owner),
             allow_commit=self.allow_commit,
+            commit_grant=self.commit_grant,
             container=self.target.name,
             database=self.target.database,
             odoo_bin=self.target.odoo_bin,
@@ -500,7 +521,9 @@ class Session:
         # may", full stop — and on a remote instance a session handed to an
         # agent and taken back came home able to commit, with no grant ever
         # made, while on production it claimed a right nothing would honour.
+        self.opted_out = False
         self.allow_commit = self._starts_with_commit()
+        self.commit_grant = "container" if self.allow_commit and self._switch_covers() else None
         self.journal.write(
             "owner_changed",
             **{"from": previous, "to": dict(self.owner),
@@ -518,13 +541,74 @@ class Session:
         applies: being the owner is enough locally, and is not enough on
         someone's own Odoo, so a human starts without the right there too —
         and on production a human holds it only once they have granted it.
+        An agent on a local container a human switched on holds it too: the
+        switch is that grant, made ahead of time.
         """
+
+        return self._needs_no_grant() or self._switch_covers()
+
+    def _needs_no_grant(self) -> bool:
+        """A local human: they confirm each commit in the UI instead."""
 
         return (
             self.owner.get("kind") == "human"
             and not self.target.is_remote
             and self.target.stage != PRODUCTION
         )
+
+    def _switch_covers(self) -> bool:
+        """Whether the container switch gives this session the right.
+
+        An agent's, on a local container, never on production, and not one
+        that opted out at open. Matched by target kind before anything else: a
+        server card's name is free text and can equal a container's.
+        """
+
+        return (
+            self.owner.get("kind") == "agent"
+            and self.target.kind == DOCKER
+            and self.target.stage != PRODUCTION
+            and not self.opted_out
+            and self._container_switch()
+        )
+
+    def apply_container_switch(self, on: bool) -> bool:
+        """Follow the container switch at once; whether the right changed.
+
+        On grants every agent session the switch covers, one whose right was
+        taken away by hand included: turning it on is a fresh act. Off takes
+        the right from every agent session on the container, whatever gave it
+        — a human's grant in that session too — so that off leaves no agent
+        able to commit there. A commit already past the check finishes.
+        """
+        if on:
+            if self.allow_commit or not self._switch_covers():
+
+                return False
+            self.allow_commit = True
+            self.commit_grant = "container"
+        else:
+            if not self.allow_commit or self.owner.get("kind") == "human":
+
+                return False
+            self.allow_commit = False
+            self.commit_grant = None
+        self.journal.write(
+            "policy_changed",
+            allow_commit=self.allow_commit,
+            reason="container switch on" if on else "container switch off",
+        )
+        self._emit_policy()
+
+        return True
+
+    def _emit_policy(self) -> None:
+        self._emit({
+            "kind": "policy",
+            "allow_commit": self.allow_commit,
+            "commit_grant": self.commit_grant,
+            "session": self.id,
+        })
 
     def held_by_human(self, key: str | None) -> bool:
         """`held_by`, for a key that was issued to a human.
@@ -562,8 +646,9 @@ class Session:
                 )
             fields.update(stage=PRODUCTION, confirmed=confirm)
         self.allow_commit = allowed
+        self.commit_grant = "session" if allowed and not self._needs_no_grant() else None
         self.journal.write("policy_changed", **fields)
-        self._emit({"kind": "policy", "allow_commit": allowed, "session": self.id})
+        self._emit_policy()
 
     def _spend_production_grant(self, reason: str) -> None:
         """Take a production grant back: it is for one commit, not a session.
@@ -574,10 +659,11 @@ class Session:
         """
         if self.target.stage == PRODUCTION and self.allow_commit:
             self.allow_commit = False
+            self.commit_grant = None
             self.journal.write(
                 "policy_changed", allow_commit=False, stage=PRODUCTION, reason=reason
             )
-            self._emit({"kind": "policy", "allow_commit": False, "session": self.id})
+            self._emit_policy()
 
     def _production_refusal(self) -> str:
 

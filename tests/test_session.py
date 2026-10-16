@@ -2122,3 +2122,162 @@ async def test_the_journal_records_the_params_a_run_was_given(tmp_path):
     records = [json.loads(line) for line in (tmp_path / "s1.jsonl").read_text().splitlines()]
     started = next(r for r in records if r["kind"] == "run_test")
     assert started["params"] == "@web/a"
+
+
+# --- the container switch: agents may commit on this container ----------------
+
+AGENT = {"kind": "agent", "label": "runner"}
+
+
+async def _started(tmp_path, **kwargs):
+    session = await make_session(tmp_path, **kwargs)
+    await session.start()
+
+    return session
+
+
+async def test_an_agent_session_on_a_switched_container_starts_with_the_right(tmp_path):
+    session = await _started(tmp_path, owner=AGENT, container_switch=lambda: True)
+    try:
+        assert session.allow_commit is True
+        assert session.commit_grant == "container"
+        assert session.describe()["commit_grant"] == "container"
+        opened = next(r for r in session.journal.records() if r["kind"] == "session_open")
+        assert opened["commit_grant"] == "container"
+        result = await session.commit()
+        assert result["error"] is None
+    finally:
+        await session.kill()
+
+
+async def test_without_the_switch_an_agent_starts_without_the_right(tmp_path):
+    session = await make_session(tmp_path, owner=AGENT)
+    assert session.allow_commit is False
+    assert session.commit_grant is None
+    assert session.container_name is None
+
+
+async def test_false_at_open_is_an_opt_out_the_switch_honours(tmp_path):
+    """The migration runner opens its source side with `false`: read-only by
+    design, and a switch on the wrong container must not change that."""
+    session = await make_session(
+        tmp_path, owner=AGENT, allow_commit=False, container_switch=lambda: True
+    )
+    assert session.allow_commit is False
+    assert session.opted_out is True
+    assert session.apply_container_switch(True) is False
+    assert session.allow_commit is False
+
+
+async def test_true_at_open_on_a_switched_container_is_the_switch_s_grant(tmp_path):
+    session = await make_session(
+        tmp_path, owner=AGENT, allow_commit=True, container_switch=lambda: True
+    )
+    assert session.allow_commit is True
+    assert session.commit_grant == "container"
+
+
+async def test_true_at_open_without_the_switch_is_a_session_grant(tmp_path):
+    """Only the admin key gets an agent here; the right is that session's."""
+    session = await make_session(tmp_path, owner=AGENT, allow_commit=True)
+    assert session.commit_grant == "session"
+
+
+async def test_an_opted_out_session_can_still_be_granted_by_hand_and_off_revokes_it(tmp_path):
+    session = await make_session(
+        tmp_path, owner=AGENT, allow_commit=False, container_switch=lambda: True
+    )
+    session.set_allow_commit(True)
+    assert session.commit_grant == "session"
+    assert session.apply_container_switch(False) is True
+    assert session.allow_commit is False
+    assert session.commit_grant is None
+
+
+async def test_turning_on_regrants_a_hand_revoked_session(tmp_path):
+    session = await make_session(tmp_path, owner=AGENT, container_switch=lambda: True)
+    session.set_allow_commit(False)
+    assert session.commit_grant is None
+    assert session.apply_container_switch(True) is True
+    assert session.allow_commit is True
+    assert session.commit_grant == "container"
+
+
+async def test_turning_on_twice_changes_nothing_the_second_time(tmp_path):
+    session = await make_session(tmp_path, owner=AGENT, container_switch=lambda: True)
+    assert session.apply_container_switch(True) is False
+
+
+async def test_the_switch_journals_and_emits_its_changes(tmp_path):
+    events = []
+    on = {"value": False}
+    session = await make_session(
+        tmp_path, owner=AGENT, container_switch=lambda: on["value"], on_event=events.append
+    )
+    on["value"] = True
+    session.apply_container_switch(True)
+    on["value"] = False
+    session.apply_container_switch(False)
+    changes = [r for r in session.journal.records() if r["kind"] == "policy_changed"]
+    assert [(r["allow_commit"], r["reason"]) for r in changes] == [
+        (True, "container switch on"),
+        (False, "container switch off"),
+    ]
+    policy = [e for e in events if e.get("kind") == "policy"]
+    assert [(e["allow_commit"], e["commit_grant"]) for e in policy] == [
+        (True, "container"),
+        (False, None),
+    ]
+
+
+async def test_a_handover_to_an_agent_clears_the_opt_out_and_starts_from_the_switch(tmp_path):
+    session = await make_session(
+        tmp_path, owner=AGENT, allow_commit=False, container_switch=lambda: True
+    )
+    session.transfer_owner({"kind": "agent", "label": "other"})
+    assert session.opted_out is False
+    assert session.allow_commit is True
+    assert session.commit_grant == "container"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        Target(kind="odoosh", build="36887345", host="build.dev.odoo.com",
+               database="db", stage="staging"),
+        Target(kind="ssh", label="c", host="example.com", database="db", stage="staging"),
+    ],
+    ids=["odoosh", "ssh-card-named-like-the-container"],
+)
+async def test_the_switch_never_reaches_a_remote_session(tmp_path, target):
+    session = await make_session(
+        tmp_path, target=target, owner=AGENT, container_switch=lambda: True
+    )
+    assert session.allow_commit is False
+    assert session.apply_container_switch(True) is False
+    assert session.allow_commit is False
+
+
+async def test_the_switch_never_grants_production(tmp_path):
+    target = Target(container="c", database="db", odoo_bin="/opt/odoo/odoo-bin",
+                    stage="production")
+    session = await make_session(
+        tmp_path, target=target, owner=AGENT, container_switch=lambda: True
+    )
+    assert session.allow_commit is False
+    assert session.apply_container_switch(True) is False
+
+
+async def test_a_human_session_is_untouched_by_the_switch(tmp_path):
+    session = await make_session(tmp_path, container_switch=lambda: True)
+    assert session.allow_commit is True
+    assert session.commit_grant is None
+    assert session.apply_container_switch(False) is False
+    assert session.allow_commit is True
+
+
+async def test_a_human_s_grant_on_a_remote_session_is_a_session_grant(tmp_path):
+    session = await make_session(tmp_path, target=oosh_target("staging"))
+    assert session.commit_grant is None
+    session.set_allow_commit(True)
+    assert session.commit_grant == "session"
