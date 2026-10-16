@@ -424,8 +424,10 @@ nothing),
 size — `772 lines · 243 KB`, records in the journal file and its size on disk,
 never `0 KB` for a file with anything in it — and the row's own controls:
 `.jsonl`, `.md`, a two-sheet copy glyph, and a trash icon. A
-sticky header names every column; on a narrow window it's dropped and rows
-wrap instead.
+sticky header names every column. On a narrow window (760px and below, the
+desktop app's compact width among them) a row drops the session id, duration
+and size so the rest stays on one line under the same header; the id is still
+in the title of the transcript a row opens.
 
 - Click anywhere on a row except a control to open that transcript.
 - **.jsonl** / **.md** export the session; both confirm first, because

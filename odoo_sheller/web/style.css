@@ -2327,6 +2327,7 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
 
 .journal-export-links {
   justify-self: end;
+  white-space: nowrap;
 }
 
 .journal-delete {
@@ -2430,15 +2431,18 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
     flex-wrap: wrap;
   }
 
+  /* Nine cells do not fit, and wrapping them stacked the export links one
+     word per line under the timestamp. A row drops the session id, duration
+     and size instead — the id is still in the title of the preview it opens —
+     so the rest stays on one line and the header still lines up with it. */
   .journal-row,
   .journal-columns {
-    grid-template-columns: 10.5rem 3.6rem 7.2rem 6.2rem auto 1.4rem;
+    grid-template-columns: 16ch 11ch 12ch 9ch auto 1.4rem;
     overflow-x: auto;
   }
 
-  /* Eight cells into six tracks: the row wraps onto a second line here, so
-     there is no column for a header to name. */
-  .journal-columns {
+  .journal-row > .journal-wide,
+  .journal-columns > .journal-wide {
     display: none;
   }
 }

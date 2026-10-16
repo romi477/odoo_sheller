@@ -3868,11 +3868,11 @@ function journalColumns() {
   header.innerHTML = `
     <span>opened</span>
     <span>owner</span>
-    <span>session</span>
-    <span>duration</span>
+    <span class="journal-wide">session</span>
+    <span class="journal-wide">duration</span>
     <span>commands</span>
     <span>outcome</span>
-    <span>size</span>
+    <span class="journal-wide">size</span>
     <span class="journal-export-links">export</span>
     <span class="journal-delete-col"></span>`;
 
@@ -3891,11 +3891,11 @@ function journalRow(entry) {
   row.innerHTML = `
     <span class="journal-stamp">${escapeHtml(formatStamp(entry.opened_at))}</span>
     <span class="journal-owner ${owner.kind}">${escapeHtml(owner.text)}</span>
-    <span class="journal-id">${escapeHtml(entry.session_id)}</span>
-    <span>${escapeHtml(formatDuration(entry.duration))}</span>
+    <span class="journal-id journal-wide">${escapeHtml(entry.session_id)}</span>
+    <span class="journal-wide">${escapeHtml(formatDuration(entry.duration))}</span>
     <span>${commands}</span>
     <span class="journal-status ${disposition}">${disposition}</span>
-    <span class="journal-size">${journalSize(entry.lines, entry.bytes)}</span>
+    <span class="journal-size journal-wide">${journalSize(entry.lines, entry.bytes)}</span>
     <span class="journal-export-links"></span>`;
   const exportLinks = row.querySelector('.journal-export-links');
   const jsonlLink = document.createElement('a');

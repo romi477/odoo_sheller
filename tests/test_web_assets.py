@@ -1150,18 +1150,45 @@ def test_the_journal_list_names_its_columns(app_js, markup):
     assert "background:" in pinned[0]
 
 
-def test_the_narrow_layout_drops_the_column_header(app_js):
-    """Below 760px the row wraps onto two lines; a header there labels nothing."""
+def test_the_narrow_layout_keeps_a_row_on_one_line(app_js):
+    """Below 760px a row once wrapped its export links and trash onto a
+    second line, in tracks a few characters wide. It drops the cells a row
+    can do without instead, so every cell left has a track of its own and
+    the header still names them."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
     narrow = re.search(r"@media \(max-width: 760px\) \{(.*?)\n\}", css, re.DOTALL)
     assert narrow is not None
     block = re.sub(r"/\*.*?\*/", "", narrow.group(1), flags=re.DOTALL)
-    rules = [
-        body for selector, body in re.findall(r"([^{}]*)\{([^{}]*)\}", block)
-        if selector.strip() == ".journal-columns"
+    rules = re.findall(r"([^{}]*)\{([^{}]*)\}", block)
+    hidden = [
+        selector for selector, body in rules
+        if ".journal-wide" in selector and "display: none" in body
     ]
-    assert rules, "the header needs a narrow-layout rule of its own"
-    assert "display: none" in rules[0]
+    assert hidden, "the cells a narrow row drops need a rule"
+    tracks = next(
+        body for selector, body in rules
+        if ".journal-row" in selector and "grid-template-columns" in body
+    )
+    count = len(re.findall(
+        r"[\d.]+(?:rem|ch|px)|auto|minmax\([^)]*\)",
+        tracks.split("grid-template-columns:")[1].split(";")[0],
+    ))
+    row = re.search(r"function journalRow\(.*?\n\}", app_js, re.DOTALL).group(0)
+    cells = re.search(r"row\.innerHTML = `(.*?)`;", row, re.DOTALL).group(1)
+    shown = [
+        span for span in re.findall(r"<span[^>]*>", cells) if "journal-wide" not in span
+    ]
+    # One more for the trash, appended after the export links.
+    assert count == len(shown) + 1
+    header = re.search(r"function journalColumns\(.*?\n\}", app_js, re.DOTALL).group(0)
+    labels = re.findall(r"<span([^>]*)>([a-z ]*)</span>", header)
+    assert [text for attrs, text in labels if "journal-wide" in attrs] == [
+        "session", "duration", "size",
+    ]
+    assert not [
+        body for selector, body in rules
+        if selector.strip() == ".journal-columns" and "display: none" in body
+    ], "the header names the narrow row's columns too"
 
 
 def test_the_journal_column_header_is_not_a_clickable_row(app_js):
@@ -2909,8 +2936,8 @@ def test_run_card_is_rose_and_failures_light_up():
 
 def test_journal_size_column_follows_outcome(app_js):
     columns = re.search(r"function journalColumns\(.*?\n\}", app_js, re.DOTALL).group(0)
-    assert columns.index("<span>outcome</span>") < columns.index("<span>size</span>")
-    assert columns.index("<span>size</span>") < columns.index("journal-export-links")
+    assert columns.index(">outcome</span>") < columns.index(">size</span>")
+    assert columns.index(">size</span>") < columns.index("journal-export-links")
     row = re.search(r"function journalRow\(.*?\n\}", app_js, re.DOTALL).group(0)
     assert "journalSize(entry.lines, entry.bytes)" in row
     assert row.index("journal-status") < row.index("journal-size")
