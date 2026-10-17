@@ -17,12 +17,14 @@ ALLOWED_IMPORTS = {
 }
 
 
-def run_bootstrap(frames, timeout=15, fake_odoo=None):
+def run_bootstrap(frames, timeout=15, fake_odoo=None, fake_js=None):
     """Feed frames over stdin, return (out_frames, stderr_text, transaction_calls)."""
     stdin = "".join(json.dumps(frame) + "\n" for frame in frames)
     env = {"OS_CMD_FD": "0", "PATH": "/usr/bin:/bin"}
     if fake_odoo:
         env["OS_FAKE_ODOO"] = fake_odoo
+    if fake_js is not None:
+        env["OS_FAKE_JS"] = fake_js
     proc = subprocess.run(
         [sys.executable, str(HARNESS), str(BOOTSTRAP)],
         input=stdin,
@@ -66,6 +68,35 @@ def test_hello_comes_first():
     assert out[0]["db"] == "testdb"
     assert out[0]["uid"] == 1
     assert isinstance(out[0]["pid"], int)
+    assert out[-1] == {"t": "bye", "id": 1}
+
+
+@pytest.mark.parametrize(
+    ("has", "js"),
+    [
+        ("chrome,websocket", {"chrome": True, "websocket": True}),
+        ("websocket", {"chrome": False, "websocket": True}),
+        ("chrome", {"chrome": True, "websocket": False}),
+        # 15 and 16 look for Chrome inside a ChromeBrowser method; there is no
+        # module-level finder to ask, and they run QUnit anyway.
+        ("chrome,websocket,no_finder", {"chrome": None, "websocket": True}),
+        # Odoo's own `executable` treats any exception as "not found".
+        ("websocket,broken_finder", {"chrome": False, "websocket": True}),
+    ],
+)
+def test_hello_says_whether_a_browser_suite_can_run_here(has, js):
+    """Asked the way Odoo's ChromeBrowser asks, once, without starting one."""
+    out, _, _ = run_bootstrap([{"t": "close", "id": 1}], fake_odoo="17", fake_js=has)
+    assert out[0]["t"] == "hello"
+    assert out[0]["js"] == js
+
+
+def test_hello_survives_a_browser_check_that_cannot_even_import():
+    """No odoo.tests.common at all: the session still starts, and says why."""
+    out, _, _ = run_bootstrap([{"t": "close", "id": 1}])
+    assert out[0]["t"] == "hello"
+    assert set(out[0]["js"]) == {"error"}
+    assert "odoo" in out[0]["js"]["error"]
     assert out[-1] == {"t": "bye", "id": 1}
 
 

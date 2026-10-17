@@ -2281,3 +2281,38 @@ async def test_a_human_s_grant_on_a_remote_session_is_a_session_grant(tmp_path):
     assert session.commit_grant is None
     session.set_allow_commit(True)
     assert session.commit_grant == "session"
+
+
+JS_HELLO_FAKE = FAKE.replace(
+    '"db":"db","uid":1,"pid":4242}',
+    '"db":"db","uid":1,"pid":4242,"js":{"chrome":True,"websocket":True}}',
+)
+BROKEN_JS_HELLO_FAKE = FAKE.replace(
+    '"db":"db","uid":1,"pid":4242}',
+    '"db":"db","uid":1,"pid":4242,"js":{"error":"ImportError: odoo.tests.common"}}',
+)
+
+
+async def test_describe_says_whether_a_browser_suite_can_run(tmp_path):
+    session = await make_session(tmp_path, script=JS_HELLO_FAKE)
+    await session.start()
+    assert session.describe()["js_tests"] == {
+        "runner": "hoot", "available": True, "reason": None, "tested": "18-19",
+    }
+    await session.close()
+
+
+async def test_a_browser_check_that_failed_is_logged_and_never_raises(tmp_path, caplog):
+    session = await make_session(tmp_path, script=BROKEN_JS_HELLO_FAKE)
+    with caplog.at_level("WARNING", logger="odoo_sheller.session"):
+        await session.start()
+    assert session.describe()["js_tests"]["reason"] == "probe_failed"
+    assert "ImportError: odoo.tests.common" in caplog.text
+    await session.close()
+
+
+async def test_describe_before_hello_has_no_browser_answer_yet(tmp_path):
+    session = await make_session(tmp_path)
+    assert session.describe()["js_tests"] is None
+    await session.start()
+    await session.close()

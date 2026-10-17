@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import logging
 import re
 import secrets
 import time
@@ -10,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from enum import Enum
 
+from odoo_sheller import js_tests
 from odoo_sheller.journal import Journal
 from odoo_sheller.protocol import (
     ProtocolError,
@@ -24,6 +26,8 @@ from odoo_sheller.protocol import (
 )
 from odoo_sheller.rules import major_of
 from odoo_sheller.transport import DOCKER, PRODUCTION, Target, send_signal
+
+logger = logging.getLogger(__name__)
 
 
 class SessionState(str, Enum):
@@ -334,6 +338,8 @@ class Session:
         # own key must not be able to do either and so lift its own gate.
         self._key_kinds: dict[str, str | None] = {self.write_key: self.owner.get("kind")}
         self.hello: dict | None = None
+        # Whether a browser suite can run here: known from hello on, None before.
+        self.js_tests: dict | None = None
         self.pending_commands = 0
         self.inherited_pending = 0
         self._state = SessionState.STARTING
@@ -424,7 +430,23 @@ class Session:
             "client_token": self.client_token,
             "activity": self._activity,
             "test_progress": dict(self._test_progress) if self._test_progress else None,
+            "js_tests": dict(self.js_tests) if self.js_tests else None,
         }
+
+    def _js_tests(self) -> dict:
+        """Computed once, from what the bootstrap already found; never raises."""
+        try:
+            described = js_tests.capability(self.hello)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("session %s: browser suite check failed: %s", self.id, exc)
+
+            return {"runner": None, "available": False, "reason": "probe_failed", "tested": None}
+        if described["reason"] == "probe_failed":
+            logger.warning(
+                "session %s: browser suite check failed: %s", self.id, (self.hello or {}).get("js")
+            )
+
+        return described
 
     # -- lifecycle -------------------------------------------------------
 
@@ -443,6 +465,7 @@ class Session:
             # session that cannot say what it is writing to is not one to
             # commit in blind.
             self.target = replace(self.target, database=self.hello["db"])
+        self.js_tests = self._js_tests()
         self._set_state(SessionState.READY)
         self.journal.write(
             "session_open",

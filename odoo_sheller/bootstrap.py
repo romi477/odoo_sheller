@@ -468,6 +468,33 @@ def _os_send(frames, frame):
     frames.flush()
 
 
+def _os_js_probe():
+    """Whether a browser suite could run in this process, asked as Odoo asks.
+
+    ChromeBrowser skips its test when `websocket` did not import into
+    odoo.tests.common or when `_find_executable` finds no Chrome; these are
+    those two reads, and nothing is started. 15 and 16 keep the lookup inside
+    a ChromeBrowser method, so there it is `None`: not asked, not absent.
+    """
+    try:
+        common = importlib.import_module("odoo.tests.common")
+        find = getattr(common, "_find_executable", None)
+        chrome = None
+        if find is not None:
+            try:
+                find()
+                chrome = True
+            # Odoo's own `executable` takes any exception as "not found".
+            except Exception:  # noqa: BLE001
+                chrome = False
+
+        return {"chrome": chrome, "websocket": getattr(common, "websocket", None) is not None}
+    # Never the reason a session fails to start.
+    except BaseException as exc:  # noqa: BLE001
+
+        return {"error": "%s: %s" % (type(exc).__name__, exc)}
+
+
 def _os_hello(namespace):
     env = namespace["env"]
     odoo = namespace.get("odoo")
@@ -481,6 +508,7 @@ def _os_hello(namespace):
         "db": env.cr.dbname,
         "uid": env.uid,
         "pid": os.getpid(),
+        "js": _os_js_probe(),
     }
 
 

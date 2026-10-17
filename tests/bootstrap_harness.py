@@ -231,6 +231,32 @@ def _install_fake_odoo(flavour):
             return report
 
         module("odoo.tests.shell", run_tests=run_tests)
+    js = os.environ.get("OS_FAKE_JS")
+    if js is not None:
+        _install_fake_browser(module, set(filter(None, js.split(","))))
+
+
+def _install_fake_browser(module, has):
+    """`odoo.tests.common` as far as the browser check reads it.
+
+    OS_FAKE_JS lists what is there: `chrome`, `websocket`. `no_finder` drops
+    `_find_executable`, which 15 and 16 do not have at module level;
+    `broken_finder` makes it raise something other than SkipTest.
+    """
+    import unittest
+
+    def find_executable():
+        if "broken_finder" in has:
+            raise RuntimeError("platform.system() exploded")
+        if "chrome" not in has:
+            raise unittest.SkipTest("Chrome executable not found")
+
+        return "/usr/bin/chromium"
+
+    attrs = {"websocket": object() if "websocket" in has else None}
+    if "no_finder" not in has:
+        attrs["_find_executable"] = find_executable
+    module("odoo.tests.common", **attrs)
 
 
 def _dump():
