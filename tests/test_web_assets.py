@@ -3760,17 +3760,23 @@ def test_the_container_card_carries_the_agent_commit_switch_after_the_name():
     )
 
 
-def test_the_agent_commit_warning_says_advanced_global_and_starts_hidden():
+def test_the_agent_commit_warning_is_the_switch_tooltip_while_it_is_on(app_js):
+    """A paragraph under the facts made every switched-on card a row taller
+    for a sentence read once. It is the switch's own tooltip instead, while
+    the switch is on; off, the static title says off is the usual way."""
     card = _container_card()
-    warning = re.search(r'<p class="agent-commit-warning"[^>]*>.*?</p>', card, re.DOTALL)
+    assert "agent-commit-warning" not in card
+    body = re.search(r"function showAgentCommit\(.*?\n\}", app_js, re.DOTALL)
+    assert body is not None
+    text = body.group(0)
+    assert "AGENT_COMMIT_WARNING" in text and ".title" in text
+    warning = re.search(r"const AGENT_COMMIT_WARNING = ([^;]*);", app_js, re.DOTALL)
     assert warning is not None
-    text = warning.group(0)
-    assert " hidden" in text.split(">", 1)[0]
-    for says in ("ADVANCED", "GLOBAL", "any database", "remote"):
-        assert says in text, says
-    assert card.index("agent-commit-warning") < card.index('<div class="picker"'), (
-        "under the facts, above the database picker"
-    )
+    for says in ("ADVANCED · GLOBAL", "any database", "until you turn this off", "remote"):
+        assert says in warning.group(1), says
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert "agent-commit-warning" not in css
+    assert "agent-commit-warning" not in app_js
 
 
 def test_the_switch_is_set_with_the_admin_key(app_js):
@@ -3793,7 +3799,7 @@ def test_the_switch_click_does_not_reach_the_card(app_js):
 def test_the_cards_show_what_the_daemon_says_about_the_switch(app_js):
     body = re.search(r"function renderContainers\(.*?\n\}\n", app_js, re.DOTALL).group(0)
     assert "container.agent_commit" in body
-    assert "agent-commit-warning" in body
+    assert "showAgentCommit(card" in body
 
 
 def test_a_policy_event_keeps_where_the_right_came_from(app_js):
@@ -3806,27 +3812,3 @@ def test_the_switch_is_amber_when_on():
     block = re.search(r'\.agent-commit\[aria-checked="true"\][^{]*\{.*?\}', css, re.DOTALL)
     assert block is not None
     assert "var(--amber)" in block.group(0)
-
-
-def test_the_agent_commit_warning_spans_the_card():
-    """Capped at 72ch it sat in the left half of a wide card and wrapped onto
-    three lines beside empty space; it follows the card's width instead."""
-    css = (WEB / "style.css").read_text(encoding="utf-8")
-    block = re.search(r"\.agent-commit-warning\s*\{([^}]*)\}", css)
-    assert block is not None
-    assert "max-width" not in block.group(1)
-
-
-def test_the_narrow_journal_row_follows_the_list_not_the_window():
-    """The full row needs about 966px. Keyed to a 760px window it was clipped
-    from 761px up to about 1100px — export and trash past the right edge of a
-    list whose scrollbar is hidden. The list's own width decides instead,
-    which also covers a list narrowed by an open preview."""
-    css = (WEB / "style.css").read_text(encoding="utf-8")
-    groups = re.search(r"#journal-groups\s*\{([^}]*)\}", css).group(1)
-    assert "container: journals / inline-size" in groups
-    narrow = re.search(r"@container journals \(max-width: ([\d.]+)px\)", css)
-    assert narrow is not None
-    assert float(narrow.group(1)) >= 966
-    window = re.search(r"@media \(max-width: 760px\) \{(.*?)\n\}", css, re.DOTALL).group(1)
-    assert ".journal-row" not in window

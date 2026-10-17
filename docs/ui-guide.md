@@ -106,8 +106,8 @@ restart or a config change.
   commit** in that session — and its title says so. On, every agent session on
   this container may commit, to any database in it, until you turn it off; it
   survives restarts and never applies to a remote target. It turns amber, and
-  an **ADVANCED · GLOBAL** note under the card's facts says exactly that for as
-  long as it is on. Turning it either way takes the admin key, like writing a
+  for as long as it is on its tooltip is an **ADVANCED · GLOBAL** warning that
+  says exactly that. Turning it either way takes the admin key, like writing a
   card; the desktop app supplies it. Off also takes the right from any agent
   session on the container that holds it, a grant you made by hand included.
 - A card stacks its name above its keys only when the width is really gone —

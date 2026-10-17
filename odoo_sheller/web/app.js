@@ -1582,7 +1582,7 @@ function renderContainers() {
     card.classList.toggle('probing', Boolean(container.probing));
     setText(card.querySelector('.meta'), `${container.image || 'unknown image'} · ${container.status || ''}`);
     card.querySelector('.open').disabled = !container.probe?.ok || !container.probe?.supported;
-    // `.agent-commit-warning` follows the switch: shown only while it is on.
+    // The switch's tooltip follows it: the warning only while it is on.
     showAgentCommit(card, Boolean(container.agent_commit));
     // A version nothing has run on here is let through, so it is not an error:
     // a badge, and the whole sentence on hover.
@@ -1835,14 +1835,22 @@ function fillPicker(card, container) {
   }
 }
 
+// What a switched-on container allows, on the switch's tooltip while it is on.
+const AGENT_COMMIT_WARNING = 'ADVANCED · GLOBAL — Every agent session in this container may commit, '
+  + 'to any database, without asking you first — until you turn this off. '
+  + 'Survives restarts. Never applies to remote targets.';
+
 /// The target as an agent needs to be told it: which container, which
 /// database, and the Odoo version its idioms have to match. Typed by hand this
 /// is transcription, and a name like `integra_db_19_presta` is where that goes
 /// wrong. Everything else the probe found — image, status, config path — says
 /// nothing about how to work in the session, so it stays on the card.
 function showAgentCommit(card, on) {
-  card.querySelector('.agent-commit').setAttribute('aria-checked', String(on));
-  card.querySelector('.agent-commit-warning').hidden = !on;
+  const button = card.querySelector('.agent-commit');
+  button.setAttribute('aria-checked', String(on));
+  // Off, the markup's own title: what the switch is and that off is usual.
+  button.dataset.offTitle ??= button.title;
+  button.title = on ? AGENT_COMMIT_WARNING : button.dataset.offTitle;
 }
 
 // Every agent session on this container may commit while it is on: a human's

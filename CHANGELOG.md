@@ -7,6 +7,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- The **ADVANCED · GLOBAL** warning of a switched-on *agents may commit* is the
+  switch's tooltip, not a note under the card's facts, so a switched-on card is
+  no taller than the others. Off, the tooltip still says off is the usual way.
+
 ## [1.11.0] — 2026-10-16
 
 A human can switch a local container on for agents: while *agents may commit*
