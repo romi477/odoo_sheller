@@ -613,6 +613,14 @@ manifest lists them under `web.assets_unit_tests`. With params the default
 ceiling is at least a class's 300 seconds, since Chrome alone takes about
 ten to start.
 
+Whether the container can run it at all is in {{session}}: `js_tests` has
+`available`, and when that is false a `reason` — `chrome_not_found`,
+`websocket_client_missing`, or `runner_not_supported` before 18. Odoo skips a
+browser test it cannot start rather than failing it; a run that was skipped
+answers `success: false`, `error: "js_tests_skipped"` and `hoot.skipped`.
+That is not a pass and not a failure of the code: say what the container
+lacks instead of rerunning.
+
 A filter Hoot has nothing for does not narrow the run: Hoot drops it, and
 with no filter left it runs every JS test it has. The session stops such a
 run the moment Hoot says so, and the answer carries `hoot.unknown_filters`.

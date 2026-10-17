@@ -29,7 +29,7 @@ MCP_GOLDEN = {
     "records": "5b2c65b96dd3ba9f796619631e74644d1be58469e92cb2db1c8085c56db054a5",
     "modules": "0955570535534c2d4e6279884172dab9a8452c3fcab5dfcdd753f10856eecbca",
     "jobs": "c853c98be14913bfc4e739cbcaae82491f034aa509f136a30954ed6d5580f37f",
-    "tests": "dbc75f9072633d899e88e53adc3a3647a8b6addbb15343878bd02a1860d945c7",
+    "tests": "eeafa93ff0245854f859fac46250f862d661131c18c1792c6d25fbea79a2579c",
     "watching": "1500647eb44f8b12be718b6dda83d48427492fff6b6cddcbfb8106adcb0612be",
     "odoo_15": "2d3110ec58af1f02ebdc4fd22bfbf0418703ccfd0dd13301d86a3a55d0fff6be",
     "odoo_16": "f8246fbfb092aebc8498298a2a1fbc998880fbcdfaf9c1d816e7e22a3898fc51",
@@ -103,3 +103,9 @@ def test_the_served_text_names_no_mcp_tool():
 def test_the_rules_files_carry_markers_too():
     """`common.md` names tools as well, and it goes in front of every major."""
     assert "{{run_test}}" in rules.common()
+
+
+def test_the_tests_topic_says_where_to_see_a_browser_suite_cannot_run():
+    tests = " ".join(server.HELP["tests"].split())
+    for says in ("os_session", "js_tests", "chrome_not_found", "js_tests_skipped", "not a pass"):
+        assert says in tests, says
