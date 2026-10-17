@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -17,7 +18,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from odoo_sheller import discovery, journal
+from odoo_sheller import discovery, guidance, journal
 from odoo_sheller.agent_commit import AgentCommitError
 from odoo_sheller.guard import LoopbackOnly
 from odoo_sheller.names import check_ssh_name
@@ -540,6 +541,43 @@ def create_app(registry: Registry | None = None) -> FastAPI:
             "container": bool(os.environ.get(IN_CONTAINER_ENV)),
             "mcp": mcp_launch(),
         }
+
+    def help_entry(text: str) -> dict:
+
+        return {"text": text, "hash": hashlib.sha256(text.encode()).hexdigest()}
+
+    @app.get("/api/help")
+    def help_all():
+        """What the MCP surface tells an agent, for a client that is not one.
+
+        Markers are left in: `{{exec}}` is a tool the caller names. No session,
+        no key, no memory of what was asked before — every call carries every
+        topic in full, and the same bytes, so a hash recorded once still names
+        what an agent was told.
+        """
+
+        return {
+            "version": running_version,
+            "instructions": guidance.INSTRUCTIONS,
+            "topics": {topic: help_entry(guidance.text_of(topic)[1]) for topic in guidance.topic_names()},
+            "markers": list(guidance.MARKERS),
+        }
+
+    @app.get("/api/help/{topic}")
+    def help_topic(topic: str):
+        resolved, text = guidance.text_of(topic)
+        if text is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "no_such_topic",
+                    "topic": topic,
+                    "topics": guidance.topic_names(),
+                    "recovery": "GET /api/help/{topic} with one of these, or GET /api/help for all of them",
+                },
+            )
+
+        return {"topic": resolved, **help_entry(text)}
 
     @app.get("/api/containers")
     async def containers():

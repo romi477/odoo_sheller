@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 from datetime import UTC, datetime
@@ -2155,3 +2156,69 @@ def test_an_open_without_allow_commit_forwards_none(client):
     client.post("/api/sessions", json={"container": "mig18", "database": "db",
                                        "owner": {"kind": "agent"}})
     assert client.registry.open_kwargs["allow_commit"] is None
+
+
+def test_help_serves_every_topic_once_with_markers_left_in(client):
+    """An HTTP client names its own tools, so it gets the text with `{{exec}}`
+    still in it — and the list of what it may put there."""
+    from odoo_sheller import guidance, rules
+
+    body = client.get("/api/help", headers={"X-OS-Session-Key": ""}).json()
+    assert set(body["topics"]) == set(guidance.HELP) | {f"odoo_{major}" for major in rules.majors()}
+    assert "remote" not in body["topics"], "an alias is not a topic"
+    assert body["instructions"] == guidance.INSTRUCTIONS
+    assert "{{" in body["instructions"]
+    assert body["markers"] == list(guidance.MARKERS)
+    assert body["topics"]["odoo_17"]["text"] == rules.for_major(17)
+    for topic, entry in body["topics"].items():
+        assert entry["hash"] == hashlib.sha256(entry["text"].encode()).hexdigest(), topic
+
+
+def test_help_carries_the_version_health_reports(client):
+    assert client.get("/api/help").json()["version"] == client.get("/health").json()["version"]
+
+
+def test_help_answers_the_same_bytes_every_time(client):
+    """A client records the hash as what its agent was told; a hash that moves
+    between two calls records nothing."""
+    assert client.get("/api/help").content == client.get("/api/help").content
+
+
+def test_help_answers_one_topic(client):
+    from odoo_sheller import guidance
+
+    body = client.get("/api/help/jobs").json()
+    assert body == {
+        "topic": "jobs",
+        "text": guidance.HELP["jobs"],
+        "hash": hashlib.sha256(guidance.HELP["jobs"].encode()).hexdigest(),
+    }
+
+
+def test_help_resolves_an_alias(client):
+    body = client.get("/api/help/remote").json()
+    assert body["topic"] == "remote_server"
+
+
+def test_help_refuses_an_unknown_topic_with_the_list(client):
+    response = client.get("/api/help/nonsense")
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["error"] == "no_such_topic"
+    assert detail["topic"] == "nonsense"
+    assert "odoo_19" in detail["topics"]
+    assert "/api/help" in detail["recovery"]
+
+
+def test_help_carries_the_rules_whatever_an_mcp_server_handed_over(client, monkeypatch):
+    """The once-per-major pointer is the MCP server's bookkeeping: /api/help
+    has no conversation to remember, so it always answers in full."""
+    from odoo_sheller import mcp as server
+    from odoo_sheller import rules
+
+    monkeypatch.setattr(server, "_rules_given", set())
+    first = client.get("/api/help").json()["topics"]["odoo_17"]["text"]
+    server._with_rules({"odoo": "17.0"})
+    assert 17 in server._rules_given
+    assert client.get("/api/help").json()["topics"]["odoo_17"]["text"] == first == rules.for_major(17)
+    assert client.get("/api/help/odoo_17").json()["text"] == first
