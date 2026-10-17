@@ -815,6 +815,9 @@ class Session:
         self._test_module = module
         self._run = {
             "window": window, "discarded_pending": discarded_pending, "params": params,
+            # A browser suite asked for: Odoo skipping it is not a pass.
+            "browser": bool(params) or spec_of(module, test_class, test_method) == js_tests.HOOT_TEST,
+            "js_skip": None,
         }
         try:
             result = await self._request(
@@ -852,6 +855,13 @@ class Session:
         if self._hoot is not None:
             self._end_hoot_reason()
             result["hoot"] = self._hoot
+        if run["browser"] and run["js_skip"]:
+            # Skipped, not run: a client reading only `success` and `error`
+            # must not see a pass.
+            result["hoot"] = {**(self._hoot or {}), "skipped": True, "reason": run["js_skip"]}
+            if isinstance(result.get("test"), dict):
+                result["test"] = {**result["test"], "success": False}
+            result["error"] = result.get("error") or "js_tests_skipped"
 
         return result
 
@@ -1060,6 +1070,8 @@ class Session:
 
             return
         kind, description = parsed
+        if kind == "skip" and self._run is not None and self._run["js_skip"] is None:
+            self._run["js_skip"] = js_tests.skip_reason(line)
         if kind in ("failure", "error") and self._test_module:
             failed = {"test": rerun_spec(self._test_module, description), "kind": kind}
             if self._run is not None and self._run["params"]:

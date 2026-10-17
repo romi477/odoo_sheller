@@ -67,3 +67,21 @@ def listing(module: str, major: int | None, files: list) -> dict:
     run = {"test": HOOT_TEST, "params": f"@{module}"} if runner == "hoot" and files else None
 
     return {"runner": runner, "files": files, "run": run}
+
+
+# What Odoo's ChromeBrowser raises SkipTest with, as `addSkip` logs it at the
+# end of `skipped <test> : <reason>` (`odoo/tests/result.py`, 16 to 20).
+_SKIPS = {
+    "Chrome executable not found": "chrome_not_found",
+    "websocket-client module is not installed": "websocket_client_missing",
+}
+
+
+def skip_reason(line: str) -> str | None:
+    """The reason from REASONS when this skip line is a browser that could not start."""
+    for message, reason in _SKIPS.items():
+        if line.rstrip().endswith(" : " + message):
+
+            return reason
+
+    return None

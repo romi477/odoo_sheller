@@ -2316,3 +2316,91 @@ async def test_describe_before_hello_has_no_browser_answer_yet(tmp_path):
     assert session.describe()["js_tests"] is None
     await session.start()
     await session.close()
+
+
+WEB_LOGGER = "odoo.addons.web.tests.test_js"
+SKIPPING_FAKE = r"""
+import json, sys, time
+sys.stdout.write(json.dumps({"t":"hello","protocol":1,"odoo":"19.0","python":"3.12.0",
+                             "db":"db","uid":1,"pid":4242}) + "\n")
+sys.stdout.flush()
+LOG = "2026-10-17 10:00:00,123 42 %s db LOGGER: %s\n"
+LINES = {
+    "chrome": [("WARNING", "Chrome executable not found"),
+               ("INFO", "skipped WebSuite.test_unit_desktop : Chrome executable not found")],
+    "websocket": [("WARNING", "websocket-client module is not installed"),
+                  ("INFO", "skipped WebSuite.test_unit_desktop : websocket-client module is not installed")],
+    "ran": [("INFO", "[HOOT] Passed 3 tests (3 total)")],
+}
+for line in sys.stdin:
+    frame = json.loads(line)
+    if frame["t"] == "close":
+        sys.stdout.write(json.dumps({"t":"bye","id":frame["id"]}) + "\n")
+        sys.stdout.flush()
+        break
+    which = (frame.get("params") or frame.get("test_method") or "").lstrip("@")
+    if frame.get("test_class") == "TestTour":
+        which = "chrome"
+    for level, message in LINES.get(which, LINES["chrome"]):
+        sys.stderr.write(LOG.replace("LOGGER", "WEB_LOGGER") % (level, message))
+    sys.stderr.flush()
+    time.sleep(0.1)
+    skipped = 0 if which == "ran" else 1
+    sys.stdout.write(json.dumps({"t":"result","id":frame["id"],"stdout":"",
+                                 "stdout_truncated":False,"result":None,
+                                 "result_truncated":False,"error":None,"duration":0.01,
+                                 "test":{"tests_run":1,"failures":0,"errors":0,
+                                 "skipped":skipped,"success":True}}) + "\n")
+    sys.stdout.flush()
+""".replace("WEB_LOGGER", WEB_LOGGER)
+
+
+@pytest.mark.parametrize(("params", "reason"), [
+    ("@chrome", "chrome_not_found"),
+    ("@websocket", "websocket_client_missing"),
+])
+async def test_a_browser_suite_odoo_skipped_is_not_a_pass(tmp_path, params, reason):
+    """Odoo skips a browser test it cannot run, and a skip counts as a pass to
+    anyone who reads only `success`."""
+    session = await make_session(tmp_path, script=SKIPPING_FAKE)
+    await session.start()
+    result = await session.run_test("web", "WebSuite", "test_unit_desktop", params=params)
+    assert result["test"]["success"] is False
+    assert result["error"] == "js_tests_skipped"
+    assert result["hoot"] == {"skipped": True, "reason": reason}
+    await session.close()
+    records = [json.loads(line) for line in (tmp_path / "s1.jsonl").read_text().splitlines()]
+    booked = [record for record in records if record.get("kind") == "result"][-1]
+    assert booked["hoot"] == {"skipped": True, "reason": reason}
+    assert booked["error"] == "js_tests_skipped"
+    assert booked["test"]["success"] is False
+
+
+async def test_the_hoot_test_without_params_is_a_browser_suite_too(tmp_path):
+    session = await make_session(tmp_path, script=SKIPPING_FAKE)
+    await session.start()
+    result = await session.run_test("web", "WebSuite", "test_unit_desktop")
+    assert result["error"] == "js_tests_skipped"
+    await session.close()
+
+
+async def test_a_hoot_run_that_executed_says_nothing_about_skipping(tmp_path):
+    session = await make_session(tmp_path, script=SKIPPING_FAKE)
+    await session.start()
+    result = await session.run_test("web", "WebSuite", "test_unit_desktop", params="@ran")
+    assert result["test"]["success"] is True
+    assert result["error"] is None
+    assert "skipped" not in result["hoot"]
+    await session.close()
+
+
+async def test_a_skipped_tour_in_a_python_run_keeps_its_old_answer(tmp_path):
+    """Only a browser suite asked for by name or by params is held to this; a
+    module's tours skipping without Chrome stay what they were."""
+    session = await make_session(tmp_path, script=SKIPPING_FAKE)
+    await session.start()
+    result = await session.run_test("web", "TestTour")
+    assert result["test"]["success"] is True
+    assert result["error"] is None
+    assert "hoot" not in result
+    await session.close()
