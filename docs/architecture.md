@@ -852,6 +852,12 @@ The split that follows from the cap:
   the workaround an agent invents when a rule was never shown to it.
 - Per-tool guidance lives in that tool's `description`, which hosts deliver
   whole — verified up to ~1 kB, the length of `os_run_test`'s.
+- The texts themselves — `INSTRUCTIONS`, `HELP` and the rules files — live in
+  `odoo_sheller/guidance.py` and `odoo_sheller/rules/` with every tool written
+  as a marker, `{{run_test}}`. The MCP server spells each as its `os_` tool
+  (`render_for_mcp`); `GET /api/help` serves them with the markers left in,
+  for a client that names its tools itself (`docs/container.md`). A golden
+  test holds the MCP rendering to the text it had before the markers.
 
 The test suite pins the cap (`INSTRUCTION_CAP`), that every topic is named in
 the delivered text, and that nothing which used to be in the instructions was

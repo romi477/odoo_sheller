@@ -17,6 +17,10 @@ agent's open with `allow_commit: false` stays without the right. Nothing is
 removed from the API or the MCP surface; `os_open_session` stops sending
 `allow_commit: false`, which the daemon now reads as an opt-out.
 
+A client that talks HTTP rather than MCP gets the same guidance an MCP agent
+is given, from `GET /api/help`, and can plan a JS test run before spending
+one. One behaviour changes: a browser suite Odoo skipped is a failure.
+
 ### Added
 
 #### Agents may commit on a container a human switched on
@@ -48,6 +52,41 @@ ssh card, whatever it is called. While it is on, the switch's tooltip is an
 - `os_open_session` no longer sends `allow_commit: false`, so Claude gets the
   right where a human switched it on; `os_run_test`'s own session still opts
   out. `os_help('commit')` explains the switch.
+
+#### Guidance and JS tests for an HTTP client
+
+A client of the HTTP API that gives its own agent its own tools never saw
+what an MCP client is told, and could run a Hoot suite but not plan one.
+
+- `GET /api/help`: the instructions, every `os_help` topic and one
+  `odoo_<major>` per rules file, each with the SHA-256 of its text, the
+  `markers` a client fills with its own tool names, and the running version
+  as a cache key. `GET /api/help/{topic}` answers one; an alias resolves, an
+  unknown topic is `404 no_such_topic` with the list. No key, no state.
+- The texts write a tool as `{{run_test}}` and live in
+  `odoo_sheller/guidance.py`; the MCP server spells each marker as its `os_`
+  tool, and a golden test holds what an MCP client reads to the bytes it read
+  before. The markers are the seventeen MCP tools without their prefix — the
+  texts also name `os_list_sessions`, so the list is longer than first drawn.
+- `js_tests` on a session (`GET /api/sessions/{id}`, `os_session`): the
+  runner (`hoot` from 18, `qunit` before), whether a browser suite can run —
+  Chrome found as Odoo looks for it, `websocket-client` importable, asked once
+  at hello — with a reason when not, and how far this daemon verified it
+  (`18-19`, `unverified` on 20).
+- `js` in `GET /api/containers/{container}/tests`: the module's JS test
+  files, whether its manifest bundles each (`null` where the manifest is not
+  plain data), test names read by regex, and the `run_test` body for its Hoot
+  suite. `os_list_tests` answers without it: web's alone names thousands of
+  tests.
+
+### Changed
+
+- A browser suite Odoo skipped is not a pass. When a run of
+  `web.WebSuite.test_unit_desktop`, or any run with `params`, is skipped for a
+  missing Chrome or `websocket-client`, `test.success` is `false`, `error` is
+  `"js_tests_skipped"`, and `hoot` is `{"skipped": true, "reason": ...}` — in
+  the answer, the journal, `os_test_result` and `os_history`. Before, it came
+  back a success that only the log showed as a skip.
 
 ### Fixed
 

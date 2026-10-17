@@ -605,6 +605,8 @@ answers `409` until that command's result finally arrives. Use `interrupt`, or
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/health` | liveness and version; no session data, no admin key |
+| `GET` | `/api/help` | the guidance an MCP agent is given — instructions, every topic with its SHA-256, the `markers` a client fills with its own tool names. No key, no state |
+| `GET` | `/api/help/{topic}` | one topic; an alias resolves, an unknown one is `404 no_such_topic` with the list |
 | `GET` | `/api/containers` | running containers, each with `agent_commit`: whether a human switched it on for agents |
 | `GET` | `/api/agent-commit` | the local containers switched on for agents, `[{"container", "since"}]`. No key |
 | `PUT` / `DELETE` | `/api/agent-commit/{container}` | switch a container on / off for agents; answers with the sessions whose right changed. Admin key |
@@ -614,12 +616,12 @@ answers `409` until that command's result finally arrives. Use `interrupt`, or
 | `PUT` / `DELETE` | `/api/targets/{id}` | change (only what is sent; `null` clears the database) / delete a card. Admin key |
 | `POST` | `/api/targets/parse` | what an ssh recipe means, decoded — who it logs in as, what it becomes, what it runs, the assembled form — or every field that is wrong, at once. Touches no network, stores nothing. Admin key |
 | `POST` | `/api/targets/probe` | ask an instance about itself, storing nothing. odoo.sh: `stage`, `db_name`, version. ssh: who the recipe lands as, where, which interpreter, whether the executable and the config are readable by that user, which Odoo — and the decoded `breakdown`. Admin key |
-| `GET` | `/api/containers/{container}/tests` | test classes/methods in one addon (`?module=`) |
+| `GET` | `/api/containers/{container}/tests` | test classes/methods in one addon (`?module=`), and `js`: its JS test files, whether the manifest bundles each, and the `run_test` body for its Hoot suite |
 | `POST` | `/api/sessions` | open a session, wait for `hello`. A local container needs `container` and `database`; leave `odoo_bin` out and the daemon probes that container for it, refusing an unsupported one with a `422` before anything starts. `target_id` opens a card (`odoosh-<build>`, `ssh-<id>`) instead of a container; the instance dictates the database, and its stage is read from the instance itself, not from the request. Only a human opens a remote target: a request that names a card has to come from the UI (a browser puts the page's `Origin` on it — no key to type) or carry the admin key, and a bare `curl` is `403 needs_a_human`. Optional `client_token` is echoed back in the session description, so a client recognises its own `session_starting` among several. A session opened from a card names it as `target_id`, which is what a screen matches the two by — a card's name is free text and can be changed under a live session. An `agent` owner with `allow_commit: true` is a `403 needs_a_human` without the admin key. A process that dies before `hello` is a `410 session_did_not_start` whose message ends with what Odoo logged |
 | `GET` | `/api/sessions` | live sessions |
-| `GET` | `/api/sessions/{id}` | one session; sent with `X-OS-Session-Key`, it adds `key_status` — `owner`, `former_owner` or `invalid` — for that key |
+| `GET` | `/api/sessions/{id}` | one session, with `js_tests`: whether a browser suite can run there; sent with `X-OS-Session-Key`, it adds `key_status` — `owner`, `former_owner` or `invalid` — for that key |
 | `POST` | `/api/sessions/{id}/exec` | run code. `read_only: true` is the caller's word that it writes nothing: journalled with the flag, not counted in `pending_commands` |
-| `POST` | `/api/sessions/{id}/run_test` | run a whole module's standard tests, one class or one method (`{"test": "module[.TestClass[.test_method]]"}`, optional `timeout`); stdout and Odoo's log lines come back separated, and `failed` lists each failing test as a spec to run again |
+| `POST` | `/api/sessions/{id}/run_test` | run a whole module's standard tests, one class or one method (`{"test": "module[.TestClass[.test_method]]"}`, optional `timeout`); stdout and Odoo's log lines come back separated, and `failed` lists each failing test as a spec to run again. A browser suite Odoo skipped is `success: false`, `error: "js_tests_skipped"` |
 | `POST` | `/api/sessions/{id}/commit` | keep the transaction |
 | `POST` | `/api/sessions/{id}/rollback` | discard the transaction |
 | `POST` | `/api/sessions/{id}/interrupt` | `SIGINT` |

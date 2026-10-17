@@ -375,3 +375,24 @@ def test_security_documents_the_container_switch():
 def test_the_readme_api_table_lists_the_switch_routes():
     text = README.read_text(encoding="utf-8")
     assert "/api/agent-commit" in text
+
+
+def test_the_readme_api_table_lists_the_guidance_routes():
+    text = README.read_text(encoding="utf-8")
+    assert "`/api/help`" in text
+    assert "`/api/help/{topic}`" in text
+
+
+def test_the_container_contract_documents_what_an_http_client_codes_against():
+    """docs/container.md is what a client program is written against: the
+    guidance route, every marker it may substitute, and the JS fields."""
+    from odoo_sheller import guidance, js_tests
+
+    text = read("container.md")
+    assert "## Guidance over HTTP" in text
+    for marker in guidance.MARKERS:
+        assert f"`{marker}`" in text, marker
+    for reason in js_tests.REASONS:
+        assert f"`{reason}`" in text, reason
+    for says in ("js_tests", "in_manifest", "js_tests_skipped", "hoot.skipped", "`hash`"):
+        assert says in text, says

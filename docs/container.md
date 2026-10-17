@@ -109,6 +109,101 @@ later.
 The endpoint needs no key and reports no session data. On a native daemon the
 command holds a local path, which is a filename on a loopback-only endpoint.
 
+## Guidance over HTTP
+
+An MCP client is told how to work here by the server's instructions and
+`os_help`. A client that talks HTTP and gives its own agent its own tools gets
+the same texts from `GET /api/help`:
+
+```json
+{
+  "version": "1.11.0",
+  "instructions": "odoo-sheller runs Python in a live Odoo shell. ...",
+  "topics": {
+    "limits":  {"text": "...", "hash": "<sha256 of text, hex>"},
+    "odoo_17": {"text": "...", "hash": "..."}
+  },
+  "markers": ["exec", "source", "journal", "history", "run_test", "..."]
+}
+```
+
+- `version` is the one `/health` reports: a cache key.
+- `topics` holds every topic `os_help` lists — each HELP topic and one
+  `odoo_<major>` per rules file, `common.md` in front — once, without aliases.
+- `hash` is the SHA-256 of `text`. The same daemon answers the same bytes on
+  every call, so a client can record what its agent was told without keeping
+  the text.
+- No session, no key, no state: every call carries every topic in full,
+  whatever an MCP server has handed over before.
+- `GET /api/help/{topic}` answers `{"topic", "text", "hash"}`; an alias
+  (`remote`) resolves to its topic. An unknown topic is a `404` whose
+  `detail` is `{"error": "no_such_topic", "topic", "topics", "recovery"}`.
+
+**Markers.** The texts never spell a tool. Where an MCP client reads
+`os_run_test(`, the served text says `{{run_test}}(`, and the client puts its
+own name for that action there. `markers` is the whole list, the MCP tools
+without their `os_` prefix: `exec`, `source`, `journal`, `history`,
+`run_test`, `test_result`, `list_tests`, `open_session`, `close_session`,
+`commit`, `rollback`, `interrupt`, `session`, `attach_session`, `help`,
+`list_sessions`, `list_containers`. A client that substitutes nothing still
+reads plain text. Topics about a flow an HTTP client may not have — sessions,
+ownership, commit, remote_server, watching — are served like the rest; the
+client chooses.
+
+## Browser test suites
+
+Odoo does not fail a browser test it cannot run, it skips it, and a skip
+counts as a pass. Three fields let a client plan a JS run and trust its
+answer.
+
+**`js_tests` on a session** (`GET /api/sessions/{id}`, and so `os_session`):
+
+```json
+"js_tests": {"runner": "hoot", "available": true, "reason": null, "tested": "18-19"}
+```
+
+`runner` is `hoot` on 18 to 20, `qunit` on 15 to 17 (listed, never run),
+`null` on anything else. `available` is true only for Hoot with Chrome found
+the way Odoo's `ChromeBrowser` looks for it and `websocket-client` importable;
+otherwise `reason` is one of `runner_not_supported`, `chrome_not_found`,
+`websocket_client_missing`, `probe_failed`. `tested` is how far this daemon's
+own runs go: `18-19`, `unverified` on 20 (can run, not known to work), `null`
+otherwise. Checked once, when the session starts; no browser is started.
+`null` until the session has said hello.
+
+**`js` in the module listing** (`GET /api/containers/{container}/tests`):
+
+```json
+"js": {
+  "runner": "hoot",
+  "files": [{"path": "static/tests/badge.test.js", "in_manifest": true,
+             "tests": ["renders the badge"]}],
+  "run": {"test": "web.WebSuite.test_unit_desktop", "params": "@my_module"}
+}
+```
+
+`files` are the module's JS test files on disk: `static/tests/**/*.test.js`
+from 18, every `static/tests/**/*.js` but `tours/` and `helpers/` before.
+`in_manifest` says whether the manifest's `web.assets_unit_tests` (Hoot) or
+`web.qunit_suite_tests` (QUnit) entries cover the file, followed in order —
+a literal path, a glob, a `remove` — and is `null` where the manifest is not
+plain data (a name, an `include`, a bundle that is not a list). A file outside
+the bundle is not in the run, and the run passes over fewer tests than the
+module has. `tests` are names read by a regex — the first string of `test(`,
+`it(`, `describe(` — for choosing a filter; a name built at run time is
+missed, and the ids Hoot reports in `hoot.failed_tests` stay the authority.
+`run` is the `run_test` body for the module's Hoot suite, `null` without Hoot
+or without files. A daemon older than 1.11.0 answers without `js`: treat that
+as unknown.
+
+**A skipped run says so.** When a run asks for a browser suite —
+`web.WebSuite.test_unit_desktop`, or any spec with `params` — and Odoo's log
+skips it for a missing Chrome or `websocket-client`, the answer carries
+`hoot.skipped: true` and `hoot.reason` (`chrome_not_found` or
+`websocket_client_missing`), `test.success` is `false`, and `error` is
+`"js_tests_skipped"`. The journal entry and every later read of the run carry
+the same. A Hoot run that executed has no `hoot.skipped`.
+
 ## Find
 
 The image carries `io.github.romi477.odoo-sheller=daemon`, and a container inherits

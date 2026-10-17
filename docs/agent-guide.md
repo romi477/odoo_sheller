@@ -190,7 +190,14 @@ logged deep in the run and the log tail an answer carries never reaches
 them. A name is read in any of the three quotes Hoot puts around it.
 
 It needs Chromium and `websocket-client` in the Python Odoo runs on; without
-them Odoo skips the test rather than failing it. Verified on 19 with a test
+them Odoo skips the test rather than failing it. The session says so before
+a run: `os_session` carries `js_tests`, whose `available` is false with a
+`reason` — `chrome_not_found`, `websocket_client_missing` — when either is
+missing, `runner_not_supported` before 18. A run that is skipped anyway does
+not read as a pass: `success` is false, `error` is `js_tests_skipped`, and
+`hoot` is `{skipped: true, reason}`. That holds for
+`web.WebSuite.test_unit_desktop` and for any run with `params`; a Python run
+whose tours skip without Chrome is reported as before. Verified on 19 with a test
 written to fail: one passed, one failed, the failed id rerun alone. 18 has
 the same class and method; 20 makes `test_unit_desktop` a `CrossModule` test
 that filters by the run's modules, and has not been run.
