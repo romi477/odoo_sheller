@@ -7,12 +7,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-### Changed
-
-- The **ADVANCED · GLOBAL** warning of a switched-on *agents may commit* is the
-  switch's tooltip, not a note under the card's facts, so a switched-on card is
-  no taller than the others. Off, the tooltip still says off is the usual way.
-
 ## [1.11.0] — 2026-10-16
 
 A human can switch a local container on for agents: while *agents may commit*
@@ -35,8 +29,8 @@ A local container's card now has a switch, **agents may commit**, tagged
 **GLOBAL**: while it is on, every agent session on that container holds the
 right, on any database in it, until a human turns it off. It survives restarts,
 is keyed by the container's name, and never applies to an odoo.sh build or an
-ssh card, whatever it is called. An **ADVANCED · GLOBAL** note on the card says
-so while it is on.
+ssh card, whatever it is called. While it is on, the switch's tooltip is an
+**ADVANCED · GLOBAL** warning that says so.
 
 - `GET /api/agent-commit` lists the switched-on containers with no key, so a
   client learns it was allowed before it opens a session; `PUT` and `DELETE
@@ -54,6 +48,15 @@ so while it is on.
 - `os_open_session` no longer sends `allow_commit: false`, so Claude gets the
   right where a human switched it on; `os_run_test`'s own session still opts
   out. `os_help('commit')` explains the switch.
+
+### Fixed
+
+- A journal row stays on one line when the list is narrower than the full row
+  (about 980px: a 1024px window, the desktop app's compact width, a list beside
+  an open preview). It drops the session id, duration and size under a header
+  that still lines up; before, a narrow window wrapped the export links one
+  word per line, and a 1024px one cut export and trash off past a hidden
+  scrollbar.
 
 ## [1.10.0] — 2026-10-15
 
