@@ -54,3 +54,16 @@ def capability(hello: dict | None) -> dict:
         described["available"] = True
 
     return described
+
+
+# The Python test that drives Hoot in a browser, and the filter that narrows
+# it to one module: `docs/agent-guide.md`, "Hoot, headless".
+HOOT_TEST = "web.WebSuite.test_unit_desktop"
+
+
+def listing(module: str, major: int | None, files: list) -> dict:
+    """The `js` part of a module's test listing: its files, and a ready run."""
+    runner = runner_for(major)
+    run = {"test": HOOT_TEST, "params": f"@{module}"} if runner == "hoot" and files else None
+
+    return {"runner": runner, "files": files, "run": run}

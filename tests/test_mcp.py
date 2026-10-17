@@ -692,6 +692,22 @@ async def test_os_list_tests_uses_the_session_container_when_omitted(wired, monk
     assert "ok" not in result
 
 
+async def test_os_list_tests_answers_as_it_did_before_the_js_listing(wired, monkeypatch):
+    """The JS part is for an HTTP client; a module like web carries thousands
+    of test names in it, and an MCP agent was never handed them."""
+    async def fake_list(container, module, runner=None):
+
+        return {
+            "ok": True, "module": "web", "path": "/x/web", "classes": [],
+            "error": None, "error_code": None,
+            "js": {"runner": "hoot", "files": [], "run": None},
+        }
+
+    monkeypatch.setattr("odoo_sheller.discovery.list_tests", fake_list)
+    result = await server.os_list_tests("web", container="integra19")
+    assert set(result) == {"module", "path", "classes"}
+
+
 async def test_os_list_tests_no_session_requires_container(wired, monkeypatch):
     monkeypatch.setattr(server, "_keys", {})
     refusal = await server.os_list_tests("sale")

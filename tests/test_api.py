@@ -1008,6 +1008,13 @@ def test_a_stranger_still_cannot_close_a_live_session(client):
     assert response.status_code == 403
 
 
+JS_LISTING = {
+    "runner": "hoot",
+    "files": [{"path": "static/tests/a.test.js", "in_manifest": True, "tests": ["renders"]}],
+    "run": {"test": "web.WebSuite.test_unit_desktop", "params": "@widget"},
+}
+
+
 def test_list_tests_returns_the_catalogue(client, monkeypatch):
     async def fake_list(container, module, runner=None):
         assert container == "qbo19"
@@ -1020,6 +1027,7 @@ def test_list_tests_returns_the_catalogue(client, monkeypatch):
             "classes": [{"name": "TestAlpha", "spec": "widget.TestAlpha", "methods": []}],
             "error": None,
             "error_code": None,
+            "js": JS_LISTING,
         }
 
     monkeypatch.setattr("odoo_sheller.discovery.list_tests", fake_list)
@@ -1030,6 +1038,7 @@ def test_list_tests_returns_the_catalogue(client, monkeypatch):
         "module": "widget",
         "path": "/addons/widget",
         "classes": [{"name": "TestAlpha", "spec": "widget.TestAlpha", "methods": []}],
+        "js": JS_LISTING,
     }
     assert "ok" not in body
 

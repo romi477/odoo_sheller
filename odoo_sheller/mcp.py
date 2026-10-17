@@ -769,11 +769,16 @@ async def os_list_tests(module: str, container: str | None = None) -> Any:
             }
         target = described["container"]
 
-    return await _call(
+    listing = await _call(
         "GET",
         f"/api/containers/{target}/tests",
         params={"module": module},
     )
+    # The JS part is for an HTTP client: web's alone names thousands of tests.
+    if isinstance(listing, dict):
+        listing.pop("js", None)
+
+    return listing
 
 
 RUN_TEST_DESCRIPTION = (

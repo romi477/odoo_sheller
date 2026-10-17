@@ -5,6 +5,7 @@ import contextlib
 import json
 import re
 
+from odoo_sheller import js_tests
 from odoo_sheller.recipe import Access, Launch
 from odoo_sheller.transport import SSH_OPTS, docker_bin, ssh_destination
 
@@ -116,7 +117,7 @@ print(json.dumps(result))
 '''
 
 LIST_TESTS_SOURCE = r'''
-import ast, configparser, json, os, shutil, sys
+import ast, configparser, json, os, re, shutil, sys
 
 result = {"ok": False, "module": None, "path": None, "classes": [],
           "error": None, "error_code": None}
@@ -280,6 +281,172 @@ for class_name in sorted(collected):
         "methods": methods,
     })
 result["classes"] = classes
+
+
+# --- JS test files ------------------------------------------------------------
+#
+# The major decides the layout. 18 and later write Hoot files, `*.test.js`
+# under static/tests, bundled into web.assets_unit_tests; before that the
+# QUnit suite takes every .js under static/tests but tours and helpers,
+# bundled into web.qunit_suite_tests. Read as text from release.py, as the
+# probe reads it: importing odoo here is slow and can fail for no reason that
+# matters to a file listing.
+
+def odoo_major():
+    for root in (os.path.dirname(odoo_bin), "/usr/lib/python3/dist-packages"):
+        path = os.path.join(root, "odoo", "release.py")
+        if not os.path.exists(path):
+            continue
+        match = re.search(r"version_info\s*=\s*\(\s*['\"]?(\d+)", read_source(path))
+
+        return int(match.group(1)) if match else None
+
+    return None
+
+
+def js_layout(major):
+    """(bundle, is_test_file) for the major, or None when it has neither."""
+    if major is None or major < 15:
+
+        return None
+    if major >= 18:
+
+        return "web.assets_unit_tests", lambda rel: rel.endswith(".test.js")
+
+    def legacy(rel):
+        parts = rel.split("/")
+
+        return rel.endswith(".js") and "tours" not in parts[2:] and "helpers" not in parts[2:]
+
+    return "web.qunit_suite_tests", legacy
+
+
+def glob_regex(pattern):
+    """An asset glob as Odoo's ir.asset reads it: `**` crosses directories."""
+    out = []
+    index = 0
+    while index < len(pattern):
+        if pattern.startswith("**/", index):
+            out.append("(?:.*/)?")
+            index += 3
+        elif pattern.startswith("**", index):
+            out.append(".*")
+            index += 2
+        elif pattern[index] == "*":
+            out.append("[^/]*")
+            index += 1
+        elif pattern[index] == "?":
+            out.append("[^/]")
+            index += 1
+        else:
+            out.append(re.escape(pattern[index]))
+            index += 1
+
+    return re.compile("".join(out) + r"\Z")
+
+
+def bundle_steps(manifest_path, bundle):
+    """[(adds, regex)] for the bundle in manifest order, or None when unknown.
+
+    None for anything that is not plain data this can follow: a manifest
+    that is not one literal, an `assets` that is not a dict, a bundle that is
+    not a list, or a directive whose effect lies in another bundle (`include`).
+    """
+    try:
+        manifest = ast.literal_eval(read_source(manifest_path))
+    except Exception:
+
+        return None
+    if not isinstance(manifest, dict):
+
+        return None
+    assets = manifest.get("assets", {})
+    if not isinstance(assets, dict):
+
+        return None
+    entries = assets.get(bundle, [])
+    if not isinstance(entries, (list, tuple)):
+
+        return None
+    steps = []
+    for entry in entries:
+        if isinstance(entry, str):
+            adds, pattern = True, entry
+        elif isinstance(entry, (list, tuple)) and entry and entry[0] in ("prepend", "remove") \
+                and len(entry) == 2:
+            adds, pattern = entry[0] == "prepend", entry[1]
+        elif isinstance(entry, (list, tuple)) and entry and entry[0] in ("after", "before", "replace") \
+                and len(entry) == 3:
+            adds, pattern = True, entry[2]
+        else:
+
+            return None
+        if not isinstance(pattern, str):
+
+            return None
+        steps.append((adds, glob_regex(pattern.lstrip("/"))))
+
+    return steps
+
+
+def in_bundle(steps, path):
+    if steps is None:
+
+        return None
+    covered = False
+    for adds, regex in steps:
+        if regex.match(path):
+            covered = adds
+
+    return covered
+
+
+# The first string argument of test( / it( / describe(, and of their skip,
+# only, todo and debug forms. A name a template builds at run time is missed.
+TEST_NAME = re.compile(
+    r"\b(?:test|it|describe)(?:\.(?:skip|only|todo|debug))*\s*\(\s*"
+    r"(?:\"((?:[^\"\\\n]|\\.)*)\"|'((?:[^'\\\n]|\\.)*)'|`([^`$]*)`)"
+)
+
+
+def test_names(path):
+    try:
+        text = read_source(path)
+    except (OSError, UnicodeDecodeError):
+
+        return []
+    names = []
+    for match in TEST_NAME.finditer(text):
+        name = next(group for group in match.groups() if group is not None)
+        name = re.sub(r"\\(.)", r"\1", name)
+        if name not in names:
+            names.append(name)
+
+    return names
+
+
+result["odoo_major"] = odoo_major()
+js_files = []
+layout = js_layout(result["odoo_major"])
+static_tests = os.path.join(found, "static", "tests")
+if layout and os.path.isdir(static_tests):
+    bundle, is_test_file = layout
+    manifest_path = os.path.join(found, "__manifest__.py")
+    if not os.path.isfile(manifest_path):
+        manifest_path = os.path.join(found, "__openerp__.py")
+    steps = bundle_steps(manifest_path, bundle)
+    for directory, subdirs, names in os.walk(static_tests):
+        subdirs.sort()
+        for name in sorted(names):
+            rel = os.path.relpath(os.path.join(directory, name), found).replace(os.sep, "/")
+            if not is_test_file(rel):
+                continue
+            js_files.append({
+                "path": rel,
+                "in_manifest": in_bundle(steps, module + "/" + rel),
+                "tests": test_names(os.path.join(directory, name)),
+            })
+result["js_files"] = js_files
 result["ok"] = True
 print(json.dumps(result))
 '''
@@ -786,5 +953,7 @@ async def list_tests(container: str, module: str, runner=None) -> dict:
             "error": (err.strip() or out.strip() or f"list tests failed with code {code}"),
             "error_code": None,
         }
+    if payload.get("ok"):
+        payload["js"] = js_tests.listing(module, payload.pop("odoo_major", None), payload.pop("js_files", []))
 
     return payload

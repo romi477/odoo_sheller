@@ -883,3 +883,160 @@ def test_the_probe_script_reads_workers_and_the_http_port_from_the_config(tmp_pa
     facts = dict(line.split("=", 1) for line in out.splitlines())
     assert facts["workers"] == "4"
     assert facts["http_port"] == "8070"
+
+
+# --- JS test files in the listing ---------------------------------------------
+
+def _js_addon(tmp_path, major, manifest, files):
+    """An addon on a fake Odoo of `major`, with JS files under static/tests."""
+    extra = tmp_path / "extra"
+    addon = extra / "widget"
+    addon.mkdir(parents=True)
+    (addon / "__manifest__.py").write_text(manifest, encoding="utf-8")
+    for rel, text in files.items():
+        path = addon / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    _fake_bin, conf = _write_fake_odoo(tmp_path, f"addons_path = {extra}")
+    (tmp_path / "odoo" / "release.py").write_text(
+        f"version_info = ({major}, 0, 0, 'final', 0, '')\n", encoding="utf-8"
+    )
+
+    return _run_list_tests_source(tmp_path, "widget", conf)
+
+
+HOOT_FILE = (
+    'import { describe, expect, test } from "@odoo/hoot";\n'
+    'describe("badge", () => {\n'
+    '    test("renders the badge", async () => {});\n'
+    "    test.skip('keeps the order on sort', async () => {});\n"
+    "    test(`built ${name} at run time`, async () => {});\n"
+    "});\n"
+)
+
+
+def js_files(payload):
+
+    return {row["path"]: row for row in payload["js_files"]}
+
+
+def test_a_hoot_file_named_in_the_manifest_is_in_it(tmp_path):
+    payload = _js_addon(tmp_path, 19, (
+        "{'name': 'widget', 'assets': {'web.assets_unit_tests': "
+        "['widget/static/tests/a.test.js']}}\n"
+    ), {"static/tests/a.test.js": HOOT_FILE, "static/tests/mock.js": "export const x = 1;\n"})
+    assert payload["ok"] is True
+    assert payload["odoo_major"] == 19
+    rows = js_files(payload)
+    assert list(rows) == ["static/tests/a.test.js"], "a helper module is not a test file"
+    assert rows["static/tests/a.test.js"]["in_manifest"] is True
+    # A name built at run time is not a name a regex can read.
+    assert rows["static/tests/a.test.js"]["tests"] == [
+        "badge", "renders the badge", "keeps the order on sort",
+    ]
+
+
+def test_a_hoot_file_the_manifest_does_not_name_is_not_in_the_run(tmp_path):
+    payload = _js_addon(tmp_path, 19, "{'name': 'widget', 'assets': {}}\n",
+                        {"static/tests/a.test.js": HOOT_FILE})
+    assert js_files(payload)["static/tests/a.test.js"]["in_manifest"] is False
+
+
+def test_a_glob_in_the_manifest_covers_a_nested_file_and_a_remove_takes_it_back(tmp_path):
+    payload = _js_addon(tmp_path, 18, (
+        "{'name': 'widget', 'assets': {'web.assets_unit_tests': ["
+        "'widget/static/tests/**/*', ('remove', 'widget/static/tests/tours/**/*')]}}\n"
+    ), {
+        "static/tests/a.test.js": HOOT_FILE,
+        "static/tests/deep/b.test.js": HOOT_FILE,
+        "static/tests/tours/c.test.js": HOOT_FILE,
+    })
+    rows = js_files(payload)
+    assert rows["static/tests/a.test.js"]["in_manifest"] is True
+    assert rows["static/tests/deep/b.test.js"]["in_manifest"] is True
+    assert rows["static/tests/tours/c.test.js"]["in_manifest"] is False
+
+
+def test_a_file_under_another_bundle_is_not_in_the_unit_tests(tmp_path):
+    payload = _js_addon(tmp_path, 19, (
+        "{'name': 'widget', 'assets': {'web.assets_tests': ['widget/static/tests/**/*']}}\n"
+    ), {"static/tests/a.test.js": HOOT_FILE})
+    assert js_files(payload)["static/tests/a.test.js"]["in_manifest"] is False
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        # A name, not a literal: the manifest is read, never executed.
+        "BUNDLE = 'web.assets_unit_tests'\n{'name': 'widget', 'assets': {BUNDLE: []}}\n",
+        "{'name': 'widget', 'assets': {'web.assets_unit_tests': "
+        "[('include', 'web.assets_unit_tests_setup')]}}\n",
+        "{'name': 'widget', 'assets': {'web.assets_unit_tests': 'widget/static/tests/*'}}\n",
+        "{'name': 'widget', 'assets': ['web.assets_unit_tests']}\n",
+        "{'name': 'widget'\n",
+    ],
+)
+def test_a_manifest_that_cannot_be_read_as_data_says_it_does_not_know(tmp_path, manifest):
+    payload = _js_addon(tmp_path, 19, manifest, {"static/tests/a.test.js": HOOT_FILE})
+    assert payload["ok"] is True
+    assert js_files(payload)["static/tests/a.test.js"]["in_manifest"] is None
+
+
+def test_a_module_without_js_tests_lists_none(tmp_path):
+    payload = _js_addon(tmp_path, 19, "{'name': 'widget'}\n", {"static/src/x.js": "1;\n"})
+    assert payload["ok"] is True
+    assert payload["js_files"] == []
+    assert payload["classes"] == []
+
+
+def test_the_legacy_layout_is_every_js_file_but_tours_and_helpers(tmp_path):
+    payload = _js_addon(tmp_path, 16, (
+        "{'name': 'widget', 'assets': {'web.qunit_suite_tests': ['widget/static/tests/**/*.js']}}\n"
+    ), {
+        "static/tests/widget_tests.js": "QUnit.test('opens', async () => {});\n",
+        "static/tests/tours/tour.js": "1;\n",
+        "static/tests/helpers/mock.js": "1;\n",
+    })
+    rows = js_files(payload)
+    assert list(rows) == ["static/tests/widget_tests.js"]
+    assert rows["static/tests/widget_tests.js"]["in_manifest"] is True
+
+
+def test_an_unknown_major_lists_no_js(tmp_path):
+    extra = tmp_path / "extra"
+    addon = extra / "widget"
+    (addon / "static" / "tests").mkdir(parents=True)
+    (addon / "__manifest__.py").write_text("{}\n", encoding="utf-8")
+    (addon / "static" / "tests" / "a.test.js").write_text(HOOT_FILE, encoding="utf-8")
+    _fake_bin, conf = _write_fake_odoo(tmp_path, f"addons_path = {extra}")
+    payload = _run_list_tests_source(tmp_path, "widget", conf)
+    assert payload["odoo_major"] is None
+    assert payload["js_files"] == []
+
+
+async def test_the_listing_hands_a_hoot_module_its_run(tmp_path):
+    payload = json.dumps({
+        "ok": True, "module": "widget", "path": "/x/widget", "classes": [],
+        "error": None, "error_code": None, "odoo_major": 19,
+        "js_files": [{"path": "static/tests/a.test.js", "in_manifest": True, "tests": ["x"]}],
+    })
+    result = await discovery.list_tests("qbo19", "widget", runner=fake_runner([(0, payload, "")]))
+    assert result["js"] == {
+        "runner": "hoot",
+        "files": [{"path": "static/tests/a.test.js", "in_manifest": True, "tests": ["x"]}],
+        "run": {"test": "web.WebSuite.test_unit_desktop", "params": "@widget"},
+    }
+
+
+@pytest.mark.parametrize(("major", "runner", "files"), [
+    (19, "hoot", []),
+    (16, "qunit", [{"path": "static/tests/a.js", "in_manifest": True, "tests": []}]),
+    (None, None, []),
+])
+async def test_the_listing_offers_no_run_it_cannot_make(major, runner, files):
+    payload = json.dumps({
+        "ok": True, "module": "widget", "path": "/x/widget", "classes": [],
+        "error": None, "error_code": None, "odoo_major": major, "js_files": files,
+    })
+    result = await discovery.list_tests("c", "widget", runner=fake_runner([(0, payload, "")]))
+    assert result["js"] == {"runner": runner, "files": files, "run": None}

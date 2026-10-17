@@ -861,6 +861,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
             "module": result["module"],
             "path": result["path"],
             "classes": result["classes"],
+            "js": result.get("js"),
         }
 
     @app.post("/api/sessions")
