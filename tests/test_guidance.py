@@ -8,7 +8,9 @@ what keeps that change invisible to every MCP client.
 """
 
 import hashlib
+import re
 
+from odoo_sheller import guidance, rules
 from odoo_sheller import mcp as server
 
 # SHA-256 of every text as an MCP client receives it. Change an entry only in
@@ -58,3 +60,46 @@ async def test_a_session_hands_over_the_same_rules_text(monkeypatch):
     monkeypatch.setattr(server, "_rules_given", set())
     described = server._with_rules({"odoo": "17.0"})
     assert sha(described["rules"]["text"]) == MCP_GOLDEN["odoo_17"]
+
+
+def served_texts() -> dict[str, str]:
+    """Every text as the daemon keeps it, markers and all."""
+    texts = {"instructions": guidance.INSTRUCTIONS}
+    for topic in guidance.topic_names():
+        texts[topic] = guidance.text_of(topic)[1]
+
+    return texts
+
+
+async def test_the_markers_are_the_mcp_tools_without_their_prefix():
+    """A marker an MCP client cannot resolve would reach it as `{{name}}`, and
+    a tool with no marker is one an HTTP client is never told to substitute."""
+    tools = {tool.name for tool in await server.mcp.list_tools()}
+    assert {guidance.MCP_PREFIX + name for name in guidance.MARKERS} == tools
+
+
+def test_every_marker_in_a_text_names_a_tool():
+    unknown = {
+        (topic, name)
+        for topic, text in served_texts().items()
+        for name in re.findall(r"\{\{(.*?)\}\}", text)
+        if name not in guidance.MARKERS
+    }
+    assert unknown == set()
+
+
+def test_no_marker_survives_the_mcp_rendering():
+    for topic, text in served_texts().items():
+        assert "{{" not in guidance.render_for_mcp(text), topic
+
+
+def test_the_served_text_names_no_mcp_tool():
+    """An HTTP client has its own verbs; an `os_` literal left in a text is a
+    name it cannot call and was never told to replace."""
+    for topic, text in served_texts().items():
+        assert re.findall(r"\bos_\w+", text) == [], topic
+
+
+def test_the_rules_files_carry_markers_too():
+    """`common.md` names tools as well, and it goes in front of every major."""
+    assert "{{run_test}}" in rules.common()

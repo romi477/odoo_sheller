@@ -80,7 +80,7 @@ def test_the_common_part_says_how_module_code_is_written_on_any_major():
     text = section.group(1)
     for says in (
         "_inherit", "xpath", "UserError", "ValidationError", "_()",
-        "@api.constrains", "access row", "_logger", "os_run_test",
+        "@api.constrains", "access row", "_logger", "{{run_test}}",
         "blank line before the final `return`",
     ):
         assert says in text, says

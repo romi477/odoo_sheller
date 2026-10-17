@@ -16,6 +16,7 @@ import pytest
 from odoo_sheller import mcp as server
 from odoo_sheller import rules
 from odoo_sheller.api import create_app
+from odoo_sheller.guidance import render_for_mcp
 
 MODULE = Path(__file__).resolve().parent.parent / "odoo_sheller" / "mcp.py"
 
@@ -2095,7 +2096,7 @@ async def test_the_first_session_on_a_major_carries_its_rules_and_later_ones_poi
     the context again."""
     first = await server.os_open_session(container="integra19", database="integra_db_19")
     assert first["rules"]["topic"] == "odoo_19"
-    assert first["rules"]["text"] == rules.for_major(19)
+    assert first["rules"]["text"] == render_for_mcp(rules.for_major(19))
 
     again = await server.os_open_session(container="integra19", database="integra_db_19")
     assert "text" not in again["rules"]
@@ -2108,7 +2109,7 @@ async def test_the_first_session_on_a_major_carries_its_rules_and_later_ones_poi
 async def test_an_adopted_session_carries_the_rules_too(wired, monkeypatch):
     monkeypatch.setattr(server, "_keys", {})
     described = await server.os_attach_session("s1", "key-s1")
-    assert described["rules"]["text"] == rules.for_major(19)
+    assert described["rules"]["text"] == render_for_mcp(rules.for_major(19))
 
 
 async def test_a_major_without_rules_says_so_rather_than_staying_silent(wired):
@@ -2121,7 +2122,7 @@ async def test_a_major_without_rules_says_so_rather_than_staying_silent(wired):
 
 async def test_os_help_answers_a_major_with_its_rules():
     out = await server.os_help("odoo_17")
-    assert out == {"topic": "odoo_17", "text": rules.for_major(17)}
+    assert out == {"topic": "odoo_17", "text": render_for_mcp(rules.for_major(17))}
 
 
 async def test_os_help_lists_the_majors_that_have_rules():
