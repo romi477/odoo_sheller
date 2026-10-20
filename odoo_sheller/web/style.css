@@ -520,23 +520,19 @@ button.region-toggle:active:not(:disabled) {
   min-width: 0;
 }
 
-/* The name holds a column of its own width, so the checkbox after it sits in
-   the same place on every card; a longer name pushes it, and is still shown
-   whole. */
-.name-line .name {
-  flex: none;
-  min-width: 12ch;
-}
-
 /* Agents may commit on this container: a checkbox on the name line, since it
    belongs to the container and covers every database in it. Muted when off,
    amber when on — amber is the colour of writing here, as on Grant commit.
    GLOBAL shows only while it is on; off, the title says it. data-on is what the
-   daemon answered, not the tick a click made before it did. */
+   daemon answered, not the tick a click made before it did. A neutral pipe
+   parts it from the name, with the name line's own space on either side; it
+   follows the name wherever that ends. */
 .agent-commit {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  border-left: 1px solid var(--border-strong);
+  padding-left: 2ch;
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;

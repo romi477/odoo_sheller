@@ -3766,14 +3766,21 @@ def test_the_container_card_carries_the_agent_commit_checkbox_after_the_name():
     )
 
 
-def test_the_checkbox_does_not_move_with_the_length_of_the_name():
-    """Cards stack, and a checkbox that sits wherever the name ends is in a
-    different place on each. The name holds a column of its own width."""
+def test_a_neutral_pipe_parts_the_name_from_the_checkbox():
+    """Name, space, pipe, space, checkbox: the pipe says the checkbox is a
+    setting of the container, not more of its name. It follows the name, so
+    the name reserves no column for it, and the pipe is a border colour, not
+    amber — it stays put when the checkbox turns on."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    block = re.search(r"\.name-line \.name \{.*?\}", css, re.DOTALL)
-    assert block is not None
-    assert re.search(r"min-width: \d+ch;", block.group(0))
-    assert "flex: none;" in block.group(0)
+    assert not re.search(r"\.name-line \.name \{", css)
+    label = re.search(r"\.agent-commit \{.*?\}", css, re.DOTALL)
+    assert label is not None
+    assert "border-left: 1px solid var(--border-strong);" in label.group(0)
+    gap = re.search(r"\.name-line\s*\{([^}]*)\}", css).group(1)
+    space = re.search(r"gap: (\S+);", gap).group(1)
+    assert f"padding-left: {space};" in label.group(0), "the same space both sides"
+    on = re.search(r'\.agent-commit\[data-on="true"\] \{.*?\}', css, re.DOTALL).group(0)
+    assert "border" not in on
 
 
 def test_global_shows_only_while_the_container_is_on():
