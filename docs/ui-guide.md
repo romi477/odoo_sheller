@@ -101,10 +101,9 @@ restart or a config change.
   container's `odoo.conf`, which in a dev container is almost always the right
   answer. If the database list couldn't be read at all, a free-text field takes
   its place.
-- At the right of the facts, under the actions, a checkbox: **agents may
-  commit**. It sits in the same place on every card whatever the name, and the
-  first row stays the name's. It is not beside **Open session** because it is
-  no option of the open: it covers every agent session on the container. Off is the usual way — an agent gets the
+- Beside the name, a checkbox: **agents may commit**. The name holds a column
+  of its own width, so the checkbox sits in the same place on every card; only
+  a name longer than that pushes it. Off is the usual way — an agent gets the
   right one session at a time, by **Grant commit** in that session — and its
   title says so, and that the checkbox is global. On, every agent session on
   this container may commit, to any database in it, until you turn it off; it

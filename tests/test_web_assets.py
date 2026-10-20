@@ -3746,20 +3746,15 @@ def _container_card() -> str:
     return re.search(r'<template id="container-card">(.*?)</template>', html, re.DOTALL).group(1)
 
 
-def test_the_container_card_carries_the_agent_commit_checkbox_with_its_facts():
-    """With the facts under the name, not on the name line: it belongs to the
-    container, like its version and its config, and leaves the first row to
-    the name and the actions. Not beside Open session either — it is no option
-    of the open, it covers every agent session on the container. A plain
+def test_the_container_card_carries_the_agent_commit_checkbox_after_the_name():
+    """On the name line, right after the name: it belongs to the container,
+    not to the database picked below — it covers every one of them. A plain
     checkbox in a label, so the words click it too."""
     card = _container_card()
     name_line = re.search(r'<span class="name-line">(.*?)\n\s*</span>\n\s*</div>', card, re.DOTALL)
     assert name_line is not None
-    assert "agent-commit" not in name_line.group(1)
-    facts = re.search(r'<div class="card-facts">(.*?)\n          </div>', card, re.DOTALL)
-    assert facts is not None
-    text = facts.group(1)
-    assert text.index('class="meta"') < text.index('class="agent-commit"')
+    text = name_line.group(1)
+    assert text.index('class="name mono"') < text.index('class="agent-commit"')
     label = re.search(r'<label[^>]*class="agent-commit".*?</label>', text, re.DOTALL).group(0)
     assert '<input type="checkbox"' in label
     assert 'role="switch"' not in label and "track" not in label
@@ -3771,20 +3766,14 @@ def test_the_container_card_carries_the_agent_commit_checkbox_with_its_facts():
     )
 
 
-def test_the_checkbox_holds_the_right_edge_of_the_facts():
-    """Cards stack, and the checkbox sits in the same place on each: a column
-    of its own at the right of the facts, under the actions. The name no
-    longer reserves a column for it."""
+def test_the_checkbox_does_not_move_with_the_length_of_the_name():
+    """Cards stack, and a checkbox that sits wherever the name ends is in a
+    different place on each. The name holds a column of its own width."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    facts = re.search(r"\.card-facts:has\(\.agent-commit\) \{.*?\}", css, re.DOTALL)
-    assert facts is not None
-    assert "display: grid;" in facts.group(0)
-    assert re.search(r"grid-template-columns: minmax\(0, 1fr\) auto;", facts.group(0))
-    label = re.search(r"\.card-facts \.agent-commit \{.*?\}", css, re.DOTALL)
-    assert label is not None
-    assert "grid-area: 1 / 2;" in label.group(0)
-    assert "justify-self: end;" in label.group(0)
-    assert not re.search(r"\.name-line \.name \{", css)
+    block = re.search(r"\.name-line \.name \{.*?\}", css, re.DOTALL)
+    assert block is not None
+    assert re.search(r"min-width: \d+ch;", block.group(0))
+    assert "flex: none;" in block.group(0)
 
 
 def test_global_shows_only_while_the_container_is_on():

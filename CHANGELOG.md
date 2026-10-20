@@ -10,9 +10,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Changed
 
 - *Agents may commit* on a container card is a plain checkbox, not a toggle,
-  and it sits in the same place on every card: at the right of the facts,
-  under the actions, so the name has the first row to itself. The **GLOBAL**
-  tag shows only while it is on; off, its title still says it is global.
+  and it sits in the same place on every card: the name holds a column of its
+  own width, so a short name no longer pulls it left. The **GLOBAL** tag shows
+  only while it is on; off, its title still says it is global.
 
 ## [1.11.0] — 2026-10-16
 
