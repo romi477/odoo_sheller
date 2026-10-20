@@ -1515,10 +1515,11 @@ function buildContainerCard(name) {
     copyTarget(name);
   });
   card.querySelector('.agent-commit').addEventListener('click', (event) => {
-    // A switch, not a way into the picker: the card's own click must not see it.
+    // A checkbox, not a way into the picker: the card's own click must not
+    // see it — neither the label's click nor the one it passes to the box.
     event.stopPropagation();
-    toggleAgentCommit(name);
   });
+  card.querySelector('.agent-commit input').addEventListener('change', () => toggleAgentCommit(name));
   card.querySelector('.close-connected').addEventListener(
     'click', () => closeSessionsForTarget(name),
   );
@@ -1846,11 +1847,12 @@ const AGENT_COMMIT_WARNING = 'ADVANCED · GLOBAL — Every agent session in this
 /// wrong. Everything else the probe found — image, status, config path — says
 /// nothing about how to work in the session, so it stays on the card.
 function showAgentCommit(card, on) {
-  const button = card.querySelector('.agent-commit');
-  button.setAttribute('aria-checked', String(on));
+  const label = card.querySelector('.agent-commit');
+  label.querySelector('input').checked = on;
+  label.dataset.on = String(on);
   // Off, the markup's own title: what the switch is and that off is usual.
-  button.dataset.offTitle ??= button.title;
-  button.title = on ? AGENT_COMMIT_WARNING : button.dataset.offTitle;
+  label.dataset.offTitle ??= label.title;
+  label.title = on ? AGENT_COMMIT_WARNING : label.dataset.offTitle;
 }
 
 // Every agent session on this container may commit while it is on: a human's
@@ -1863,9 +1865,9 @@ async function toggleAgentCommit(name) {
 
     return;
   }
-  const button = card.querySelector('.agent-commit');
+  const box = card.querySelector('.agent-commit input');
   const path = `/api/agent-commit/${encodeURIComponent(name)}`;
-  button.disabled = true;
+  box.disabled = true;
   try {
     const answer = await withAdminRetry(() => (container.agent_commit
       ? api.del(path, adminHeaders())
@@ -1874,7 +1876,7 @@ async function toggleAgentCommit(name) {
   } catch (error) {
     noticeDialog(`Could not change "agents may commit" on ${name}: ${error.message}`);
   } finally {
-    button.disabled = false;
+    box.disabled = false;
     showAgentCommit(card, Boolean(container.agent_commit));
   }
 }

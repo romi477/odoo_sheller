@@ -3680,9 +3680,13 @@ def test_a_card_has_a_1px_cyan_edge_that_doubles_under_the_pointer():
 def test_a_field_in_focus_is_edged_in_cyan_at_1px_not_the_browser_ring():
     """The browser's own focus ring is a thick blue the page uses nowhere else.
     A field being typed into keeps its 1px edge and turns it cyan instead; the
-    radio dots of the connect modes keep their own ring."""
+    radio dots of the connect modes and the agents-may-commit checkbox keep
+    their own ring."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    rule = re.search(r'\nselect:focus,\s*input:not\(\[type="radio"\]\):focus\s*\{([^}]*)\}', css)
+    rule = re.search(
+        r'\nselect:focus,\s*input:not\(\[type="radio"\], \[type="checkbox"\]\):focus\s*\{([^}]*)\}',
+        css,
+    )
     assert rule is not None
     assert "outline: none" in rule.group(1)
     assert "border-color: var(--cyan)" in rule.group(1)
@@ -3742,22 +3746,44 @@ def _container_card() -> str:
     return re.search(r'<template id="container-card">(.*?)</template>', html, re.DOTALL).group(1)
 
 
-def test_the_container_card_carries_the_agent_commit_switch_after_the_name():
+def test_the_container_card_carries_the_agent_commit_checkbox_after_the_name():
     """On the name line, right after the name: it belongs to the container,
-    not to the database picked below — it covers every one of them."""
+    not to the database picked below — it covers every one of them. A plain
+    checkbox in a label, so the words click it too."""
     card = _container_card()
     name_line = re.search(r'<span class="name-line">(.*?)\n\s*</span>\n\s*</div>', card, re.DOTALL)
     assert name_line is not None
     text = name_line.group(1)
     assert text.index('class="name mono"') < text.index('class="agent-commit"')
-    switch = re.search(r'<button[^>]*class="agent-commit".*?</button>', text, re.DOTALL).group(0)
-    assert 'role="switch"' in switch and 'aria-checked="false"' in switch
-    assert "agents may commit" in switch
-    assert 'class="scope">global<' in switch
-    title = re.search(r'title="([^"]*)"', switch).group(1)
+    label = re.search(r'<label[^>]*class="agent-commit".*?</label>', text, re.DOTALL).group(0)
+    assert '<input type="checkbox"' in label
+    assert 'role="switch"' not in label and "track" not in label
+    assert "agents may commit" in label
+    assert 'class="scope">global<' in label
+    title = re.search(r'title="([^"]*)"', label).group(1)
     assert "Global" in title and "Grant commit" in title, (
         "off is the usual way, and the title has to say so"
     )
+
+
+def test_the_checkbox_does_not_move_with_the_length_of_the_name():
+    """Cards stack, and a checkbox that sits wherever the name ends is in a
+    different place on each. The name holds a column of its own width."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    block = re.search(r"\.name-line \.name \{.*?\}", css, re.DOTALL)
+    assert block is not None
+    assert re.search(r"min-width: \d+ch;", block.group(0))
+    assert "flex: none;" in block.group(0)
+
+
+def test_global_shows_only_while_the_container_is_on():
+    """Off, the word would read as a state it is not in; the title still says
+    the switch is global."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    hidden = re.search(r"\.agent-commit \.scope \{.*?\}", css, re.DOTALL)
+    assert hidden is not None and "display: none;" in hidden.group(0)
+    shown = re.search(r'\.agent-commit\[data-on="true"\] \.scope \{.*?\}', css, re.DOTALL)
+    assert shown is not None and "display: none" not in shown.group(0)
 
 
 def test_the_agent_commit_warning_is_the_switch_tooltip_while_it_is_on(app_js):
@@ -3807,8 +3833,29 @@ def test_a_policy_event_keeps_where_the_right_came_from(app_js):
         assert "commit_grant" in block
 
 
-def test_the_switch_is_amber_when_on():
+def test_the_checkbox_is_amber_when_on():
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    block = re.search(r'\.agent-commit\[aria-checked="true"\][^{]*\{.*?\}', css, re.DOTALL)
+    block = re.search(r'\.agent-commit\[data-on="true"\] \{.*?\}', css, re.DOTALL)
     assert block is not None
     assert "var(--amber)" in block.group(0)
+    # Drawn like the Local / Odoo.sh radios: every input on the page has a
+    # 220px minimum, and a native box would not take the page's colours.
+    box = re.search(r"\.agent-commit input \{.*?\}", css, re.DOTALL)
+    assert box is not None
+    for rule in ("appearance: none;", "min-width: 0;", "width: 13px;"):
+        assert rule in box.group(0), rule
+    checked = re.search(r"\.agent-commit input:checked \{.*?\}", css, re.DOTALL)
+    assert checked is not None and "var(--amber)" in checked.group(0)
+    assert re.search(r"\.agent-commit input:focus-visible \{[^}]*outline: 2px", css)
+
+
+def test_the_cards_say_on_from_the_daemon_not_from_the_click(app_js):
+    """A click ticks the box before the daemon answers; what stays is what it
+    answered."""
+    body = re.search(r"function showAgentCommit\(.*?\n\}", app_js, re.DOTALL).group(0)
+    assert ".checked = on" in body
+    assert "dataset.on = String(on)" in body
+    listener = re.search(
+        r"card\.querySelector\('\.agent-commit input'\)\.addEventListener\('change'", app_js
+    )
+    assert listener is not None

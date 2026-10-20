@@ -202,13 +202,10 @@
                 <span class="name mono"></span>
                 <!-- Global: every agent session on this container, every
                      database in it. Off is the usual way, a grant per session. -->
-                <button
-                  type="button"
+                <label
                   class="agent-commit"
-                  role="switch"
-                  aria-checked="false"
                   title="Global — covers every agent session on this container, now and later, on any database in it. Off is the usual way: grant commit to one session at a time with Grant commit in that session."
-                ><span class="track" aria-hidden="true"></span>agents may commit <span class="scope">global</span></button>
+                ><input type="checkbox">agents may commit <span class="scope">global</span></label>
                 <span class="badge untested" hidden>untested</span>
                 <span class="badge connected" hidden></span>
               </span>

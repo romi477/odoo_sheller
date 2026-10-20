@@ -101,13 +101,16 @@ restart or a config change.
   container's `odoo.conf`, which in a dev container is almost always the right
   answer. If the database list couldn't be read at all, a free-text field takes
   its place.
-- Beside the name, a switch: **agents may commit**, tagged **GLOBAL**. Off is
-  the usual way — an agent gets the right one session at a time, by **Grant
-  commit** in that session — and its title says so. On, every agent session on
+- Beside the name, a checkbox: **agents may commit**. The name holds a column
+  of its own width, so the checkbox sits in the same place on every card; only
+  a name longer than that pushes it. Off is the usual way — an agent gets the
+  right one session at a time, by **Grant commit** in that session — and its
+  title says so, and that the checkbox is global. On, every agent session on
   this container may commit, to any database in it, until you turn it off; it
-  survives restarts and never applies to a remote target. It turns amber, and
-  for as long as it is on its tooltip is an **ADVANCED · GLOBAL** warning that
-  says exactly that. Turning it either way takes the admin key, like writing a
+  survives restarts and never applies to a remote target. It turns amber,
+  gains a **GLOBAL** tag, and for as long as it is on its tooltip is an
+  **ADVANCED · GLOBAL** warning that says exactly that. The box shows what the
+  daemon answered, not the tick a click made before it did. Turning it either way takes the admin key, like writing a
   card; the desktop app supplies it. Off also takes the right from any agent
   session on the container that holds it, a grant you made by hand included.
 - A card stacks its name above its keys only when the width is really gone —
