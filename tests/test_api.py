@@ -171,8 +171,9 @@ class FakeRegistry:
         return None
 
     async def agent_commit_allows(self, container):
+        # A set names the containers that are on; True is every one.
 
-        return self.allows
+        return container in self.allows if isinstance(self.allows, set) else self.allows
 
     def set_agent_commit(self, container, on):
         if on:
@@ -2136,6 +2137,36 @@ def test_an_agent_may_open_with_commit_where_the_switch_is_on(client):
     # the switch when it is built, so one turned off while the probe and the
     # spawn ran is not outlived by a right taken at the door.
     assert client.registry.open_kwargs["allow_commit"] is None
+
+
+def test_a_reopen_asks_the_switch_about_the_container_it_reopens(client):
+    """With `replace` the container comes from the journal, not the request.
+    The gate asked the switch about the request's container — none — and
+    refused a reopen the same open without `replace` was allowed."""
+    client.registry.allows = {"mig18"}
+    client.registry.past_target = {
+        "container": "mig18", "database": "db", "odoo_bin": "/odoo-bin",
+        "target_kind": "docker",
+    }
+    response = client.post(
+        "/api/sessions",
+        json={"replace": "lost1", "owner": {"kind": "agent"}, "allow_commit": True},
+    )
+    assert response.status_code == 200, response.text
+    assert client.registry.open_kwargs["allow_commit"] is None
+
+
+def test_a_reopen_of_a_remote_session_is_not_let_through_by_a_namesake(client):
+    """A card's name is free text and can equal a container's."""
+    client.registry.allows = {"mig18"}
+    client.registry.past_target = {
+        "container": "mig18", "database": "db", "odoo_bin": None, "target_kind": "ssh",
+    }
+    response = client.post(
+        "/api/sessions",
+        json={"replace": "lost1", "owner": {"kind": "agent"}, "allow_commit": True},
+    )
+    assert response.status_code == 403
 
 
 def test_the_admin_key_still_opens_an_agent_with_commit_granted(client):

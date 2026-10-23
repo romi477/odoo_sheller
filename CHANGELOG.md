@@ -26,6 +26,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   with a random one it never printed, refusing every admin act on every start.
   It now stops and names the file; a new key is written whole before it is
   linked into place, so a crash can no longer leave the file empty.
+- An agent reopening a lost session with `replace` and `allow_commit: true` on
+  a container with *agents may commit* on was refused: the gate asked the
+  switch about the request's container, which a reopen leaves out. It now asks
+  about the container the session is reopened on.
 
 ## [1.11.0] — 2026-10-16
 

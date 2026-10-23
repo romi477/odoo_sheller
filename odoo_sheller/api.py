@@ -864,6 +864,20 @@ def create_app(registry: Registry | None = None) -> FastAPI:
             "js": result.get("js"),
         }
 
+    def reopened_container(body: OpenBody) -> str | None:
+        """The container an open will land in, as the registry will pick it.
+
+        With `replace` and no container of its own, that is the lost session's
+        — and only if it ran on a local one: a card's name can equal any
+        container's, and no switch ever reaches a card.
+        """
+        if body.container or not body.replace:
+
+            return body.container
+        previous = app.state.registry.target_of_past_session(body.replace) or {}
+
+        return previous.get("container") if previous.get("target_kind") == "docker" else None
+
     @app.post("/api/sessions")
     async def open_session(
         body: OpenBody,
@@ -909,7 +923,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
             # anyway. Never a card — a remote target is not a container, and
             # its name is free text that can equal one.
             if body.target_id is None and await app.state.registry.agent_commit_allows(
-                body.container
+                reopened_container(body)
             ):
                 # Passed on as "let the switch decide", not as a grant. The
                 # session asks the switch when it is built, with no wait before
