@@ -301,19 +301,37 @@ async def os_open_session(
     odoo_bin: str | None = None,
     replace: str | None = None,
 ) -> Any:
+    # The daemon waits far longer for hello than a host waits for a tool call,
+    # and a session whose open timed out is still registered. The token is how
+    # it is found again; its key was only ever in the answer we gave up on.
+    client_token = f"{AGENT_LABEL}-{secrets.token_urlsafe(8)}"
     opened = await _call(
         "POST",
         "/api/sessions",
+        client_timeout=MCP_CALL_BUDGET,
         json={
             "container": container,
             "database": database,
             "odoo_bin": odoo_bin,
             "replace": replace,
             "owner": {"kind": "agent", "label": AGENT_LABEL},
+            "client_token": client_token,
             # Left out, not false: false is an opt-out the daemon honours, and
             # would keep the right from a container a human switched on.
         },
     )
+    if opened.get("error") == "request_timed_out":
+
+        return {
+            **opened,
+            "client_token": client_token,
+            "recovery": (
+                "the session may still be starting — find it with "
+                "os_list_sessions by this client_token before opening another. "
+                "This server never received its write key: ask the human to "
+                "hand it over (then os_attach_session) or to close it"
+            ),
+        }
     if opened.get("error"):
 
         return opened

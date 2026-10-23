@@ -13,6 +13,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   set off from the container's name by a neutral pipe. The **GLOBAL** tag
   shows only while it is on; off, its title still says it is global.
 
+### Fixed
+
+- `os_open_session` whose call timed out while Odoo was still starting left a
+  session nobody held the key to, and nothing to find it by. It now waits no
+  longer than a tool call may, sends a `client_token`, and hands it back with
+  the timeout, as `os_run_test` already did.
+
 ## [1.11.0] — 2026-10-16
 
 A human can switch a local container on for agents: while *agents may commit*

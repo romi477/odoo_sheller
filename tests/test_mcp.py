@@ -300,6 +300,39 @@ async def test_run_test_reports_the_session_it_may_have_stranded(monkeypatch):
     assert "os_list_sessions" in refusal["recovery"]
 
 
+async def test_open_session_reports_the_session_it_may_have_stranded(monkeypatch):
+    """The daemon waits up to 90s for hello, far past what a host waits for a
+    tool call. A timed-out open still registers the session, and its key was
+    only ever in the response nobody read: without a token to find it by, the
+    agent opens a second one beside it."""
+    sent = []
+
+    class Slow:
+        def __init__(self, *args, **kwargs):
+            sent.append(kwargs.get("timeout"))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def request(self, *args, **kwargs):
+            sent.append(kwargs.get("json"))
+            raise httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", Slow)
+    monkeypatch.setattr(server, "_keys", {})
+
+    refusal = await server.os_open_session(container="c", database="db")
+
+    assert sent[0] <= server.MCP_CALL_BUDGET
+    assert refusal["error"] == "request_timed_out"
+    assert refusal["client_token"] == sent[1]["client_token"]
+    for words in ("os_list_sessions", "client_token", "os_attach_session"):
+        assert words in refusal["recovery"], words
+
+
 @pytest.mark.parametrize("bad", [0, -5, 99999])
 async def test_run_test_refuses_an_unusable_timeout_before_opening_anything(wired, bad):
     """Catch it here rather than opening a session and handing back a raw 422."""
