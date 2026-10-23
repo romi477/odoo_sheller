@@ -98,13 +98,15 @@ def odoosh_stage(declared: str | None, reported: str | None) -> str | None:
     Production if either says so. A human may close a build further than it
     says it is, never open one: a card that could talk a production build out
     of its guard would make the guard decorative. Otherwise what the build
-    reports, since it knows; the card's, when it reports nothing.
+    reports, since it knows; the card's, when it reports nothing. Neither
+    saying anything is not a stage to go easy on: a card written before builds
+    had one, on a build that does not report it, is guarded as production.
     """
     if PRODUCTION in (declared, reported):
 
         return PRODUCTION
 
-    return reported or declared
+    return reported or declared or PRODUCTION
 
 
 def _card(entry: dict) -> dict:

@@ -725,7 +725,8 @@ stricter of the card's and the build's (`targets.odoosh_stage`): production if
 either says so, otherwise what the build reports, and the card's only when the
 build reports nothing. A card can close a build further than it says it is,
 never open one. A card written before builds had a stage declares none and
-goes by the build alone, as it always did.
+goes by the build alone, as it always did — and when the build reports none
+either, it is guarded as production: an unknown stage is never the lenient one.
 
 A second one-shot, `GET /api/containers/{container}/tests?module=`, lists
 test classes and methods for one addon technical name. It walks files on

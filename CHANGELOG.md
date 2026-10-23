@@ -19,6 +19,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   session nobody held the key to, and nothing to find it by. It now waits no
   longer than a tool call may, sends a `client_token`, and hands it back with
   the timeout, as `os_run_test` already did.
+- An odoo.sh build whose card declares no stage and which reports none itself
+  opened with no stage, so without the production guard. It is now guarded as
+  production.
 
 ## [1.11.0] — 2026-10-16
 

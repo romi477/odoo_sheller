@@ -236,7 +236,7 @@ def test_a_build_card_stage_is_changed_like_any_field(store):
     [
         (None, "production", "production"),
         (None, "staging", "staging"),
-        (None, None, None),
+        (None, None, "production"),
         ("production", "staging", "production"),
         ("production", "dev", "production"),
         ("production", None, "production"),
@@ -248,7 +248,9 @@ def test_a_build_card_stage_is_changed_like_any_field(store):
 def test_a_build_goes_by_the_stricter_of_its_card_and_itself(declared, reported, stage):
     """Production if either says so. A human may close a build further than it
     says it is, never open one: a card cannot talk a production build out of
-    its guard. Otherwise what the build says, since it knows."""
+    its guard. Otherwise what the build says, since it knows — and when
+    neither says anything, production: a stage nobody knows gets the guard,
+    as a card with none written gets it by default."""
     assert odoosh_stage(declared, reported) == stage
 
 
