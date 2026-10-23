@@ -2359,3 +2359,28 @@ async def test_a_close_that_did_not_happen_keeps_the_key(monkeypatch, answer):
     refused = await server.os_close_session("s1")
     assert refused == answer
     assert server._keys == {"s1": "k"}
+
+
+@pytest.mark.parametrize("limit, kept", [(0, []), (-3, []), (2, [2, 3]), (50, [0, 1, 2, 3])])
+async def test_history_limit_is_a_count_of_entries_never_a_slice_offset(
+    wired, monkeypatch, limit, kept
+):
+    """`[-0:]` is the whole list and `[-3:]` of four skips one: a limit of zero
+    gave back an entire journal, the thing a limit is there to avoid."""
+    feed = {
+        "session": {"session_id": "s1", "state": "ready"},
+        "entries": [
+            {"kind": "exec", "ordinal": n, "code": str(n), "status": "done",
+             "result": {"result": str(n)}}
+            for n in range(4)
+        ],
+    }
+
+    async def fake_call(method, path, session_id=None, **kwargs):
+
+        return feed
+
+    monkeypatch.setattr(server, "_call", fake_call)
+    history = await server.os_history("s1", limit=limit)
+
+    assert [entry["n"] for entry in history["entries"]] == kept

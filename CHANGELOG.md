@@ -56,6 +56,9 @@ removed from the API or the MCP surface. `os_open_session` now sends a
 - The odoo.sh card drew a build whose stage nobody states with no stage, while
   the daemon guarded it as production: no badge, and a commit prompt that
   asked for the name. The page's copy of the rule now agrees with the daemon's.
+- `os_history` with a `limit` of zero returned the whole history, and a
+  negative one all but the first few entries — the slip the `tail` fix above
+  made in the logs. Zero is now no entries, and so is a negative limit.
 
 ## [1.11.0] — 2026-10-16
 

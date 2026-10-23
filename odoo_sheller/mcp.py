@@ -1299,7 +1299,10 @@ async def os_history(session_id: str, limit: int = 20) -> Any:
         return feed
 
     meta = feed.get("session") or {}
-    entries = [_history_entry(entry) for entry in (feed.get("entries") or [])[-limit:]]
+    # Not `[-limit:]`: that is the whole list for zero, and for a negative
+    # limit all but the first few.
+    past = feed.get("entries") or []
+    entries = [_history_entry(entry) for entry in (past[-limit:] if limit > 0 else [])]
     session = {
         key: meta.get(key)
         for key in (
