@@ -40,13 +40,26 @@ class Journal:
     def __init__(self, path: Path):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Opened on the first write and kept: every Odoo log line is a record,
+        # and opening the file for each one cost three syscalls on the loop
+        # that reads every session's frames. Flushed per record, so a reader
+        # of the file never waits on a close.
+        self._handle = None
 
     def write(self, kind: str, **fields) -> None:
         record = {"ts": datetime.now(UTC).isoformat(), "kind": kind}
         record.update(fields)
         line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(line)
+        if self._handle is None:
+            self._handle = self.path.open("a", encoding="utf-8")
+        self._handle.write(line)
+        self._handle.flush()
+
+    def close(self) -> None:
+        """Let go of the file. A later write opens it again."""
+        handle, self._handle = self._handle, None
+        if handle is not None:
+            handle.close()
 
     def iter_records(self) -> Iterator[dict]:
         """The records one at a time, skipping any line that is not one.

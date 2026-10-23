@@ -39,6 +39,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Stopping the daemon closed its sessions one after another; a few busy ones
   overran the shutdown budget and the last journals ended without
   `session_close`. They now close side by side.
+- A session's journal opened and closed its file for every record — every
+  line Odoo logged — on the loop every session's frames are read on. It now
+  keeps the file open while the session lives, flushing each record.
 
 ## [1.11.0] — 2026-10-16
 

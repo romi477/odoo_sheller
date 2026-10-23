@@ -20,6 +20,32 @@ def test_write_appends_one_json_object_per_line(tmp_path):
     assert "ts" in first
 
 
+def test_a_journal_opens_its_file_once_not_once_per_record(tmp_path, monkeypatch):
+    """Every Odoo log line is a record, and opening the file for each one cost
+    three syscalls on the loop every other session's frames are read on."""
+    opened = []
+    real_open = journal.Path.open
+
+    def counting(self, mode="r", *args, **kwargs):
+        if "a" in mode:
+            opened.append(self)
+
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(journal.Path, "open", counting)
+    log = journal.Journal(tmp_path / "s.jsonl")
+    for n in range(50):
+        log.write("stderr", line=str(n))
+        # Each record is on disk as it is written: a reader never waits on a close.
+        assert len(log.path.read_text(encoding="utf-8").splitlines()) == n + 1
+    assert len(opened) == 1
+    log.close()
+    log.write("session_close")
+    assert [r["kind"] for r in log.records()][-1] == "session_close", "a write after close reopens"
+    log.close()
+    log.close()
+
+
 def test_records_reads_back_what_was_written(tmp_path):
     log = journal.Journal(tmp_path / "s.jsonl")
     log.write("exec", id=1, code="a")

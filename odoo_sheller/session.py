@@ -493,6 +493,8 @@ class Session:
 
     async def close(self, timeout: float = 10.0) -> None:
         if self._state in (SessionState.CLOSED, SessionState.DEAD):
+            # A dead session's log reader may have written after it died.
+            self.journal.close()
 
             return
         self._closing = True
@@ -509,6 +511,7 @@ class Session:
         self._set_state(SessionState.CLOSED)
         self.journal.write("session_close")
         self._cancel_readers()
+        self.journal.close()
 
     async def kill(self) -> None:
         self._closing = True
@@ -526,6 +529,7 @@ class Session:
             self._set_state(SessionState.CLOSED)
             self.journal.write("session_close", killed=True)
         self._cancel_readers()
+        self.journal.close()
 
     def transfer_owner(self, owner: dict) -> str:
         """Hand the session to someone else and return the new write key.
@@ -1269,6 +1273,7 @@ class Session:
             return
         self._set_state(SessionState.DEAD)
         self.journal.write("session_died", reason=reason, stderr=self.stderr_tail(50))
+        self.journal.close()
         self._maybe_autoclose()
         if self._waiter is not None and not self._waiter.done():
             self._waiter.set_exception(SessionDead(f"{reason}: {self._stderr_text()}"))

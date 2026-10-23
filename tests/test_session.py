@@ -983,6 +983,24 @@ async def test_a_test_session_whose_process_died_is_announced_too(tmp_path):
     assert len(autoclose_events(seen)) == 1
 
 
+@pytest.mark.parametrize("ending", ["close", "kill", "die"])
+async def test_a_session_lets_go_of_its_journal_when_it_ends(tmp_path, ending):
+    """The journal keeps its file open while it is written to; a session that
+    ended must not hold it for the life of the daemon."""
+    session = await make_session(tmp_path)
+    await session.start()
+    assert session.journal._handle is not None
+    if ending == "die":
+        with pytest.raises(SessionDead):
+            await session.execute("DIE")
+        await asyncio.sleep(0.3)
+    else:
+        await getattr(session, ending)()
+    assert session.journal._handle is None
+    kinds = [record["kind"] for record in session.journal.records()]
+    assert kinds[-1] in ("session_close", "session_died")
+
+
 async def test_autoclose_is_announced_once(tmp_path):
     seen = []
     session = await make_session(
