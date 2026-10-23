@@ -46,3 +46,24 @@ def test_the_admin_key_reaches_a_terminal_but_never_a_log():
     logged = admin_key_line("s3cret", to_terminal=False)
     assert "s3cret" not in logged
     assert "admin.key" in logged
+
+
+def test_an_empty_admin_key_stops_the_daemon_with_the_file_named(monkeypatch):
+    """Started anyway, the daemon would refuse every admin act with a key
+    nobody can read; a traceback would bury the one line that says why."""
+    import sys
+
+    import pytest
+
+    from odoo_sheller import __main__ as entry
+    from odoo_sheller.registry import AdminKeyUnusable
+
+    def empty():
+        raise AdminKeyUnusable("/home/me/.odoo-sheller/admin.key is empty; remove it")
+
+    monkeypatch.setattr(entry, "load_admin_key", empty)
+    monkeypatch.setattr(sys, "argv", ["odoo_sheller"])
+    monkeypatch.setattr(entry.uvicorn, "run", lambda *a, **k: pytest.fail("started"))
+    with pytest.raises(SystemExit) as stopped:
+        entry.main()
+    assert "admin.key is empty" in str(stopped.value.code)

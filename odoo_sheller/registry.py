@@ -5,6 +5,7 @@ import contextlib
 import os
 import re
 import secrets
+import tempfile
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -45,6 +46,22 @@ ADMIN_KEY_PATH = JOURNAL_ROOT.parent / "admin.key"
 EVENT_BACKLOG = 10_000
 
 
+class AdminKeyUnusable(Exception):
+    """The admin key file exists and holds no key. It has not been touched."""
+
+
+def _read_admin_key(path: Path) -> str:
+    key = path.read_text(encoding="utf-8").strip()
+    if not key:
+        # Read as a key, the empty string had the registry swap in a random
+        # one nobody was shown, and every admin act failed on every start.
+        raise AdminKeyUnusable(
+            f"{path} is empty; remove it and start again, and a new key is written"
+        )
+
+    return key
+
+
 def load_admin_key(path: Path = ADMIN_KEY_PATH) -> str:
     """Read the admin key, creating it on first run.
 
@@ -54,19 +71,28 @@ def load_admin_key(path: Path = ADMIN_KEY_PATH) -> str:
     """
     if path.exists():
 
-        return path.read_text(encoding="utf-8").strip()
+        return _read_admin_key(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     key = secrets.token_urlsafe(24)
-    # Created with its final mode. Writing first and narrowing it after left
-    # the key in a file anyone on the machine could read until the chmod.
+    # Written whole beside it, then linked into place: the name never points at
+    # a file without the key in it, which a crash between creating and writing
+    # used to leave behind. mkstemp creates it 0600 — writing first and
+    # narrowing it after left the key readable by anyone until the chmod.
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".admin-key-")
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        # Another daemon started in the same instant; its key is the one.
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(key + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            # Another daemon started in the same instant; its key is the one.
 
-        return path.read_text(encoding="utf-8").strip()
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(key + "\n")
+            return _read_admin_key(path)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary)
 
     return key
 

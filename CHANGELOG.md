@@ -22,6 +22,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - An odoo.sh build whose card declares no stage and which reports none itself
   opened with no stage, so without the production guard. It is now guarded as
   production.
+- An empty `~/.odoo-sheller/admin.key` was read as the key, and the daemon ran
+  with a random one it never printed, refusing every admin act on every start.
+  It now stops and names the file; a new key is written whole before it is
+  linked into place, so a crash can no longer leave the file empty.
 
 ## [1.11.0] — 2026-10-16
 

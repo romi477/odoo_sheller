@@ -95,7 +95,10 @@ It prints the key only to a terminal. When stdout is a file — the desktop
 app's `daemon.log`, `docker logs`, a `nohup` redirect — it prints where the
 key is kept instead: a log outlives the moment and is read by more than the
 person at the keyboard. The file is created with mode `0600` in one step;
-it used to be written first and narrowed after.
+it used to be written first and narrowed after. It is written whole and then
+linked into place, so it never exists without the key in it, and a daemon
+that finds it empty stops and names it instead of running with a key nobody
+was shown.
 
 A browser tab is that kind of client. Read the file with
 `cat ~/.odoo-sheller/admin.key` and paste it into the UI once — it's only asked

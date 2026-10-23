@@ -1,11 +1,12 @@
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from odoo_sheller.agent_commit import AgentCommitError, AgentCommitStore
 from odoo_sheller.journal import Journal, journal_path
-from odoo_sheller.registry import Registry, load_admin_key, new_session_id
+from odoo_sheller.registry import AdminKeyUnusable, Registry, load_admin_key, new_session_id
 from odoo_sheller.session import SessionDead, SessionState
 from odoo_sheller.targets import TargetStore
 from odoo_sheller.transport import Target
@@ -31,13 +32,18 @@ def test_load_admin_key_creates_once(tmp_path):
     assert load_admin_key(path) == first
 
 
-def test_load_admin_key_empty_file_stays_empty(tmp_path):
-    """An empty file is not a missing one: creating a second key here would
-    disagree with a daemon that already read the empty string and substituted
-    a random value in memory."""
+@pytest.mark.parametrize("content", ["", "\n", "  \n"])
+def test_load_admin_key_refuses_an_empty_file(tmp_path, content):
+    """An empty file is not a missing one, and not a key either. Read as one,
+    the daemon swapped in a random key it never printed or kept, and every
+    admin act was refused on every start until the file was found. Writing a
+    fresh key over it would disagree with a daemon that already read it, so
+    the file is named and left for a human to remove."""
     path = tmp_path / "admin.key"
-    path.write_text("\n", encoding="utf-8")
-    assert load_admin_key(path) == ""
+    path.write_text(content, encoding="utf-8")
+    with pytest.raises(AdminKeyUnusable, match=str(path)):
+        load_admin_key(path)
+    assert path.read_text(encoding="utf-8") == content
 
 
 def test_new_session_id_is_never_all_digits():
@@ -676,6 +682,40 @@ def test_a_new_admin_key_is_never_readable_by_anyone_else(tmp_path):
     path = tmp_path / "admin.key"
     load_admin_key(path)
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_a_new_admin_key_never_appears_without_its_key(tmp_path, monkeypatch):
+    """Created and then written, a crash between the two left an empty file
+    that read as no key at all. It is linked into place written, and the file
+    it was written to does not outlive the call."""
+    import os
+
+    path = tmp_path / "admin.key"
+    seen = []
+    real_link = os.link
+
+    def link(source, target):
+        seen.append(Path(source).read_text(encoding="utf-8").strip())
+        real_link(source, target)
+
+    monkeypatch.setattr("odoo_sheller.registry.os.link", link)
+    key = load_admin_key(path)
+    assert seen == [key]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["admin.key"]
+
+
+def test_a_key_another_daemon_linked_first_is_the_one(tmp_path, monkeypatch):
+    import os
+
+    path = tmp_path / "admin.key"
+
+    def lose_the_race(source, target):
+        Path(target).write_text("theirs\n", encoding="utf-8")
+        raise FileExistsError(target)
+
+    monkeypatch.setattr("odoo_sheller.registry.os.link", lose_the_race)
+    assert load_admin_key(path) == "theirs"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["admin.key"]
 
 
 async def test_closing_a_session_hangs_up_its_sockets(tmp_path):
