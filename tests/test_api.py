@@ -269,6 +269,28 @@ def test_shutdown_closes_live_sessions(client):
     assert client.registry.sessions == {}
 
 
+def test_shutdown_closes_the_sessions_side_by_side(client):
+    """One after another, a few busy sessions took longer than uvicorn's
+    graceful-shutdown budget, and the last ones ended without session_close.
+    Each close only waits; none of them needs the one before it done."""
+    import asyncio
+    import time
+
+    class Slow(FakeSession):
+        async def close(self, timeout=10.0):
+            await asyncio.sleep(0.4)
+            await super().close(timeout)
+
+    for name in ("s1", "s2", "s3", "s4"):
+        slow = Slow()
+        slow.id = name
+        client.registry.sessions[name] = slow
+    started = time.monotonic()
+    client.__exit__(None, None, None)
+    assert time.monotonic() - started < 1.2
+    assert client.registry.sessions == {}
+
+
 def test_exec_returns_the_result(client):
     response = client.post("/api/sessions/s1/exec", json={"code": "1 + 1"})
     assert response.status_code == 200

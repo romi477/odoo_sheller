@@ -348,12 +348,20 @@ async def lifespan(app: FastAPI):
     mid-transcript, with no `session_close` and no cause. The desktop app
     stops the daemon on quit, which makes this the normal way a session ends,
     not an edge case. The timeout is short on purpose: this runs inside
-    uvicorn's own graceful-shutdown budget.
+    uvicorn's own graceful-shutdown budget — and the closes run side by side,
+    since each only waits on its own process: one after another, a few busy
+    sessions overran that budget and the last of them ended unrecorded.
     """
     yield
-    for session_id in list(app.state.registry.sessions):
-        with contextlib.suppress(Exception):
-            await app.state.registry.close(session_id, timeout=1.5)
+    # Gathered with their exceptions: one session failing to close must not
+    # cut the others' closes short.
+    await asyncio.gather(
+        *(
+            app.state.registry.close(session_id, timeout=1.5)
+            for session_id in list(app.state.registry.sessions)
+        ),
+        return_exceptions=True,
+    )
 
 
 def create_app(registry: Registry | None = None) -> FastAPI:

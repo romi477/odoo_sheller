@@ -36,6 +36,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `os_close_session` forgot the session's key even when the close failed — the
   daemon out of reach, or the call timed out — leaving a live session only the
   admin key could end. The key is now dropped only once the session is gone.
+- Stopping the daemon closed its sessions one after another; a few busy ones
+  overran the shutdown budget and the last journals ended without
+  `session_close`. They now close side by side.
 
 ## [1.11.0] — 2026-10-16
 
