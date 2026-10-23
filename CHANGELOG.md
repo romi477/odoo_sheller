@@ -42,6 +42,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - A session's journal opened and closed its file for every record — every
   line Odoo logged — on the loop every session's frames are read on. It now
   keeps the file open while the session lives, flushing each record.
+- `os_test_result` rebuilt the session's whole history from its journal every
+  two seconds while it waited. It now watches the session's state and reads
+  the journal once the run is over.
 
 ## [1.11.0] — 2026-10-16
 

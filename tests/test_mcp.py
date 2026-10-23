@@ -959,6 +959,39 @@ async def test_os_test_result_waits_rather_than_saying_running_at_once(monkeypat
     assert answer["tests_run"] == 4
 
 
+async def test_os_test_result_reads_the_journal_only_once_the_run_is_over(monkeypatch):
+    """The feed is rebuilt from the whole journal, a megabyte for a module run
+    and up to a hundred; doing that every two seconds to learn "not yet" is
+    what the session's own state already says for nothing."""
+    paths = []
+    landed = {
+        "session": {"session_id": "ab12", "state": "ready"},
+        "entries": [{
+            "kind": "run_test", "id": 1, "module": "qbo", "test_class": "TestBig",
+            "status": "done",
+            "result": {"duration": 1.0, "test": {"tests_run": 4, "success": True}},
+        }],
+    }
+
+    async def fake_call(method, path, session_id=None, **kwargs):
+        paths.append(path)
+        if path.endswith("/history"):
+
+            return landed
+        busy = sum(1 for seen in paths if seen == path) < 4
+
+        return {"id": "ab12", "state": "busy" if busy else "ready",
+                "activity": "run_test" if busy else None}
+
+    monkeypatch.setattr(server, "_call", fake_call)
+    monkeypatch.setattr(server, "TEST_RESULT_POLL", 0.01)
+    answer = await server.os_test_result("ab12")
+
+    assert answer["status"] == "done"
+    assert paths.count("/api/sessions/ab12/history") == 1
+    assert paths.count("/api/sessions/ab12") == 4
+
+
 async def test_os_test_result_says_running_when_the_budget_runs_out(monkeypatch):
     running = {
         "session": {"session_id": "ab12", "state": "busy"},

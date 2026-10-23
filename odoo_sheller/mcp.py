@@ -1040,33 +1040,39 @@ async def os_test_result(session_id: str) -> Any:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + MCP_CALL_BUDGET
     while True:
-        feed = await _call("GET", f"/api/sessions/{session_id}/history")
-        if feed.get("error"):
+        # The feed is rebuilt from the whole journal — a megabyte for a module
+        # run, up to a hundred — so it is read once the run is over, not to
+        # learn "not yet": the session's own state says that for nothing. A
+        # session that is gone, or will not say, sends us to the journal.
+        live = await _call("GET", f"/api/sessions/{session_id}")
+        if live.get("error") or live.get("activity") != "run_test":
+            feed = await _call("GET", f"/api/sessions/{session_id}/history")
+            if feed.get("error"):
 
-            return feed
+                return feed
 
-        runs = [
-            entry for entry in (feed.get("entries") or [])
-            if entry.get("kind") == "run_test"
-        ]
-        if runs and (runs[-1].get("result") is not None):
+            runs = [
+                entry for entry in (feed.get("entries") or [])
+                if entry.get("kind") == "run_test"
+            ]
+            if runs and (runs[-1].get("result") is not None):
 
-            return {"status": "done", **_history_run_test_entry(runs[-1])}
+                return {"status": "done", **_history_run_test_entry(runs[-1])}
 
-        gone = (feed.get("session") or {}).get("state") == "gone"
-        if gone:
-            # The session ended without the run ever settling: the process
-            # died mid-run. Saying "running" here would be a poll forever.
+            gone = (feed.get("session") or {}).get("state") == "gone"
+            if gone:
+                # The session ended without the run ever settling: the process
+                # died mid-run. Saying "running" here would be a poll forever.
 
-            return {
-                "status": "lost",
-                "session_id": session_id,
-                "journal": f"/api/journals/{session_id}",
-                "recovery": (
-                    "the run died with its container process — read the "
-                    "journal for the log tail, then start it again"
-                ),
-            }
+                return {
+                    "status": "lost",
+                    "session_id": session_id,
+                    "journal": f"/api/journals/{session_id}",
+                    "recovery": (
+                        "the run died with its container process — read the "
+                        "journal for the log tail, then start it again"
+                    ),
+                }
         if loop.time() >= deadline:
 
             return {
