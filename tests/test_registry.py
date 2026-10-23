@@ -1193,3 +1193,16 @@ def test_load_admin_key_clears_the_temporaries_of_a_start_that_was_killed(tmp_pa
 
     assert not old.exists()
     assert live.exists(), "another daemon may be mid-start; its temporary is not stale"
+
+
+async def test_a_target_read_already_is_not_read_again_by_a_replacing_open(tmp_path, monkeypatch):
+    registry = Registry(journal_root=tmp_path)
+    reads = []
+    monkeypatch.setattr(
+        registry, "target_of_past_session", lambda session_id: reads.append(session_id)
+    )
+    past = {"target_kind": "ssh", "container": "box", "odoo_bin": None}
+    with pytest.raises(ValueError, match="did not run on a local container"):
+        await registry.open(replace="gone", past_target=past)
+
+    assert reads == []

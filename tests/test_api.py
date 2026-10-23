@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import re
@@ -144,6 +145,16 @@ class FakeSession:
         self.state = SessionState.CLOSED
 
 
+def _on_the_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+
+        return False
+
+    return True
+
+
 class FakeRegistry:
     def __init__(self):
         self.session = FakeSession()
@@ -151,6 +162,9 @@ class FakeRegistry:
         self.subscribers = {}
         self.admin_key = ADMIN_KEY
         self.past_target = None
+        # One entry per read of a past session's journal: whether it ran on the
+        # event loop, where a read of a file stalls every session's frames.
+        self.past_reads = []
         self.watchers = []
         # Whether the container switch is on for whatever an open names.
         self.allows = False
@@ -163,6 +177,7 @@ class FakeRegistry:
             self.watchers.remove(queue)
 
     def target_of_past_session(self, session_id):
+        self.past_reads.append(_on_the_loop())
 
         return self.past_target
 
@@ -2290,3 +2305,21 @@ def test_help_carries_the_rules_whatever_an_mcp_server_handed_over(client, monke
     assert 17 in server._rules_given
     assert client.get("/api/help").json()["topics"]["odoo_17"]["text"] == first == rules.for_major(17)
     assert client.get("/api/help/odoo_17").json()["text"] == first
+
+
+def test_a_reopen_reads_the_lost_journal_once_and_off_the_loop(client):
+    """The gate needs the lost session's container and the open needs the rest
+    of its target: one read, handed on, and not on the loop that reads every
+    session's frames."""
+    client.registry.allows = {"mig18"}
+    client.registry.past_target = {
+        "container": "mig18", "database": "db", "odoo_bin": "/odoo-bin",
+        "target_kind": "docker",
+    }
+    response = client.post(
+        "/api/sessions",
+        json={"replace": "lost1", "owner": {"kind": "agent"}, "allow_commit": True},
+    )
+    assert response.status_code == 200, response.text
+    assert client.registry.past_reads == [False]
+    assert client.registry.open_kwargs["past_target"] == client.registry.past_target

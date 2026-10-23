@@ -872,7 +872,26 @@ def create_app(registry: Registry | None = None) -> FastAPI:
             "js": result.get("js"),
         }
 
-    def reopened_container(body: OpenBody) -> str | None:
+    async def past_target_of(body: OpenBody) -> dict | None:
+        """What the journal of the session an open replaces says it ran on.
+
+        Read once, off the event loop, and handed on to the registry: the gate
+        below needs the container and the open needs the rest.
+        """
+        if not body.replace:
+
+            return None
+
+        try:
+
+            return await asyncio.to_thread(
+                app.state.registry.target_of_past_session, body.replace
+            )
+        except Exception:  # noqa: BLE001 - the open reads it again, inside its own error mapping.
+
+            return None
+
+    def reopened_container(body: OpenBody, previous: dict | None) -> str | None:
         """The container an open will land in, as the registry will pick it.
 
         With `replace` and no container of its own, that is the lost session's
@@ -882,7 +901,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         if body.container or not body.replace:
 
             return body.container
-        previous = app.state.registry.target_of_past_session(body.replace) or {}
+        previous = previous or {}
 
         return previous.get("container") if previous.get("target_kind") == "docker" else None
 
@@ -920,6 +939,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
                 },
             )
         allow_commit = body.allow_commit
+        past_target = await past_target_of(body)
         if (
             body.allow_commit
             and body.owner is not None
@@ -931,7 +951,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
             # anyway. Never a card — a remote target is not a container, and
             # its name is free text that can equal one.
             if body.target_id is None and await app.state.registry.agent_commit_allows(
-                reopened_container(body)
+                reopened_container(body, past_target)
             ):
                 # Passed on as "let the switch decide", not as a grant. The
                 # session asks the switch when it is built, with no wait before
@@ -965,6 +985,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
                 client_token=body.client_token,
                 autoclose=body.autoclose,
                 target_id=body.target_id,
+                past_target=past_target,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from None

@@ -64,6 +64,9 @@ removed from the API or the MCP surface. `os_open_session` now sends a
   mounts). It now creates the file in place there, as it did before. The
   temporary a start killed half-way leaves — a second copy of the key — is
   removed by the next start once it is a minute old.
+- Reopening a lost session with `replace` read its journal twice, the first
+  time on the event loop that reads every session's frames. It is now read
+  once, off the loop, and handed to the open.
 
 ## [1.11.0] — 2026-10-16
 

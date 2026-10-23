@@ -341,7 +341,10 @@ class Registry:
         client_token: str | None = None,
         autoclose: bool = False,
         target_id: str | None = None,
+        past_target: dict | None = None,
     ) -> Session:
+        """Open a session. `past_target` is what the caller already read of
+        `replace`'s journal, so it is not read twice."""
         if target_id and replace:
             # A journal records the identity slot but not how to reach it
             # again over SSH. An agent cannot open these at all, and a human
@@ -354,7 +357,11 @@ class Registry:
                 "odoo_bin belong to a local one"
             )
         if replace:
-            previous = self.target_of_past_session(replace)
+            previous = past_target
+            if previous is None:
+                # Off the loop: the file is read from disk, and the loop is
+                # every session's frames.
+                previous = await asyncio.to_thread(self.target_of_past_session, replace)
             if previous is None:
                 raise KeyError(f"no journal for session {replace}")
             if previous.get("target_kind") != DOCKER or not previous.get("odoo_bin"):
