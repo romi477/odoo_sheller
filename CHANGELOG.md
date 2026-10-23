@@ -53,6 +53,9 @@ removed from the API or the MCP surface. `os_open_session` now sends a
 - `os_test_result` rebuilt the session's whole history from its journal every
   two seconds while it waited. It now watches the session's state and reads
   the journal once the run is over.
+- The odoo.sh card drew a build whose stage nobody states with no stage, while
+  the daemon guarded it as production: no badge, and a commit prompt that
+  asked for the name. The page's copy of the rule now agrees with the daemon's.
 
 ## [1.11.0] — 2026-10-16
 

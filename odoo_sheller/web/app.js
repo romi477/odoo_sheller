@@ -707,14 +707,15 @@ function resetBuildForm() {
 }
 
 // The stage a build is opened as: its card's or its own, the stricter — the
-// daemon's `odoosh_stage`. A card can close a build further, never open one.
+// daemon's `odoosh_stage`. A card can close a build further, never open one,
+// and a build nobody states the stage of is production.
 function odooshStage(declared, reported) {
   if ([declared, reported].includes('production')) {
 
     return 'production';
   }
 
-  return reported || declared;
+  return reported || declared || 'production';
 }
 
 // A card written before builds had a stage declares none and goes by what the

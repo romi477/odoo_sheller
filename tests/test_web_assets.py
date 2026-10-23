@@ -3866,3 +3866,13 @@ def test_the_cards_say_on_from_the_daemon_not_from_the_click(app_js):
         r"card\.querySelector\('\.agent-commit input'\)\.addEventListener\('change'", app_js
     )
     assert listener is not None
+
+
+def test_a_build_nobody_states_the_stage_of_is_production_here_as_in_the_daemon(app_js):
+    """`odooshStage` is the daemon's `odoosh_stage` drawn for the card. The
+    daemon guards a build that declares no stage and reports none as
+    production; a copy that answered nothing left that card without its badge
+    while the commit prompt still asked for the name."""
+    body = re.search(r"function odooshStage\(declared, reported\) \{(.*?)\n\}", app_js, re.DOTALL)
+    assert body is not None
+    assert re.search(r"return reported \|\| declared \|\| 'production';", body.group(1))
