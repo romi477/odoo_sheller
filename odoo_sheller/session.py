@@ -399,6 +399,10 @@ class Session:
         return self._state
 
     def stderr_tail(self, limit: int = 200) -> list[str]:
+        if limit <= 0:
+            # `[-0:]` is the whole list, not none of it.
+
+            return []
 
         return list(self._stderr)[-limit:]
 

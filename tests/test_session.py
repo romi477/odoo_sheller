@@ -575,6 +575,18 @@ async def test_stderr_is_collected_and_journalled(tmp_path):
     assert "stderr" in kinds
 
 
+async def test_a_tail_of_nothing_is_nothing(tmp_path):
+    """`list[-0:]` is the whole list: asked for no lines, it handed back the
+    session's every one."""
+    noisy = 'import sys, json, time\nsys.stderr.write("WARNING boom\\n")\nsys.stderr.flush()\n' + FAKE
+    session = await make_session(tmp_path, script=noisy)
+    await session.start()
+    await asyncio.sleep(0.3)
+    assert session.stderr_tail(1)
+    assert session.stderr_tail(0) == []
+    await session.close()
+
+
 async def test_journal_records_the_whole_session(tmp_path):
     session = await make_session(tmp_path)
     await session.start()

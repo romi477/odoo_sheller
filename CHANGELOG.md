@@ -30,6 +30,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   a container with *agents may commit* on was refused: the gate asked the
   switch about the request's container, which a reopen leaves out. It now asks
   about the container the session is reopened on.
+- `GET /api/sessions/{id}/logs?tail=0` returned every line instead of none,
+  and a negative `tail` all but the first few. Zero is now nothing and a
+  negative tail is refused.
 
 ## [1.11.0] — 2026-10-16
 

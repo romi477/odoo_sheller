@@ -560,6 +560,12 @@ def test_sessions_and_logs(client):
     assert client.get("/api/sessions/s1/logs").json()["lines"] == ["WARNING something"]
 
 
+@pytest.mark.parametrize("tail", [-1, -500])
+def test_a_negative_log_tail_is_refused(client, tail):
+    """Sliced as `[-tail:]`, -5 meant "all but the first five"."""
+    assert client.get(f"/api/sessions/s1/logs?tail={tail}").status_code == 422
+
+
 def test_websocket_delivers_published_events(client):
     with client.websocket_connect(WS + "/ws/sessions/s1") as socket:
         queue = client.registry.subscribers["s1"][0]

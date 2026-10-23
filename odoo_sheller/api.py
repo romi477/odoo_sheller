@@ -1265,7 +1265,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         return {"allow_commit": session.allow_commit}
 
     @app.get("/api/sessions/{session_id}/logs")
-    async def logs(session_id: str, tail: int = 200):
+    async def logs(session_id: str, tail: int = Query(200, ge=0)):
 
         return {"lines": session_or_404(session_id).stderr_tail(tail)}
 
