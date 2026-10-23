@@ -33,6 +33,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `GET /api/sessions/{id}/logs?tail=0` returned every line instead of none,
   and a negative `tail` all but the first few. Zero is now nothing and a
   negative tail is refused.
+- `os_close_session` forgot the session's key even when the close failed — the
+  daemon out of reach, or the call timed out — leaving a live session only the
+  admin key could end. The key is now dropped only once the session is gone.
 
 ## [1.11.0] — 2026-10-16
 

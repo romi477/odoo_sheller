@@ -1179,7 +1179,10 @@ async def os_close_session(session_id: str | None = None) -> Any:
 
         return target
     closed = await _call("DELETE", f"/api/sessions/{target}", target)
-    _keys.pop(target, None)
+    if closed.get("ok") or closed.get("error") == "session_gone":
+        # Only once it is really gone: a close that did not happen leaves a
+        # live session this key is the only way back into.
+        _keys.pop(target, None)
 
     return closed
 

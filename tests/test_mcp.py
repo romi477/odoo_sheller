@@ -2283,3 +2283,46 @@ def test_commit_help_explains_the_container_switch():
     text = server.HELP["commit"]
     for says in ("agents may commit", "commit_grant", "container", "remote"):
         assert says in text, says
+
+
+# --- closing -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"ok": True},
+        {"error": "session_gone", "session_id": "s1", "reason": "not registered"},
+    ],
+)
+async def test_a_closed_session_forgets_its_key(monkeypatch, answer):
+    async def call(method, path, session_id=None, **kwargs):
+
+        return answer
+
+    monkeypatch.setattr(server, "_call", call)
+    monkeypatch.setattr(server, "_keys", {"s1": "k"})
+    await server.os_close_session("s1")
+    assert server._keys == {}
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"error": "daemon_unreachable", "url": "http://127.0.0.1:8765"},
+        {"error": "request_timed_out"},
+        {"error": "not_owner"},
+    ],
+)
+async def test_a_close_that_did_not_happen_keeps_the_key(monkeypatch, answer):
+    """The session is still open, and the key is the only way this server
+    has to try again — or to type in it, which it still owns."""
+    async def call(method, path, session_id=None, **kwargs):
+
+        return answer
+
+    monkeypatch.setattr(server, "_call", call)
+    monkeypatch.setattr(server, "_keys", {"s1": "k"})
+    refused = await server.os_close_session("s1")
+    assert refused == answer
+    assert server._keys == {"s1": "k"}
