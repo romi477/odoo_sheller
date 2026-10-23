@@ -326,10 +326,12 @@ async def os_open_session(
             **opened,
             "client_token": client_token,
             "recovery": (
-                "the session may still be starting — find it with "
-                "os_list_sessions by this client_token before opening another. "
-                "This server never received its write key: ask the human to "
-                "hand it over (then os_attach_session) or to close it"
+                "the session may still be starting, and the daemon closes an "
+                "agent's open whose caller has left once Odoo is up — look for "
+                "it with os_list_sessions by this client_token before opening "
+                "another. If it is still listed, this server never received its "
+                "write key: ask the human to hand it over (then "
+                "os_attach_session) or to close it"
             ),
         }
     if opened.get("error"):
@@ -906,10 +908,11 @@ async def os_run_test(
                 **opened,
                 "client_token": client_token,
                 "recovery": (
-                    "the session may still have opened — find it with "
-                    "os_list_sessions by this client_token before opening "
-                    "another, and ask the human to close it: this server never "
-                    "received its write key"
+                    "the session may still have opened, and the daemon closes "
+                    "one whose caller has left once Odoo is up — look for it "
+                    "with os_list_sessions by this client_token before opening "
+                    "another. If it is still listed, ask the human to close it: "
+                    "this server never received its write key"
                 ),
             }
 

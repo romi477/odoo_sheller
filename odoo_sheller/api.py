@@ -12,7 +12,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -908,6 +908,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
     @app.post("/api/sessions")
     async def open_session(
         body: OpenBody,
+        request: Request,
         x_os_admin_key: str | None = Header(None),
         origin: str | None = Header(None),
     ):
@@ -1008,6 +1009,26 @@ def create_app(registry: Registry | None = None) -> FastAPI:
             ) from None
         except Exception as exc:  # noqa: BLE001 - API boundary maps failures to HTTP.
             raise translate(exc) from None
+
+        if (
+            body.owner is not None
+            and body.owner.kind == "agent"
+            and await request.is_disconnected()
+        ):
+            # The key is in this response and nowhere else. An agent whose call
+            # timed out while Odoo started never read it, and the daemon waits
+            # longer for hello than a tool call lasts — so the session would
+            # run for good with an owner nobody can be. A person's open is left
+            # alone: it is in the list for them to find.
+            with contextlib.suppress(Exception):
+                await app.state.registry.close(session.id)
+            raise HTTPException(
+                status_code=499,
+                detail={
+                    "error": "caller_gone",
+                    "message": "the caller left before the session started; it was closed",
+                },
+            )
 
         # The only response that carries the key. It is never listed again.
         return {**session.describe(), "write_key": session.write_key}

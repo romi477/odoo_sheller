@@ -585,6 +585,11 @@ returned exactly once, at open or at handover, and is required for `exec`,
 `commit`, and `rollback`. Watching a session (seeing its output as it happens)
 needs no key at all; only typing into it does.
 
+The key is in that one response, so an agent's open whose caller has already
+gone when Odoo comes up (a tool call times out well before the daemon stops
+waiting for `hello`) has no one to hold it: the daemon closes that session and
+answers `499 caller_gone`. A person's open is left in the list.
+
 A **handover** moves the right to type without disturbing anything else: the
 process, its namespace, and any open transaction all survive. The previous
 owner's key stops working for typing, but keeps working for `close`, `kill`,

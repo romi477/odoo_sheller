@@ -67,6 +67,12 @@ removed from the API or the MCP surface. `os_open_session` now sends a
 - Reopening a lost session with `replace` read its journal twice, the first
   time on the event loop that reads every session's frames. It is now read
   once, off the loop, and handed to the open.
+- An agent's `POST /api/sessions` whose caller had gone by the time Odoo was up
+  — a tool call times out long before the daemon stops waiting for hello —
+  left a running session that only that response carried the key of. The
+  daemon now closes such a session and answers `499 caller_gone`; a person's
+  open is left alone. `os_open_session` and `os_run_test` say so when they
+  report the timeout.
 
 ## [1.11.0] — 2026-10-16
 

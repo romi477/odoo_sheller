@@ -2323,3 +2323,71 @@ def test_a_reopen_reads_the_lost_journal_once_and_off_the_loop(client):
     assert response.status_code == 200, response.text
     assert client.registry.past_reads == [False]
     assert client.registry.open_kwargs["past_target"] == client.registry.past_target
+
+
+def _post_open(app, body: dict, hang_up: bool) -> list[dict]:
+    """POST /api/sessions straight to the ASGI app, with the caller gone (or
+    not) by the time the open finishes — which TestClient cannot play."""
+    sent: list[dict] = []
+    pending = [{"type": "http.request", "body": json.dumps(body).encode(), "more_body": False}]
+
+    async def receive():
+        if pending:
+
+            return pending.pop(0)
+        if hang_up:
+
+            return {"type": "http.disconnect"}
+        await asyncio.Event().wait()
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+        "method": "POST", "scheme": "http", "path": "/api/sessions",
+        "raw_path": b"/api/sessions", "query_string": b"", "root_path": "",
+        "headers": [
+            (b"host", b"127.0.0.1:8765"), (b"content-type", b"application/json"),
+        ],
+        "server": ("127.0.0.1", 8765), "client": ("127.0.0.1", 50000),
+    }
+    asyncio.run(app(scope, receive, send))
+
+    return sent
+
+
+def test_an_agents_open_its_caller_gave_up_on_is_closed(client):
+    """The write key is in the response only. A caller that timed out never
+    read it, so the session would run for good with an owner nobody can be."""
+    sent = _post_open(
+        client.app, {"container": "c", "database": "db", "owner": {"kind": "agent"}},
+        hang_up=True,
+    )
+
+    assert ("close", 10.0) in client.registry.session.calls or (
+        ("kill",) in client.registry.session.calls
+    )
+    assert "s1" not in client.registry.sessions
+    assert not any(m.get("status") == 200 for m in sent), "no key went to a caller that left"
+
+
+def test_an_agents_open_whose_caller_waited_is_left_open(client):
+    sent = _post_open(
+        client.app, {"container": "c", "database": "db", "owner": {"kind": "agent"}},
+        hang_up=False,
+    )
+
+    assert any(m.get("status") == 200 for m in sent)
+    assert "s1" in client.registry.sessions
+
+
+def test_a_humans_open_is_not_closed_when_the_page_goes(client):
+    """A reload mid-open drops the connection; the session is still the
+    person's to find in the list, and nothing about it was agent-held."""
+    _post_open(
+        client.app, {"container": "c", "database": "db", "owner": {"kind": "human"}},
+        hang_up=True,
+    )
+
+    assert "s1" in client.registry.sessions
