@@ -7,6 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.11.1] — 2026-10-23
+
+Fixes from a review of the whole project. Two things now fail closed: an
+odoo.sh build whose stage nobody states is treated as production, and a daemon
+that finds `admin.key` empty refuses to start and names the file. Nothing is
+removed from the API or the MCP surface. `os_open_session` now sends a
+`client_token`, and `GET /api/sessions/{id}/logs` refuses a negative `tail`.
+
 ### Changed
 
 - *Agents may commit* on a container card is a plain checkbox, not a toggle,
@@ -1813,6 +1821,7 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
+[1.11.1]: https://github.com/romi477/odoo_sheller/compare/v1.11.0...v1.11.1
 [1.11.0]: https://github.com/romi477/odoo_sheller/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/romi477/odoo_sheller/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/romi477/odoo_sheller/compare/v1.8.3...v1.9.0
