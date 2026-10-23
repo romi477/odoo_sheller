@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import tempfile
+import time
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -46,6 +47,10 @@ ADMIN_KEY_PATH = JOURNAL_ROOT.parent / "admin.key"
 EVENT_BACKLOG = 10_000
 
 
+_TEMPORARY_PREFIX = ".admin-key-"
+_TEMPORARY_MAX_AGE = 60.0
+
+
 class AdminKeyUnusable(Exception):
     """The admin key file exists and holds no key. It has not been touched."""
 
@@ -73,12 +78,13 @@ def load_admin_key(path: Path = ADMIN_KEY_PATH) -> str:
 
         return _read_admin_key(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    _clear_stale_temporaries(path.parent)
     key = secrets.token_urlsafe(24)
     # Written whole beside it, then linked into place: the name never points at
     # a file without the key in it, which a crash between creating and writing
     # used to leave behind. mkstemp creates it 0600 — writing first and
     # narrowing it after left the key readable by anyone until the chmod.
-    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".admin-key-")
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=_TEMPORARY_PREFIX)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(key + "\n")
@@ -90,11 +96,43 @@ def load_admin_key(path: Path = ADMIN_KEY_PATH) -> str:
             # Another daemon started in the same instant; its key is the one.
 
             return _read_admin_key(path)
+        except OSError:
+            # No hard links here (FAT, SMB, some FUSE mounts). Created with its
+            # final mode and exclusively, as it was before it was linked: the
+            # crash window comes back with it, and a start that finds the file
+            # empty stops and says so rather than run with a key nobody saw.
+
+            return _create_exclusively(path, key)
     finally:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(temporary)
 
     return key
+
+
+def _create_exclusively(path: Path, key: str) -> str:
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+
+        return _read_admin_key(path)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(key + "\n")
+
+    return key
+
+
+def _clear_stale_temporaries(directory: Path) -> None:
+    """Remove what a start killed mid-way left: a copy of the key, under a name.
+
+    Only the old ones: a younger temporary may belong to a daemon starting at
+    this moment, whose link would fail if it vanished.
+    """
+    cutoff = time.time() - _TEMPORARY_MAX_AGE
+    for leftover in directory.glob(f"{_TEMPORARY_PREFIX}*"):
+        with contextlib.suppress(OSError):
+            if leftover.stat().st_mtime < cutoff:
+                leftover.unlink()
 
 
 # A JSON number spelled in hex digits: decimal ones, or two runs of them

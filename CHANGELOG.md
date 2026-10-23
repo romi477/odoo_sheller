@@ -59,6 +59,11 @@ removed from the API or the MCP surface. `os_open_session` now sends a
 - `os_history` with a `limit` of zero returned the whole history, and a
   negative one all but the first few entries — the slip the `tail` fix above
   made in the logs. Zero is now no entries, and so is a negative limit.
+- Writing `admin.key` whole and linking it into place needed a filesystem with
+  hard links, and the daemon did not start on one without (FAT, SMB, some FUSE
+  mounts). It now creates the file in place there, as it did before. The
+  temporary a start killed half-way leaves — a second copy of the key — is
+  removed by the next start once it is a minute old.
 
 ## [1.11.0] — 2026-10-16
 

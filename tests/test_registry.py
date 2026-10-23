@@ -1155,3 +1155,41 @@ def test_off_reaches_the_sessions_even_when_the_file_cannot_be_written(tmp_path)
 
     assert swept.applied == [False]
     assert path.read_text() == "{nope"
+
+
+@pytest.mark.parametrize("failure", [PermissionError, OSError])
+def test_load_admin_key_is_created_where_the_filesystem_has_no_hard_links(
+    tmp_path, monkeypatch, failure
+):
+    """FAT, SMB and some FUSE mounts refuse link(). The daemon started there
+    before the key was linked into place, and must still."""
+    def refuse(source, target, *args, **kwargs):
+        raise failure(1, "Operation not permitted")
+
+    monkeypatch.setattr("odoo_sheller.registry.os.link", refuse)
+    path = tmp_path / "admin.key"
+    key = load_admin_key(path)
+
+    assert path.read_text(encoding="utf-8").strip() == key
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert load_admin_key(path) == key
+    assert [p.name for p in tmp_path.iterdir()] == ["admin.key"], "no temporary left"
+
+
+def test_load_admin_key_clears_the_temporaries_of_a_start_that_was_killed(tmp_path):
+    """A kill between creating the temporary and removing it leaves a second
+    copy of the key under another name."""
+    import os
+    import time
+
+    old = tmp_path / ".admin-key-dead"
+    old.write_text("secret\n", encoding="utf-8")
+    long_ago = time.time() - 3600
+    os.utime(old, (long_ago, long_ago))
+    live = tmp_path / ".admin-key-starting"
+    live.write_text("", encoding="utf-8")
+
+    load_admin_key(tmp_path / "admin.key")
+
+    assert not old.exists()
+    assert live.exists(), "another daemon may be mid-start; its temporary is not stale"
