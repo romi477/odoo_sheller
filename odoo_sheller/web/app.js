@@ -1841,11 +1841,6 @@ const AGENT_COMMIT_WARNING = 'ADVANCED · GLOBAL — Every agent session in this
   + 'to any database, without asking you first — until you turn this off. '
   + 'Survives restarts. Never applies to remote targets.';
 
-/// The target as an agent needs to be told it: which container, which
-/// database, and the Odoo version its idioms have to match. Typed by hand this
-/// is transcription, and a name like `integra_db_19_presta` is where that goes
-/// wrong. Everything else the probe found — image, status, config path — says
-/// nothing about how to work in the session, so it stays on the card.
 function showAgentCommit(card, on) {
   const label = card.querySelector('.agent-commit');
   label.querySelector('input').checked = on;
@@ -1881,6 +1876,11 @@ async function toggleAgentCommit(name) {
   }
 }
 
+/// The target as an agent needs to be told it: which container, which
+/// database, and the Odoo version its idioms have to match. Typed by hand this
+/// is transcription, and a name like `integra_db_19_presta` is where that goes
+/// wrong. Everything else the probe found — image, status, config path — says
+/// nothing about how to work in the session, so it stays on the card.
 function copyTarget(name) {
   const container = state.containers.find((item) => item.name === name);
   const card = document.querySelector(`.card[data-container="${CSS.escape(name)}"]`);
