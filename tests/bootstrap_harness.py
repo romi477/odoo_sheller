@@ -389,6 +389,7 @@ def _install_fake_click(module):
     import unittest
     from unittest import mock
 
+    sys.modules["odoo.tools"].config["workers"] = CLICK.get("workers", 0)
     CLICK_MODELS["ir.module.module"] = FakeClickModel("ir.module.module", [
         {"id": i, "name": name, "state": state}
         for i, (name, state) in enumerate(sorted(CLICK.get("modules", {}).items()), 1)])

@@ -592,6 +592,13 @@ def test_a_dangling_menu_xmlid_is_skipped():
     assert answer["clickbot"]["refused"] is None
 
 
+def test_a_container_running_workers_is_refused_as_run_test_refuses_it():
+    answer, calls, _ = click(click_world(workers=2))
+    assert answer["error"]["type"] == "TestRunnerRefused"
+    assert "workers=0" in answer["error"]["message"]
+    assert not any(call.startswith(("http_spawn", "browser_js")) for call in calls)
+
+
 def test_click_module_shares_run_tests_preparation():
     answer, calls, stderr = click(click_world())
     assert answer["error"] is None, answer["error"]

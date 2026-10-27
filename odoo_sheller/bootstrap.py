@@ -212,6 +212,43 @@ def _os_release_cursor(env):
         pass
 
 
+_OS_RUNNER_REFUSED = (
+    "the test runner refused to run: the container's Odoo config must have "
+    "workers=0 (threaded mode)"
+)
+
+
+class TestRunnerRefused(Exception):
+    """A container running workers, where Odoo's test framework cannot work."""
+
+
+def _os_threaded_runner(env):
+    """Odoo's suite runner, ready to run here: `(loader, results, config)`.
+
+    None on the refusal Odoo's own `run_tests` makes, a container running
+    workers — checked before anything is started. Otherwise this process's
+    HTTP daemon is up, on a port of its own, and `env.cr` holds no lock.
+    """
+    config = importlib.import_module("odoo.tools").config
+    if config["workers"] != 0:
+
+        return None
+    loader = importlib.import_module("odoo.tests.loader")
+    try:
+        results = importlib.import_module("odoo.tests.result")
+    except ImportError:
+        # 15 keeps OdooTestResult in odoo/tests/runner.py.
+        results = importlib.import_module("odoo.tests.runner")
+    server = _os_prepare_test_run(env)
+    if not getattr(server, "httpd", None):
+        # Some tests need the http daemon; its port was just moved off the
+        # container's own.
+        server.http_spawn()
+    _os_release_cursor(env)
+
+    return loader, results, config
+
+
 def _os_run_tests_fallback(env, test_tags, modules):
     """What `odoo/tests/shell.py` does, for the versions that do not ship it.
 
@@ -224,27 +261,12 @@ def _os_run_tests_fallback(env, test_tags, modules):
     Returns None on the same refusal `run_tests` returns None on: a container
     running workers, where the test framework cannot work at all.
     """
-    tools = importlib.import_module("odoo.tools")
-    loader = importlib.import_module("odoo.tests.loader")
-    try:
-        results = importlib.import_module("odoo.tests.result")
-    except ImportError:
-        # 15 keeps OdooTestResult in odoo/tests/runner.py.
-        results = importlib.import_module("odoo.tests.runner")
-    registries = importlib.import_module("odoo.modules.registry")
-    config = tools.config
-
-    if config["workers"] != 0:
+    runner = _os_threaded_runner(env)
+    if runner is None:
 
         return None
-
-    server = importlib.import_module("odoo.service.server").server
-    if not getattr(server, "httpd", None):
-        # Some tests need the http daemon; the port was already moved off the
-        # container's own by the caller.
-        server.http_spawn()
-
-    _os_release_cursor(env)
+    loader, results, config = runner
+    registries = importlib.import_module("odoo.modules.registry")
 
     for name in list(sys.modules):
         # reload_tests=True: an edited test file must be seen on the next run.
@@ -399,21 +421,14 @@ def _os_run_test(env, module, test_class, test_method, params=None):
                     "odoo.tests.loader (Odoo 13 keeps its test runner in "
                     "odoo.modules.module)"
                 ) from None
-        _os_prepare_test_run(env)
         test_tags = _os_test_tags(module, test_class, test_method, params)
         if shell is None:
             report = _os_run_tests_fallback(env, test_tags, [module])
         else:
+            _os_prepare_test_run(env)
             report = shell.run_tests(env, test_tags, modules=[module], reload_tests=True)
         if report is None:
-            error = {
-                "type": "TestRunnerRefused",
-                "message": (
-                    "the test runner refused to run: the container's "
-                    "Odoo config must have workers=0 (threaded mode)"
-                ),
-                "traceback": "",
-            }
+            error = {"type": "TestRunnerRefused", "message": _OS_RUNNER_REFUSED, "traceback": ""}
         else:
             failures, errors, skipped = _os_test_counts(report)
             test = {
@@ -431,14 +446,21 @@ def _os_run_test(env, module, test_class, test_method, params=None):
     # frame, not a reason to lose the session.
     except BaseException as exc:  # noqa: BLE001
         _OS_LIVE[0] = False
-        error = {
-            "type": type(exc).__name__,
-            "message": str(exc),
-            "traceback": traceback.format_exc(),
-        }
+        error = _os_error_of(exc)
     finally:
         sys.stdout = saved_stdout
-    duration = time.time() - started
+
+    return _os_run_frame(captured, started, error, test)
+
+
+def _os_error_of(exc):
+    """An exception as a result frame carries it. Called inside its `except`."""
+
+    return {"type": type(exc).__name__, "message": str(exc), "traceback": traceback.format_exc()}
+
+
+def _os_run_frame(captured, started, error, test):
+    """What a run answers: its stdout, its error, its time, its test counts."""
     stdout, stdout_truncated = _os_clip(captured.getvalue(), _OS_MAX_STDOUT)
 
     return {
@@ -447,7 +469,7 @@ def _os_run_test(env, module, test_class, test_method, params=None):
         "result": None,
         "result_truncated": False,
         "error": error,
-        "duration": duration,
+        "duration": time.time() - started,
         "test": test,
     }
 
@@ -794,7 +816,7 @@ def _os_click_authenticate(original, users_cls):
     """
     def authenticate(*args, **kwargs):
         before = _os_click_before(users_cls, "_check_credentials")
-        setattr(users_cls, "_check_credentials", _os_click_accept)
+        users_cls._check_credentials = _os_click_accept
         try:
 
             return original(*args, **kwargs)
@@ -1108,46 +1130,22 @@ def _os_click_module(env, module, login, debug, timeout=900.0):
     # BaseException on purpose: an interrupted run is an ordinary result.
     except BaseException as exc:  # noqa: BLE001
         _OS_LIVE[0] = False
-        error = {
-            "type": type(exc).__name__,
-            "message": str(exc),
-            "traceback": traceback.format_exc(),
-        }
+        error = _os_error_of(exc)
     finally:
         sys.stdout = saved_stdout
-    duration = time.time() - started
-    stdout, stdout_truncated = _os_clip(captured.getvalue(), _OS_MAX_STDOUT)
+    frame = _os_run_frame(captured, started, error, test)
+    frame["clickbot"] = clickbot
 
-    return {
-        "stdout": stdout,
-        "stdout_truncated": stdout_truncated,
-        "result": None,
-        "result_truncated": False,
-        "error": error,
-        "duration": duration,
-        "test": test,
-        "clickbot": clickbot,
-    }
+    return frame
 
 
 def _os_click_run(env, module, clickbot, state):
     """One HttpCase of one test through Odoo's own suite runner."""
     common = importlib.import_module("odoo.tests.common")
-    loader = importlib.import_module("odoo.tests.loader")
-    try:
-        results = importlib.import_module("odoo.tests.result")
-    except ImportError:
-        # 15 keeps OdooTestResult in odoo/tests/runner.py.
-        results = importlib.import_module("odoo.tests.runner")
-    config = importlib.import_module("odoo.tools").config
-    if config["workers"] != 0:
-        raise TestRunnerUnsupported(
-            "the test runner refused to run: the container's Odoo config must "
-            "have workers=0 (threaded mode)")
-    server = _os_prepare_test_run(env)
-    if not getattr(server, "httpd", None):
-        server.http_spawn()
-    _os_release_cursor(env)
+    runner = _os_threaded_runner(env)
+    if runner is None:
+        raise TestRunnerRefused(_OS_RUNNER_REFUSED)
+    loader, results, config = runner
     state["patch_credentials"] = _os_click_needs_credentials(common.HttpCase)
     menu_cls = type(env["ir.ui.menu"])
     before = _os_click_before(menu_cls)
