@@ -163,18 +163,22 @@ def _os_is_addon_test_module(name):
         and parts[3] == "tests"
 
 
-def _os_run_suite(loader, suite, report):
+def _os_run_suite(loader, suite, report, module_name=None):
     """`run_suite` gained `global_report` in 16; 15 only returns its result.
 
     Read off the function rather than guessed from a version: a TypeError from
     a wrong keyword and a TypeError from inside a test look the same, and the
-    second must not be retried as if it were the first.
+    second must not be retried as if it were the first. 15 takes the module
+    under test instead, and serves its translations to the browser by it.
     """
     code = getattr(loader.run_suite, "__code__", None)
     names = getattr(code, "co_varnames", ()) if code is not None else ()
     if "global_report" in names:
 
         return loader.run_suite(suite, global_report=report)
+    if module_name is not None and "module_name" in names:
+
+        return loader.run_suite(suite, module_name=module_name)
 
     return loader.run_suite(suite)
 
@@ -783,11 +787,29 @@ def _os_click_needs_credentials(http_case):
     return True
 
 
+def _os_click_plain(message):
+    """A console line without the HTML an error dialog logs itself as."""
+    out = []
+    depth = 0
+    for char in message:
+        if char == "<":
+            depth += 1
+        elif char == ">" and depth:
+            depth -= 1
+            out.append(" ")
+        elif not depth:
+            out.append(char)
+
+    return " ".join("".join(out).split())
+
+
 class _OsClickHandler(logging.Handler):
-    """Hears the browser's console while the clickbot runs, in-process.
+    """Hears the browser's console and the server's errors while the clickbot runs.
 
     The test must know which menu a failed `browser_js` was in before it
-    starts the next one; the session reads stderr only after the run.
+    starts the next one; the session reads stderr only after the run. On the
+    root logger, so the error behind a dialog — logged by the server, not the
+    browser — can be the reason too.
     """
 
     def __init__(self, state):
@@ -795,18 +817,27 @@ class _OsClickHandler(logging.Handler):
         self.state = state
 
     def emit(self, record):
+        run = self.state["run"]
         if not record.name.endswith(".browser"):
+            exc = record.exc_info[1] if record.exc_info else None
+            if record.levelno >= logging.ERROR and exc is not None and run["server"] is None:
+                text = ("%s" % exc).strip().splitlines()
+                run["server"] = "%s: %s" % (type(exc).__name__, text[0] if text else "")
             return
         try:
             message = record.getMessage()
         except Exception:  # noqa: BLE001 - a record that will not format says nothing
             return
-        if message.startswith("Error received after termination: "):
+        late = "Error received after termination: "
+        if message.startswith(late):
+            # The dialog the clickbot saw comes after the line that ended the
+            # run; it is the reason, not a menu.
+            if record.levelno >= logging.ERROR:
+                run["browser"].append(message[len(late):])
             return
-        run = self.state["run"]
+        if record.levelno >= logging.ERROR:
+            run["browser"].append(message)
         line = _os_click_line(message)
-        if record.levelno >= logging.ERROR and run["reason"] is None:
-            run["reason"] = message
         if line is None:
             return
         if line[0] == "menu":
@@ -816,6 +847,17 @@ class _OsClickHandler(logging.Handler):
         else:
             counts = self.state["clickbot"]
             counts[line[1]] = counts.get(line[1], 0) + line[2]
+
+
+def _os_click_reason(run, fallback):
+    """The server's error behind a failure, then what the browser said of it."""
+    said = [line for line in run["browser"] if not line.startswith("Error while testing ")]
+    first = (said or run["browser"] or [fallback])[0]
+    # A console error carries its JS stack below the message.
+    browser = _os_click_plain((first.splitlines() or [""])[0])
+    parts = [part for part in (run["server"], browser) if part]
+
+    return _os_clip("; ".join(parts), _OS_CLICK_REASON)[0]
 
 
 def _os_click_lookup(env, module, login):
@@ -847,6 +889,11 @@ def _os_click_lookup(env, module, login):
     return None, user, own
 
 
+def _os_click_new_run():
+
+    return {"logged": [], "errors": [], "browser": [], "server": None}
+
+
 def _os_click_root(case, state, root_id, entry):
     """Every browser_js one app root takes; restarts past a failure on 15 to 19."""
     tree = state["tree"]
@@ -874,7 +921,7 @@ def _os_click_root(case, state, root_id, entry):
         if budget is None:
             entry["error"] = "timeout"
             break
-        run = {"logged": [], "errors": [], "reason": None}
+        run = _os_click_new_run()
         state["run"] = run
         text = None
         try:
@@ -892,7 +939,7 @@ def _os_click_root(case, state, root_id, entry):
         if text is None:
             done.update(logged)
             break
-        reason = _os_clip(run["reason"] or text, _OS_CLICK_REASON)[0]
+        reason = _os_click_reason(run, text)
         if _os_click_budget(state["deadline"], time.time()) is None:
             done.update(logged)
             entry["error"] = "timeout"
@@ -943,7 +990,7 @@ def _os_click_drive(case, state):
     # A container logging above INFO would drop the console lines before
     # any handler saw them.
     logger.setLevel(logging.INFO)
-    logger.addHandler(handler)
+    logging.getLogger().addHandler(handler)
     try:
         for root_id in state["tree"]["roots"]:
             entry = {"xmlid": state["menus"][root_id].get("xmlid"), "success": False,
@@ -952,7 +999,7 @@ def _os_click_drive(case, state):
             with case.subTest(root=entry["xmlid"]):
                 _os_click_root(case, state, root_id, entry)
     finally:
-        logger.removeHandler(handler)
+        logging.getLogger().removeHandler(handler)
         logger.setLevel(level)
 
 
@@ -1006,7 +1053,7 @@ def _os_click_module(env, module, login, debug, timeout=900.0):
                 "deadline": started + timeout - min(60.0, timeout * 0.1),
                 "holder": {"allowed": tree["allowed"]}, "done": set(),
                 "failed": clickbot["failed"], "clicked": clickbot["clicked"],
-                "clickbot": clickbot, "run": {"logged": [], "errors": [], "reason": None},
+                "clickbot": clickbot, "run": _os_click_new_run(),
             })
             failed = set(failure["xmlid"] for failure in clickbot["failed"])
             clickbot["unreached"] = [
@@ -1062,13 +1109,24 @@ def _os_click_run(env, module, clickbot, state):
     menu_cls = type(env["ir.ui.menu"])
     before = _os_click_before(menu_cls)
     case = _os_click_case(common.HttpCase, module, state)
+    try:
+        # 16 and later run class fixtures their own way; 15 has unittest's.
+        suite_class = importlib.import_module("odoo.tests.suite").OdooSuite
+    except ImportError:
+        suite_class = unittest.TestSuite
+    # Odoo's result asks `inspect` for the test's file, and a class built
+    # here has none unless its module is somewhere to be found.
+    holder = type(sys)(case.__module__)
+    holder.__file__ = "<odoo-sheller clickbot>"
+    sys.modules[case.__module__] = holder
     config["test_enable"] = True
     try:
         report = results.OdooTestResult()
-        suite = unittest.TestSuite([case("test_click_module")])
-        report.update(_os_run_suite(loader, suite, report))
+        suite = suite_class([case("test_click_module")])
+        report.update(_os_run_suite(loader, suite, report, module))
     finally:
         config["test_enable"] = None
+        sys.modules.pop(case.__module__, None)
         # The test's cleanups undo the patch; an interrupt can leave unittest
         # before they run.
         _os_click_undo(menu_cls, before)

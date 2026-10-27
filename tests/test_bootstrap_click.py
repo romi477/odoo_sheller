@@ -354,3 +354,33 @@ def test_an_unknown_loader_is_refused():
         NS["_os_click_flavour"](loader, "class TestMenusAdmin:\n    pass\n")
     with pytest.raises(ValueError, match="unknown clickbot"):
         NS["_os_click_flavour"]("export function somethingElse() {}", test)
+
+
+def test_a_dialogs_html_is_read_as_text():
+    line = 'Error: Error dialog detected<header class="x"><h4>Oops!</h4></header><main>Bad</main>'
+    assert NS["_os_click_plain"](line) == "Error: Error dialog detected Oops! Bad"
+
+
+def test_the_servers_error_comes_first_in_a_reason():
+    run = NS["_os_click_new_run"]()
+    run["server"] = "UndefinedColumn: column sale_integration.shared_stock does not exist"
+    run["browser"] = ["Error while testing Shops my.menu_a",
+                      "Error: Error dialog detected<h4>Oops!</h4>"]
+    assert NS["_os_click_reason"](run, "The test code failed") == (
+        "UndefinedColumn: column sale_integration.shared_stock does not exist; "
+        "Error: Error dialog detected Oops!")
+
+
+def test_the_line_that_ended_the_run_is_the_last_resort():
+    run = NS["_os_click_new_run"]()
+    assert NS["_os_click_reason"](run, "Script timeout exceeded") == "Script timeout exceeded"
+    run["browser"] = ["Error while testing Shops my.menu_a"]
+    assert NS["_os_click_reason"](run, "x") == "Error while testing Shops my.menu_a"
+    run["browser"] = ["y" * 2000]
+    assert len(NS["_os_click_reason"](run, "x")) == 800
+
+
+def test_a_reason_leaves_the_js_stack_out():
+    run = NS["_os_click_new_run"]()
+    run["browser"] = ["Error: Error dialog detected<h4>Oops!</h4>\n    at errorDialog (x.js:16:7)"]
+    assert NS["_os_click_reason"](run, "x") == "Error: Error dialog detected Oops!"
