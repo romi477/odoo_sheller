@@ -6,6 +6,7 @@ interpreter and must never import from this project.
 """
 
 import ast
+import copy
 import importlib
 import io
 import json
@@ -428,6 +429,112 @@ def _os_run_test(env, module, test_class, test_method, params=None):
         "duration": duration,
         "test": test,
     }
+
+
+# The clickbot over one module's menus. Odoo's clickbot walks whatever navbar
+# the web client is given, and the web client is given `ir.ui.menu.load_menus`.
+# These functions find the module's part of that tree and cut the rest away,
+# on a copy: what `load_menus` returns is its ormcache entry.
+
+def _os_click_action_model(entry):
+    """The model of a menu's action, or None.
+
+    15 to 18 read the reference field (`"ir.actions.act_window,7"`); 19 and
+    20 hand out `action_model` and `action_id` instead.
+    """
+    if "action_model" in entry:
+
+        return entry["action_model"] or None
+    action = entry.get("action")
+    if not action:
+
+        return None
+
+    return action.split(",")[0]
+
+
+def _os_click_tree(menus, own, root_is_target):
+    """The module's targets in `menus` and the way in to each.
+
+    A target is a menu of the module with an action and no visible children:
+    nothing else is ever clicked. The module's own app root is one too where
+    the clickbot clicks roots before their menus (`root_is_target`). A URL
+    action would take the page away from the clickbot, so it is set aside.
+    """
+    parents = {}
+    for key, entry in menus.items():
+        for child in entry.get("children") or ():
+            parents[child] = key
+    order = []
+    seen = set()
+    pending = list(reversed(menus["root"].get("children") or []))
+    while pending:
+        menu_id = pending.pop()
+        if menu_id not in menus or menu_id in seen:
+            continue
+        seen.add(menu_id)
+        order.append(menu_id)
+        pending.extend(reversed(menus[menu_id].get("children") or []))
+    present = set()
+    targets = []
+    unreached = []
+    for menu_id in order:
+        entry = menus[menu_id]
+        xmlid = entry.get("xmlid") or ""
+        present.add(xmlid)
+        if xmlid not in own:
+            continue
+        model = _os_click_action_model(entry)
+        children = [child for child in entry.get("children") or () if child in menus]
+        is_root = parents.get(menu_id) == "root"
+        if not model or children and not (is_root and root_is_target):
+            continue
+        if model == "ir.actions.act_url":
+            unreached.append(xmlid)
+            continue
+        targets.append(menu_id)
+    tree = {
+        "parents": parents,
+        "targets": targets,
+        "hidden": sorted(xmlid for xmlid in own if xmlid not in present),
+        "unreached_static": unreached,
+    }
+    tree["allowed"] = _os_click_shrink(tree, set())
+    tree["roots"] = [menu_id for menu_id in menus["root"].get("children") or ()
+                     if menu_id in tree["allowed"]]
+    tree["root_action"] = dict(
+        (menu_id, _os_click_action_model(menus[menu_id]) is not None)
+        for menu_id in tree["roots"]
+    )
+
+    return tree
+
+
+def _os_click_shrink(tree, done):
+    """The menus to show once `done` are clicked: what is left, and its way in."""
+    allowed = set()
+    parents = tree["parents"]
+    for menu_id in tree["targets"]:
+        if menu_id in done:
+            continue
+        while menu_id != "root" and menu_id not in allowed and menu_id is not None:
+            allowed.add(menu_id)
+            menu_id = parents.get(menu_id)
+
+    return allowed
+
+
+def _os_click_trim(menus, allowed):
+    """A copy of `menus` holding only `allowed`. `menus` itself is not touched."""
+    trimmed = {}
+    for key, entry in menus.items():
+        if key != "root" and key not in allowed:
+            continue
+        kept = copy.deepcopy(entry)
+        kept["children"] = [child for child in entry.get("children") or () if child in allowed]
+        trimmed[key] = kept
+
+    return trimmed
 
 
 def _os_flush(env):

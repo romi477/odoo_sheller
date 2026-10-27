@@ -13,7 +13,7 @@ BOOTSTRAP = ROOT / "odoo_sheller" / "bootstrap.py"
 HARNESS = ROOT / "tests" / "bootstrap_harness.py"
 
 ALLOWED_IMPORTS = {
-    "ast", "importlib", "io", "json", "os", "signal", "socket", "sys", "time", "traceback",
+    "ast", "copy", "importlib", "io", "json", "os", "signal", "socket", "sys", "time", "traceback",
 }
 
 
