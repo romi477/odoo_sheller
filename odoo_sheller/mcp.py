@@ -22,7 +22,7 @@ from mcp.server import MCPServer
 from mcp_types import ToolAnnotations
 
 from odoo_sheller import guidance, rules
-from odoo_sheller.protocol import spec_of
+from odoo_sheller.protocol import run_spec, spec_of
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,8 @@ CALL_WAIT = 40.0
 # os_run_test's ceiling when none is passed, by what the spec names: one test
 # is usually seconds, a class minutes, a module tens of minutes.
 DEFAULT_TEST_TIMEOUTS = {"method": 30.0, "class": 300.0, "module": 1800.0}
+# Odoo gives one whole app 600s to 1200s; one module's menus are fewer.
+DEFAULT_CLICK_TIMEOUT = 900.0
 # `Session.start` waits this long for the bootstrap's hello. Giving up on the
 # open call any earlier strands a session the daemon then goes on to register,
 # whose write key was only ever in the response we stopped waiting for.
@@ -873,11 +875,22 @@ async def os_run_test(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + MCP_CALL_BUDGET
 
+    return await _run_where(
+        session_id, container, database, odoo_bin,
+        lambda run_session, ours: _run_in(
+            run_session, "run_test", {"test": test, "timeout": timeout, "params": params},
+            spec_of(test, params=params), test, timeout, deadline, ours,
+        ),
+    )
+
+
+async def _run_where(session_id, container, database, odoo_bin, run) -> Any:
+    """`run(session_id, ours)` in the session lent, or in a fresh one opened for it."""
     if session_id:
         # A session a human handed over — the only way onto a remote instance,
         # since no tool here can name one. Not ours to close, and not opened
         # with autoclose, so it stays exactly as it was lent.
-        return await _run_test_in(session_id, test, timeout, deadline, ours=False, params=params)
+        return await run(session_id, False)
 
     # Container and database do not identify a session — several may be
     # opening on the same target at once — so the token is what finds this one
@@ -897,7 +910,7 @@ async def os_run_test(
             "owner": {"kind": "agent", "label": AGENT_LABEL},
             "allow_commit": False,
             "client_token": client_token,
-            # It exists to run one test. Nobody has to remember to close it.
+            # It exists for one run. Nobody has to remember to close it.
             "autoclose": True,
         },
     )
@@ -920,7 +933,72 @@ async def os_run_test(
     session_id = opened["id"]
     _keys[session_id] = opened.pop("write_key")
 
-    return await _run_test_in(session_id, test, timeout, deadline, ours=True, params=params)
+    return await run(session_id, True)
+
+
+CLICK_MODULE_DESCRIPTION = (
+    "Click through the menus of one installed module with Odoo's own clickbot, "
+    "in a test transaction, and say which of them failed: a broken view, a "
+    "filter naming a field that is gone, a crashing component, an RPC error. "
+    "Exactly one module — not the modules depending on it — and only its own "
+    "menus: the rest of the app they sit in is hidden from the browser for "
+    "the run, in memory; nothing is written to hide it. `login` clicks as "
+    "that user (default base.user_admin); a restricted one is how menu rights "
+    "show up. `debug` is on by default so the module's settings menus are "
+    "clicked too. The answer carries `clickbot`: `clicked`, `failed` (each "
+    "menu's xmlid, its app root and the reason), `unreached` (menus the "
+    "clickbot never got to — not a failure, but not coverage either) and "
+    "`hidden` (the module's menus this user does not see). On 15 to 19 the "
+    "clickbot opens each view type and filter but no existing record's form. "
+    "Opens its own self-closing session as os_run_test does, or runs in the "
+    "session_id a human handed you. Default timeout 900s, at most 3600; a "
+    "long run answers {\"status\": \"running\"} — collect it with "
+    "os_test_result(session_id). os_help('tests')."
+)
+
+
+@mcp.tool(description=CLICK_MODULE_DESCRIPTION)
+async def os_click_module(
+    module: str,
+    login: str | None = None,
+    debug: bool = True,
+    container: str | None = None,
+    database: str | None = None,
+    odoo_bin: str | None = None,
+    timeout: float | None = None,
+    session_id: str | None = None,
+) -> Any:
+    if timeout is None:
+        timeout = DEFAULT_CLICK_TIMEOUT
+    if session_id and (container or database or odoo_bin):
+
+        return {
+            "error": "ambiguous_target",
+            "recovery": (
+                "pass session_id to run in a session you were handed, or a "
+                "container to open a fresh one — not both"
+            ),
+        }
+    if not 0 < timeout <= MAX_TEST_TIMEOUT:
+
+        return {
+            "error": "invalid_timeout",
+            "timeout": timeout,
+            "recovery": f"pass a timeout between 0 and {MAX_TEST_TIMEOUT:.0f} seconds",
+        }
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + MCP_CALL_BUDGET
+
+    return await _run_where(
+        session_id, container, database, odoo_bin,
+        lambda run_session, ours: _run_in(
+            run_session, "click_module",
+            {"module": module, "login": login, "debug": debug, "timeout": timeout},
+            # The browser's console is the log, and `clickbot` distils it: a
+            # count, as for a whole module.
+            f"clickbot:{module}", module, timeout, deadline, ours,
+        ),
+    )
 
 
 def _spec_form(test: str) -> str:
@@ -929,11 +1007,14 @@ def _spec_form(test: str) -> str:
     return ("module", "class", "method")[min(test.count("."), 2)]
 
 
-async def _run_test_in(
-    session_id: str, test: str, timeout: float, deadline: float, ours: bool,
-    params: str | None = None,
+async def _run_in(
+    session_id: str, route: str, body: dict, spec: str, log_spec: str, timeout: float,
+    deadline: float, ours: bool,
 ) -> Any:
-    """Run one test in a session and shape the outcome.
+    """Start one run in a session and shape the outcome.
+
+    `route` is the session's endpoint for it, `spec` how the run is named
+    back, and `log_spec` what decides how much of its log comes with it.
 
     `ours` says whether this server opened the session. It changes nothing
     about the run, and everything about what the answer may promise: a session
@@ -947,11 +1028,9 @@ async def _run_test_in(
     # its 504 against our timeout.
     run_leg = max(min(timeout + 2, deadline - loop.time()), RUN_START_GRACE)
     result = await _call(
-        "POST", f"/api/sessions/{session_id}/run_test", session_id,
-        client_timeout=run_leg,
-        json={"test": test, "timeout": timeout, "params": params},
+        "POST", f"/api/sessions/{session_id}/{route}", session_id,
+        client_timeout=run_leg, json=body,
     )
-    spec = spec_of(test, params=params)
     if result.get("error") == "request_timed_out":
         afterwards = (
             "that session closes itself when the run ends, so there is "
@@ -976,7 +1055,7 @@ async def _run_test_in(
 
     test_info = result.get("test") or {}
     stdout, stdout_clipped = _clip(result.get("stdout"), MAX_STDOUT)
-    log, stderr_clipped = _test_log(test, result)
+    log, stderr_clipped = _test_log(log_spec, result)
     truncated = stdout_clipped or stderr_clipped
 
     answer = {
@@ -1006,6 +1085,8 @@ async def _run_test_in(
         # Hoot runs inside one Python test, so the counts above say 1 whatever
         # ran in the browser; these are what did.
         answer["hoot"] = result["hoot"]
+    if "clickbot" in result:
+        answer["clickbot"] = result["clickbot"]
 
     return answer
 
@@ -1225,7 +1306,7 @@ def _history_run_test_entry(entry: dict) -> dict:
     # the same as one answered at once — on the spec without its params: a
     # dot inside them is not a class.
     log, stderr_clipped = _test_log(spec_of(*parts), result)
-    spec = spec_of(*parts, entry.get("params"))
+    spec = run_spec(entry)
     shaped = {
         "n": entry.get("ordinal"),
         "test": spec,
@@ -1248,6 +1329,8 @@ def _history_run_test_entry(entry: dict) -> dict:
     }
     if result.get("hoot"):
         shaped["hoot"] = result["hoot"]
+    if result.get("clickbot"):
+        shaped["clickbot"] = result["clickbot"]
     if out_clipped or stderr_clipped:
         shaped["truncated"] = True
     if entry.get("abandoned"):

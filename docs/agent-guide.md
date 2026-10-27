@@ -62,7 +62,8 @@ side wants. `os_run_test`'s own session sends `false`: it never commits.
 | `os_exec` | `code`, `session_id=None`, `stderr=False` | blocks; returns stdout, result, error, duration and `stderr_lines`. `stderr=True` adds the log lines themselves |
 | `os_list_tests` | `module`, `container=None` | classes and methods in one addon, as `os_run_test` specs; disk catalogue, no session. A local container's disk only: on a remote build it answers `not_a_container` and points at `os_source` |
 | `os_run_test` | `test`, `container=None`, `database=None`, `odoo_bin=None`, `timeout=None`, `session_id=None`, `params=None` | runs a whole module's standard tests (`module`), one class or one method; answers with counts and `failed`, each a spec to rerun; opens its own new session (which then closes itself), or runs in one it was handed. Without `timeout` the ceiling follows the spec: 30s, 300s, 1800s — at least 300s whenever `params` is given. `params` rides on the tag as `[params]`; Hoot reads it as a filter, and the answer then carries `hoot` (below) |
-| `os_test_result` | `session_id` | waits for a run started by `os_run_test` and returns its outcome (read-only, no key needed) |
+| `os_click_module` | `module`, `login=None`, `debug=True`, `container=None`, `database=None`, `odoo_bin=None`, `timeout=None`, `session_id=None` | runs Odoo's own clickbot over the menus of one installed module only; answers as `os_run_test` does, plus `clickbot` (below). Opens its own self-closing session or runs in one it was handed; 900s by default |
+| `os_test_result` | `session_id` | waits for a run started by `os_run_test` or `os_click_module` and returns its outcome (read-only, no key needed) |
 | `os_rollback` | `session_id=None` | discards the open transaction |
 | `os_commit` | `session_id=None`, `include_inherited=False` | fails unless the human has granted commit; refused once as `inherited_pending` on a session handed over with work already in its transaction |
 | `os_interrupt` | `session_id=None` | stops a running command |
@@ -201,6 +202,70 @@ whose tours skip without Chrome is reported as before. Verified on 19 with a tes
 written to fail: one passed, one failed, the failed id rerun alone. 18 has
 the same class and method; 20 makes `test_unit_desktop` a `CrossModule` test
 that filters by the run's modules, and has not been run.
+
+### Clicking a module
+
+Odoo ships a crawler, the clickbot (`web/static/src/webclient/clickbot/`),
+that opens an app, each menu under it, each view type an action offers and
+each filter, and fails on an error dialog. Odoo runs it per app from
+`web/tests/test_click_everywhere.py`. `os_click_module(module)` runs the same
+clickbot, unchanged, over the menus of one installed module only.
+
+The module's menus are its own `ir.model.data` rows (a `<menuitem
+id="sale.x">` it writes edits Sale's and is not counted). Of those,
+`ir.ui.menu.load_menus` — as the user, with the same debug the browser runs
+with — says which the user sees; the rest are `hidden`. The *targets* are the
+visible ones with an action and no visible children, and the module's own
+app root on 15 to 19, where the clickbot clicks a root first. A URL action is
+never clicked: it would take the page away. For the run `load_menus` on the
+registry class is replaced in memory by a wrapper that returns a trimmed deep
+copy — the targets and their way in — so the navbar holds nothing else; the
+ormcache keeps the full tree, nothing is written, and the test's own
+`self.patch`, a `finally` in the bootstrap and, last, the process's end each
+undo it. After the run the class is checked to be as it was
+(`'load_menus' not in cls.__dict__`); if not, the answer is
+`clickbot_restore_failed`, with the run's own error, if it had one, in
+`clickbot.cause`.
+
+The test is built by the bootstrap and run through Odoo's suite runner, one
+`browser_js` per app root, each in a `subTest`, as the session's `run_test`
+would: the HTTP server on its free port, a test transaction, rolled back.
+On 15 to 17, whose `authenticate` checks a real password, `_check_credentials`
+is patched around the test's own `authenticate` call and nothing else, as 18
+patches it: the test's HTTP server listens on every interface, and a patch
+that outlived the call would let anyone log in as anyone while the run lasts. On 15 to 19 the clickbot leaves an
+app at its first failing menu; the test hears the console in-process, blames
+the last menu logged — or, for a foreign root without an action of its own,
+its first target, whose action the root runs — takes it out of the tree and
+starts the browser again on what is left. 20's clickbot goes on by itself
+and gets an `error_checker` that lets its `Error found:` blocks through. Each
+`browser_js` gets what is left of the run's timeout.
+
+A target under an app root with no xmlid — an app made in the UI — is put in
+`unreached` without a browser: the clickbot starts an app by its xmlid, and
+an empty one starts every app the browser is shown. So is a URL menu, which
+would take the page away from the clickbot.
+
+The answer carries `clickbot: {module, login, debug, roots, clicked, failed,
+unreached, hidden, refused, restored}` and the counts `filters`, `views` and
+`modals`, read off the clickbot's line for each event across every browser of
+the run — not off its totals, which a run restarted past a failure never
+prints (a key is absent when nothing of its kind was logged). `failed` is a
+list of `{xmlid, root, reason}`; `reason` is the first error the browser
+logged in that run, or the test's own failure text on 15, which raises before
+it logs, clipped to 800 characters. A run that ran no test or skipped one is
+`js_tests_skipped`, decided from the counts — 15 logs its skip with no
+reason. `os_session` carries `clickbot: {available, reason}` next to
+`js_tests`: the clickbot needs the browser, not Hoot's runner, and on 15 and
+16 `available` is `null` (`chrome_not_checked`). It is journalled as a
+`run_test` with a `clickbot` key and shown as `clickbot:<module>`.
+
+Verified on 19, on a database whose every menu failed with the same server
+error (a column the code has and the table lacks): the browser was shown only
+the module's app, each of the module's menus was blamed in turn under its
+foreign root with that error as the reason, the run went on past each, and an
+interrupt mid-run left `load_menus` restored. A clean pass, 15 to 18 and 20
+(whose `error_checker` path is read from source) have not been run.
 
 ### Rules for the Odoo major
 

@@ -688,3 +688,27 @@ def test_journal_path_for_a_target_with_no_database_yet(tmp_path):
     assert path.parent == tmp_path
     assert "acme" in path.name
     assert path.name.endswith("-abc123.jsonl")
+
+
+CLICK_RECORDS = [
+    {"kind": "run_test", "ts": "t1", "id": 1, "module": "my", "test_class": None,
+     "test_method": None, "params": None, "clickbot": {"login": None, "debug": True}},
+    {"kind": "result", "ts": "t2", "id": 1, "stdout": "", "error": None, "duration": 3.0,
+     "test": {"tests_run": 1, "failures": 0, "errors": 0, "skipped": 0, "success": True},
+     "clickbot": {"module": "my", "clicked": ["my.menu_a"], "failed": []}},
+]
+
+
+def test_a_click_run_reads_back_with_its_spec():
+    text = journal.to_markdown(CLICK_RECORDS)
+    assert "`clickbot:my`" in text
+    entry = journal.feed_from_records(CLICK_RECORDS)["entries"][0]
+    assert entry["kind"] == "run_test"
+    assert entry["clickbot"] == {"login": None, "debug": True}
+    assert entry["result"]["clickbot"]["clicked"] == ["my.menu_a"]
+
+
+def test_a_plain_run_has_no_clickbot_key_in_its_entry():
+    records = [dict(CLICK_RECORDS[0]), CLICK_RECORDS[1]]
+    del records[0]["clickbot"]
+    assert "clickbot" not in journal.feed_from_records(records)["entries"][0]

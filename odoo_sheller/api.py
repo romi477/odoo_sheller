@@ -62,6 +62,17 @@ def _export_headers(path: Path, suffix: str) -> dict:
 # /module` does; a class or a method narrows it.
 TEST_SPEC_RE = re.compile(r"^(\w+)(?:\.(\w+)(?:\.(\w+))?)?$")
 
+LOGIN_LIMIT = 256
+
+
+class ClickModuleBody(BaseModel):
+    module: str
+    # Any active user's login; left out, base.user_admin's.
+    login: str | None = None
+    # Debug on clicks the `base.group_no_one` menus a module's settings live in.
+    debug: bool = True
+    timeout: float | None = Field(default=None, gt=0, le=3600)
+
 
 class ExecBody(BaseModel):
     code: str
@@ -1149,7 +1160,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
     ):
         session = session_or_404(session_id)
         require_owner(session, x_os_session_key)
-        match = TEST_SPEC_RE.match(body.test)
+        match = TEST_SPEC_RE.fullmatch(body.test)
         if not match:
             raise HTTPException(
                 status_code=400,
@@ -1175,6 +1186,44 @@ def create_app(registry: Registry | None = None) -> FastAPI:
         try:
 
             return await session.run_test(module, test_class, test_method, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - API boundary maps failures to HTTP.
+            raise translate(exc, session_id) from None
+
+    @app.post("/api/sessions/{session_id}/click_module")
+    async def click_module(
+        session_id: str,
+        body: ClickModuleBody,
+        x_os_session_key: str | None = Header(None),
+    ):
+        session = session_or_404(session_id)
+        require_owner(session, x_os_session_key)
+        if discovery.MODULE_NAME_RE.fullmatch(body.module) is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_module",
+                    "module": body.module,
+                    "recovery": "give the module's technical name, such as 'sale_stock'",
+                },
+            )
+        login = body.login
+        if login is not None and (
+            not login or len(login) > LOGIN_LIMIT or any(ord(char) < 32 for char in login)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_login",
+                    "recovery": (
+                        f"give a user's login, at most {LOGIN_LIMIT} characters and no "
+                        "control characters, or leave it out for base.user_admin"
+                    ),
+                },
+            )
+        kwargs = {"timeout": body.timeout} if body.timeout is not None else {}
+        try:
+
+            return await session.click_module(body.module, login, body.debug, **kwargs)
         except Exception as exc:  # noqa: BLE001 - API boundary maps failures to HTTP.
             raise translate(exc, session_id) from None
 

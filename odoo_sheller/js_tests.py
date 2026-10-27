@@ -14,6 +14,8 @@ REASONS = (
     "chrome_not_found",
     "websocket_client_missing",
     "probe_failed",
+    # 15 and 16 look for Chrome only when a browser starts: not asked, not absent.
+    "chrome_not_checked",
 )
 
 # The suite the shell can drive: Hoot, whose runner arrived in 18. Before
@@ -54,6 +56,29 @@ def capability(hello: dict | None) -> dict:
         described["available"] = True
 
     return described
+
+
+def clickbot_capability(hello: dict | None) -> dict:
+    """The session's `clickbot`: Odoo's clickbot needs a browser, not Hoot's runner.
+
+    `available` is None when hello could not ask (15 and 16).
+    """
+    found = (hello or {}).get("js")
+    if not isinstance(found, dict) or "error" in found or not isinstance(found.get("websocket"), bool):
+
+        return {"available": False, "reason": "probe_failed"}
+    # ChromeBrowser checks `websocket` before it looks for Chrome.
+    if not found["websocket"]:
+
+        return {"available": False, "reason": "websocket_client_missing"}
+    if found.get("chrome") is None:
+
+        return {"available": None, "reason": "chrome_not_checked"}
+    if not found["chrome"]:
+
+        return {"available": False, "reason": "chrome_not_found"}
+
+    return {"available": True, "reason": None}
 
 
 # The Python test that drives Hoot in a browser, and the filter that narrows

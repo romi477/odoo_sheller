@@ -622,6 +622,7 @@ answers `409` until that command's result finally arrives. Use `interrupt`, or
 | `GET` | `/api/sessions/{id}` | one session, with `js_tests`: whether a browser suite can run there; sent with `X-OS-Session-Key`, it adds `key_status` — `owner`, `former_owner` or `invalid` — for that key |
 | `POST` | `/api/sessions/{id}/exec` | run code. `read_only: true` is the caller's word that it writes nothing: journalled with the flag, not counted in `pending_commands` |
 | `POST` | `/api/sessions/{id}/run_test` | run a whole module's standard tests, one class or one method (`{"test": "module[.TestClass[.test_method]]"}`, optional `timeout`); stdout and Odoo's log lines come back separated, and `failed` lists each failing test as a spec to run again. A browser suite Odoo skipped is `success: false`, `error: "js_tests_skipped"` |
+| `POST` | `/api/sessions/{id}/click_module` | Odoo's own clickbot over one installed module's menus only (`{"module": "my_module"}`, optional `login`, `debug` — on by default — and `timeout`, default 900 s), in a test transaction; booked as a run. `clickbot` names the menus `clicked`, `failed` with the reason, `unreached` and `hidden` from that user. Nothing is written to hide menus |
 | `POST` | `/api/sessions/{id}/commit` | keep the transaction |
 | `POST` | `/api/sessions/{id}/rollback` | discard the transaction |
 | `POST` | `/api/sessions/{id}/interrupt` | `SIGINT` |

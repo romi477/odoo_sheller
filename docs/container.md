@@ -143,9 +143,9 @@ the same texts from `GET /api/help`:
 `os_run_test(`, the served text says `{{run_test}}(`, and the client puts its
 own name for that action there. `markers` is the whole list, the MCP tools
 without their `os_` prefix: `exec`, `source`, `journal`, `history`,
-`run_test`, `test_result`, `list_tests`, `open_session`, `close_session`,
-`commit`, `rollback`, `interrupt`, `session`, `attach_session`, `help`,
-`list_sessions`, `list_containers`. A client that substitutes nothing still
+`run_test`, `click_module`, `test_result`, `list_tests`, `open_session`,
+`close_session`, `commit`, `rollback`, `interrupt`, `session`,
+`attach_session`, `help`, `list_sessions`, `list_containers`. A client that substitutes nothing still
 reads plain text. Topics about a flow an HTTP client may not have — sessions,
 ownership, commit, remote_server, watching — are served like the rest; the
 client chooses.
@@ -170,6 +170,19 @@ otherwise `reason` is one of `runner_not_supported`, `chrome_not_found`,
 own runs go: `18-19`, `unverified` on 20 (can run, not known to work), `null`
 otherwise. Checked once, when the session starts; no browser is started.
 `null` until the session has said hello.
+
+**`clickbot` on a session**, next to `js_tests`: whether Odoo's clickbot can
+run there (`POST /api/sessions/{id}/click_module`). It needs the browser and
+not Hoot's runner, so it is there on 15 to 17 as well:
+
+```json
+"clickbot": {"available": true, "reason": null}
+```
+
+`reason` is `chrome_not_found`, `websocket_client_missing` or `probe_failed`
+when `available` is false. On 15 and 16 Odoo looks for Chrome only when a
+browser starts, so a session there cannot say: `available` is `null` and
+`reason` is `chrome_not_checked`. `null` until the session has said hello.
 
 **`js` in the module listing** (`GET /api/containers/{container}/tests`):
 
@@ -203,6 +216,18 @@ skips it for a missing Chrome or `websocket-client`, the answer carries
 `websocket_client_missing`), `test.success` is `false`, and `error` is
 `"js_tests_skipped"`. The journal entry and every later read of the run carry
 the same. A Hoot run that executed has no `hoot.skipped`.
+
+**A clickbot run** (`POST /api/sessions/{id}/click_module`, body
+`{"module", "login", "debug", "timeout"}`) answers as a run does, plus
+`clickbot`: `roots`, `clicked`, `failed` (`xmlid`, `root`, `reason`),
+`unreached`, `hidden`, the counts of `filters`, `views` and `modals` the
+clickbot logged across every browser it ran, and `restored`. It is never a pass when it clicked nothing: a refusal
+(`unknown_module`, `module_not_installed`, `unknown_login`, `no_menus`,
+`no_visible_menus`) is the `error`; a run that ran no test or skipped one is
+`"js_tests_skipped"` with `clickbot.skipped.reason`, `null` when Odoo's log
+gave none; and a process whose `ir.ui.menu.load_menus` could not be put back
+is `"clickbot_restore_failed"` — open a fresh session. Whatever else ended
+that run, an interrupt most likely, is kept in `clickbot.cause`.
 
 ## Find
 

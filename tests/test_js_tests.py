@@ -69,3 +69,26 @@ def test_every_reason_is_in_the_closed_list():
         for js in (BOTH, {"chrome": False, "websocket": True}, {"chrome": True, "websocket": False}, None)
     }
     assert seen - {None} <= set(js_tests.REASONS)
+
+
+@pytest.mark.parametrize("odoo", ["17.0", "18.0", "19.0", "20.0"])
+def test_clickbot_capability_before_eighteen_is_not_hoots(odoo):
+    """The clickbot needs Chrome, not Hoot's runner: 17 has the one and not the other."""
+    assert js_tests.clickbot_capability(hello(odoo)) == {"available": True, "reason": None}
+
+
+def test_unchecked_chrome_is_said_not_guessed():
+    """15 and 16 keep the Chrome lookup inside ChromeBrowser: hello cannot say."""
+    found = js_tests.clickbot_capability(hello("15.0", {"chrome": None, "websocket": True}))
+    assert found == {"available": None, "reason": "chrome_not_checked"}
+    assert "chrome_not_checked" in js_tests.REASONS
+
+
+@pytest.mark.parametrize(("js", "reason"), [
+    ({"chrome": False, "websocket": True}, "chrome_not_found"),
+    ({"chrome": None, "websocket": False}, "websocket_client_missing"),
+    ({"error": "ImportError"}, "probe_failed"),
+    (None, "probe_failed"),
+])
+def test_clickbot_capability_names_what_is_missing(js, reason):
+    assert js_tests.clickbot_capability(hello("16.0", js)) == {"available": False, "reason": reason}

@@ -467,6 +467,13 @@ async def test_list_tests_rejects_a_dotted_spec_without_docker():
     assert runner.calls == []
 
 
+async def test_list_tests_rejects_a_trailing_newline_without_docker():
+    runner = fake_runner([(0, "{}", "")])
+    result = await discovery.list_tests("qbo19", "sale\n", runner=runner)
+    assert result["error_code"] == "invalid_module_name"
+    assert runner.calls == []
+
+
 async def test_list_tests_rejects_an_empty_module_without_docker():
     runner = fake_runner([(0, "{}", "")])
     result = await discovery.list_tests("qbo19", "", runner=runner)
@@ -969,8 +976,10 @@ def test_a_file_under_another_bundle_is_not_in_the_unit_tests(tmp_path):
     [
         # A name, not a literal: the manifest is read, never executed.
         "BUNDLE = 'web.assets_unit_tests'\n{'name': 'widget', 'assets': {BUNDLE: []}}\n",
-        "{'name': 'widget', 'assets': {'web.assets_unit_tests': "
-        "[('include', 'web.assets_unit_tests_setup')]}}\n",
+        (
+            "{'name': 'widget', 'assets': {'web.assets_unit_tests': "
+            "[('include', 'web.assets_unit_tests_setup')]}}\n"
+        ),
         "{'name': 'widget', 'assets': {'web.assets_unit_tests': 'widget/static/tests/*'}}\n",
         "{'name': 'widget', 'assets': ['web.assets_unit_tests']}\n",
         "{'name': 'widget'\n",

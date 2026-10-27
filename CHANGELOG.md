@@ -7,6 +7,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- `os_click_module(module)` and `POST /api/sessions/{id}/click_module`: Odoo's
+  own clickbot over the menus of one installed module only, in a test
+  transaction, as `base.user_admin` or any `login`, with debug on by default.
+  `load_menus` is trimmed in memory for the run and put back after; nothing is
+  written to hide menus. The answer's `clickbot` names the menus `clicked`,
+  every one that `failed` with its reason, those `unreached` and those
+  `hidden` from that user; on 15 to 19 the run restarts past a failing menu
+  so one run finds them all. A run that clicked nothing is never a pass.
+  Booked and shown as a run (`clickbot:<module>`), collected with
+  `os_test_result`. Sessions carry `clickbot: {available, reason}`.
+
 ## [1.11.1] — 2026-10-23
 
 Fixes from a review of the whole project. Two things now fail closed: an

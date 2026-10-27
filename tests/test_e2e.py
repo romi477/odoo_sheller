@@ -188,6 +188,38 @@ async def test_run_test_with_no_matching_name_reports_zero_not_success(session):
     assert result["test"]["success"] is True  # the misleading part, made visible
 
 
+
+# A module with a few menus under an app that is not its own.
+CLICK_MODULE = os.environ.get("PT_E2E_CLICK_MODULE", "hr_skills")
+
+
+async def test_click_module_clicks_a_module_and_restores_load_menus(session):
+    """Verified on 19 (integra19 / integra_db_19_presta, 2026-10-27): the
+    browser saw only the module's app, each failing menu was blamed under its
+    foreign root with the server's error as the reason, the run went on past
+    each one, and an interrupt mid-run left the class restored. That database
+    fails every menu (its `sale_integration` table lacks a column the code has),
+    so a clean pass is not shown there; 15 to 18 and 20 were not run."""
+    result = await session.click_module(CLICK_MODULE, timeout=600)
+    clickbot = result["clickbot"]
+    assert clickbot["restored"] is True
+    assert clickbot["refused"] is None
+    assert result["test"]["tests_run"] == 1
+    accounted = clickbot["clicked"] + [f["xmlid"] for f in clickbot["failed"]]
+    assert accounted, "the clickbot clicked nothing"
+    assert all(xmlid.startswith(CLICK_MODULE + ".") for xmlid in accounted)
+    assert result["test"]["success"] is (not clickbot["failed"] and all(
+        root["success"] for root in clickbot["roots"]))
+    after = await session.execute(
+        "cls = type(env['ir.ui.menu'])\n('load_menus' in cls.__dict__, "
+        "len(env['ir.ui.menu'].load_menus('1')['root']['children']))"
+    )
+    assert after["error"] is None
+    # Our own repr of a tuple.
+    own, roots = eval(after["result"])
+    assert own is False
+    assert roots > len(clickbot["roots"]), "load_menus still answers trimmed"
+
 async def test_run_test_discards_pending_exec_work_in_the_same_session(session):
     created = await session.execute(
         "p = env['res.partner'].create({'name': 'pt-e2e-run-test'})\np.id"

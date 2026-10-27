@@ -20,6 +20,7 @@ MARKERS = (
     "journal",
     "history",
     "run_test",
+    "click_module",
     "test_result",
     "list_tests",
     "open_session",
@@ -643,6 +644,44 @@ that form has not been run here.
 Without Chrome or without `websocket-client`, Odoo skips the test:
 `Chrome executable not found` or `websocket-client module is not installed`.
 A skip is not a pass: say the tests did not run.
+
+### Clicking through a module's menus
+
+{{click_module}}(module) runs Odoo's own clickbot over the menus of one
+installed module and nothing else: it opens each of them, every view type
+its action offers and every filter, and fails on an error dialog or a view
+that never settles. It catches a broken view, a filter on a field that is
+gone, a component that crashes, a menu the user may not open. One module
+exactly — not the modules depending on it. The rest of the app the module's
+menus sit in is hidden from the browser for the run, in memory; nothing is
+written to the database to hide it, and the session is back as it was after.
+
+`login` clicks as that user, base.user_admin by default; a restricted one is
+how menu rights show up. Debug is on by default, so the module's settings and
+technical menus are clicked too; `debug=False` clicks what a user without it
+sees. On 15 to 19 the clickbot switches views and filters but opens no form
+of an existing record, so a broken form is caught only where a menu opens
+one; 20's opens the first record and a new one.
+
+The answer carries `clickbot`: `clicked`, `failed` — each with its `xmlid`,
+the app `root` it was under and the `reason`, the error the browser logged —
+`unreached`, the module's menus the clickbot never got to, and `hidden`, the
+module's menus this user does not see at all. `unreached` is not a failure
+and not coverage either: the navbar shows three levels below an app, so a
+deeper menu is out of the clickbot's reach, and so is a menu under an app
+made in the UI, which has no xmlid to start the clickbot by. A URL menu is
+never clicked either. Under `demo`, `hidden` is the
+finding. After a failure the run goes on to the module's other menus, so one
+run names every broken one. A failure of a foreign app's own action is that
+app's, in `roots[].error`, not the module's.
+
+Never a pass: `unknown_module`, `module_not_installed`, `unknown_login`,
+`no_menus`, `no_visible_menus` in `error`; `js_tests_skipped` when no
+browser ran (`clickbot` in {{session}} says beforehand whether one can — on
+15 and 16 it cannot tell, `available: null`); a timeout; and
+`clickbot_restore_failed`, after which you open a fresh session. Default
+ceiling 900 seconds; a long run answers `status: "running"` like {{run_test}},
+and {{test_result}}(session_id) collects it.
 """,
     "watching": """\
 ## Being watched

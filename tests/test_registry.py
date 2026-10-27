@@ -705,8 +705,6 @@ def test_a_new_admin_key_never_appears_without_its_key(tmp_path, monkeypatch):
 
 
 def test_a_key_another_daemon_linked_first_is_the_one(tmp_path, monkeypatch):
-    import os
-
     path = tmp_path / "admin.key"
 
     def lose_the_race(source, target):

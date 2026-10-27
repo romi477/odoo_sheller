@@ -136,6 +136,13 @@ class FakeSession:
             "stderr": [], "discarded_pending": False,
         }
 
+    async def click_module(self, module, login=None, debug=True, timeout=900.0):
+        self.calls.append(("click_module", module, login, debug, timeout))
+        if self.raises:
+            raise self.raises
+
+        return {"error": None, "test": {"success": True}, "clickbot": {"module": module}}
+
     async def close(self, timeout=10.0):
         self.calls.append(("close", timeout))
         self.state = SessionState.CLOSED
@@ -410,6 +417,14 @@ def test_run_test_with_params_an_odoo_cannot_take_is_a_422(client):
 
 def test_run_test_rejects_a_malformed_spec(client):
     response = client.post("/api/sessions/s1/run_test", json={"test": "not a valid spec!!"})
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "invalid_test_spec"
+    assert client.registry.session.calls == []
+
+
+def test_run_test_rejects_a_spec_with_a_trailing_newline(client):
+    # `$` matches before a final newline; the spec must end where the text does.
+    response = client.post("/api/sessions/s1/run_test", json={"test": "sale.TestSale\n"})
     assert response.status_code == 400
     assert response.json()["detail"]["error"] == "invalid_test_spec"
     assert client.registry.session.calls == []
@@ -2391,3 +2406,55 @@ def test_a_humans_open_is_not_closed_when_the_page_goes(client):
     )
 
     assert "s1" in client.registry.sessions
+
+
+def test_click_module_runs_the_module_with_its_defaults(client):
+    response = client.post("/api/sessions/s1/click_module", json={"module": "my"})
+    assert response.status_code == 200
+    assert response.json()["clickbot"] == {"module": "my"}
+    assert client.registry.session.calls[-1] == ("click_module", "my", None, True, 900.0)
+
+
+def test_click_module_passes_login_debug_and_timeout(client):
+    response = client.post(
+        "/api/sessions/s1/click_module",
+        json={"module": "my", "login": "demo@example.com", "debug": False, "timeout": 60},
+    )
+    assert response.status_code == 200
+    assert client.registry.session.calls[-1] == (
+        "click_module", "my", "demo@example.com", False, 60.0)
+
+
+def test_click_module_needs_the_owner_key(client):
+    response = client.post(
+        "/api/sessions/s1/click_module", json={"module": "my"},
+        headers={"X-OS-Session-Key": ""},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "not_owner"
+    assert client.registry.session.calls == []
+
+
+@pytest.mark.parametrize("bad", ["", "my module", "my.menu", "../x", "my-module", "my\n"])
+def test_click_module_refuses_a_bad_module_name(client, bad):
+    response = client.post("/api/sessions/s1/click_module", json={"module": bad})
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "invalid_module"
+    assert client.registry.session.calls == []
+
+
+@pytest.mark.parametrize("bad", ["demo\nadmin", "a\x00", "", "x" * 257])
+def test_click_module_refuses_a_login_with_a_control_character(client, bad):
+    response = client.post(
+        "/api/sessions/s1/click_module", json={"module": "my", "login": bad})
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "invalid_login"
+    assert client.registry.session.calls == []
+
+
+@pytest.mark.parametrize("timeout", [0, -1, 3601])
+def test_click_module_refuses_a_timeout_out_of_range(client, timeout):
+    response = client.post(
+        "/api/sessions/s1/click_module", json={"module": "my", "timeout": timeout})
+    assert response.status_code == 422
+    assert client.registry.session.calls == []
