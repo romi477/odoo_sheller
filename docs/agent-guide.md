@@ -224,7 +224,8 @@ ormcache keeps the full tree, nothing is written, and the test's own
 `self.patch`, a `finally` in the bootstrap and, last, the process's end each
 undo it. After the run the class is checked to be as it was
 (`'load_menus' not in cls.__dict__`); if not, the answer is
-`clickbot_restore_failed`.
+`clickbot_restore_failed`, with the run's own error, if it had one, in
+`clickbot.cause`.
 
 The test is built by the bootstrap and run through Odoo's suite runner, one
 `browser_js` per app root, each in a `subTest`, as the session's `run_test`

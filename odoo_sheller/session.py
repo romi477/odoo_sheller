@@ -923,8 +923,12 @@ class Session:
         }
         error = result.get("error")
         if clickbot.get("restored") is False:
-            # The process goes on answering menus through our wrapper.
-            self.journal.write("clickbot_restore_failed", id=result.get("id"))
+            # The process goes on answering menus through our wrapper. That
+            # outranks whatever ended the run, an interrupt most likely, but
+            # does not erase it.
+            if error is not None:
+                clickbot["cause"] = error
+            self.journal.write("clickbot_restore_failed", id=result.get("id"), cause=error)
             error = "clickbot_restore_failed"
         elif error is None and clickbot.get("refused"):
             error = clickbot["refused"]

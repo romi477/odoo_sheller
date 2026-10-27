@@ -2466,11 +2466,15 @@ for line in sys.stdin:
         test["skipped"] = 1
     elif module == "leak":
         clickbot["restored"] = False
+    error = None
+    if module == "interrupted_leak":
+        clickbot["restored"], test = False, None
+        error = {"type": "KeyboardInterrupt", "message": "", "traceback": "Traceback ..."}
     sys.stderr.flush()
     time.sleep(0.1)
     sys.stdout.write(json.dumps({"t":"result","id":frame["id"],"stdout":"",
                                  "stdout_truncated":False,"result":None,
-                                 "result_truncated":False,"error":None,"duration":0.01,
+                                 "result_truncated":False,"error":error,"duration":0.01,
                                  "test":test,"clickbot":clickbot}) + "\n")
     sys.stdout.flush()
 """
@@ -2547,3 +2551,15 @@ async def test_a_failed_restore_is_journalled_and_never_a_pass(tmp_path):
     assert result["test"]["success"] is False
     await session.close()
     assert any(record["kind"] == "clickbot_restore_failed" for record in journal_records(tmp_path))
+
+
+async def test_a_failed_restore_keeps_the_error_that_came_with_it(tmp_path):
+    session = await make_session(tmp_path, script=CLICK_FAKE)
+    await session.start()
+    result = await session.click_module("interrupted_leak")
+    assert result["error"] == "clickbot_restore_failed"
+    assert result["clickbot"]["cause"]["type"] == "KeyboardInterrupt"
+    await session.close()
+    leaked = [record for record in journal_records(tmp_path)
+              if record["kind"] == "clickbot_restore_failed"]
+    assert leaked[0]["cause"]["type"] == "KeyboardInterrupt"

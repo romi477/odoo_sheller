@@ -226,7 +226,8 @@ the same. A Hoot run that executed has no `hoot.skipped`.
 `no_visible_menus`) is the `error`; a run that ran no test or skipped one is
 `"js_tests_skipped"` with `clickbot.skipped.reason`, `null` when Odoo's log
 gave none; and a process whose `ir.ui.menu.load_menus` could not be put back
-is `"clickbot_restore_failed"` — open a fresh session.
+is `"clickbot_restore_failed"` — open a fresh session. Whatever else ended
+that run, an interrupt most likely, is kept in `clickbot.cause`.
 
 ## Find
 
