@@ -834,7 +834,9 @@ class _OsClickHandler(logging.Handler):
     The test must know which menu a failed `browser_js` was in before it
     starts the next one; the session reads stderr only after the run. On the
     root logger, so the error behind a dialog — logged by the server, not the
-    browser — can be the reason too.
+    browser — can be the reason too. Only `odoo.http`'s: that is where every
+    version logs a request it failed (`Exception during request handling`),
+    and any other thread's error has nothing to do with the menu.
     """
 
     def __init__(self, state):
@@ -844,6 +846,9 @@ class _OsClickHandler(logging.Handler):
     def emit(self, record):
         run = self.state["run"]
         if not record.name.endswith(".browser"):
+            if record.name != "odoo.http":
+
+                return
             exc = record.exc_info[1] if record.exc_info else None
             if record.levelno >= logging.ERROR and exc is not None and run["server"] is None:
                 text = ("%s" % exc).strip().splitlines()

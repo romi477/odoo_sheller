@@ -398,3 +398,26 @@ def test_a_reason_leaves_the_js_stack_out():
     run = NS["_os_click_new_run"]()
     run["browser"] = ["Error: Error dialog detected<h4>Oops!</h4>\n    at errorDialog (x.js:16:7)"]
     assert NS["_os_click_reason"](run, "x") == "Error: Error dialog detected Oops!"
+
+
+def error_record(name):
+    import logging
+    import sys
+
+    try:
+        raise ValueError("column x does not exist")
+    except ValueError:
+        exc_info = sys.exc_info()
+
+    return logging.LogRecord(name, logging.ERROR, __file__, 1, "boom", None, exc_info)
+
+
+def test_only_a_request_the_server_failed_is_a_reason():
+    """Odoo logs a request it failed on `odoo.http`; other threads' errors are not the menu's."""
+    state = {"run": NS["_os_click_new_run"](), "clickbot": {}}
+    handler = NS["_OsClickHandler"](state)
+    handler.emit(error_record("odoo.addons.bus.websocket"))
+    handler.emit(error_record("odoo.service.server"))
+    assert state["run"]["server"] is None
+    handler.emit(error_record("odoo.http"))
+    assert state["run"]["server"] == "ValueError: column x does not exist"
