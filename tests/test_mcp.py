@@ -121,6 +121,20 @@ class FakeSession:
         }
 
 
+    async def click_module(self, module, login=None, debug=True, timeout=900.0):
+        self.calls.append(("click_module", module, login, debug, timeout))
+
+        return {
+            "stdout": "", "error": None, "duration": 12.5,
+            "test": {"module": module, "test_class": None, "test_method": None,
+                     "tests_run": 1, "failures": 0, "errors": 0, "skipped": 0,
+                     "success": True},
+            "stderr": ["INFO odoo.addons.my.tests.os_click_module: Testing menu A my.menu_a"],
+            "discarded_pending": False,
+            "clickbot": {"module": module, "clicked": ["my.menu_a"], "failed": []},
+        }
+
+
 class FakeRegistry:
     admin_key = "admin-key"
 
@@ -2384,3 +2398,106 @@ async def test_history_limit_is_a_count_of_entries_never_a_slice_offset(
     history = await server.os_history("s1", limit=limit)
 
     assert [entry["n"] for entry in history["entries"]] == kept
+
+
+async def test_click_module_opens_an_autoclosing_session_and_posts_the_module(wired):
+    result = await server.os_click_module("my", container="c", database="db")
+    assert wired.open_kwargs["autoclose"] is True
+    assert wired.open_kwargs["owner"]["kind"] == "agent"
+    assert wired.session.calls[-1] == ("click_module", "my", None, True, 900.0)
+    assert result["session_id"] == "s1"
+    assert result["test"] == "clickbot:my"
+    assert result["success"] is True
+    assert result["clickbot"]["clicked"] == ["my.menu_a"]
+    # The browser's console is the whole log: a count, as for a whole module.
+    assert result["stderr_lines"] == 1
+    assert "write_key" not in result
+
+
+async def test_click_module_passes_login_debug_and_timeout(wired):
+    await server.os_click_module("my", login="demo", debug=False, timeout=120)
+    assert wired.session.calls[-1] == ("click_module", "my", "demo", False, 120)
+
+
+async def test_click_module_refuses_session_and_container_together(wired):
+    refusal = await server.os_click_module("my", container="c", session_id="s1")
+    assert refusal["error"] == "ambiguous_target"
+    assert wired.session.calls == []
+
+
+@pytest.mark.parametrize("bad", [0, -5, 3601])
+async def test_click_module_refuses_an_unusable_timeout(wired, bad):
+    refusal = await server.os_click_module("my", timeout=bad)
+    assert refusal["error"] == "invalid_timeout"
+    assert wired.session.calls == []
+
+
+async def test_click_module_in_a_lent_session_opens_nothing(wired):
+    result = await server.os_click_module("my", session_id="s1")
+    assert not hasattr(wired, "open_kwargs")
+    assert result["clickbot"]["module"] == "my"
+
+
+async def test_click_module_answers_running_past_the_budget(monkeypatch):
+    async def fake_call(method, path, session_id=None, **kwargs):
+        if path == "/api/sessions":
+
+            return {"id": "s9", "write_key": "k"}
+        assert path == "/api/sessions/s9/click_module"
+        assert kwargs["json"] == {"module": "my", "login": None, "debug": True,
+                                  "timeout": 900.0}
+
+        return {"error": "request_timed_out"}
+
+    monkeypatch.setattr(server, "_call", fake_call)
+    monkeypatch.setattr(server, "_keys", {})
+    answer = await server.os_click_module("my")
+    assert answer["status"] == "running"
+    assert answer["test"] == "clickbot:my"
+    assert 'os_test_result("s9")' in answer["recovery"]
+
+
+CLICK_ENTRY = {
+    "kind": "run_test", "id": 1, "ordinal": 1, "module": "my", "test_class": None,
+    "test_method": None, "params": None, "clickbot": {"login": None, "debug": True},
+    "status": "done",
+    "result": {
+        "stdout": "", "stderr": ["line"] * 3, "error": None, "duration": 40.0,
+        "test": {"tests_run": 1, "failures": 1, "errors": 0, "skipped": 0, "success": False},
+        "clickbot": {"module": "my", "failed": [{"xmlid": "my.menu_a", "root": "my.menu_app",
+                                                 "reason": "boom"}]},
+    },
+}
+
+
+async def test_test_result_returns_a_click_runs_clickbot(monkeypatch):
+    async def fake_call(method, path, session_id=None, **kwargs):
+        if path.endswith("/history"):
+
+            return {"session": {"state": "gone"}, "entries": [CLICK_ENTRY]}
+
+        return {"error": "session_gone"}
+
+    monkeypatch.setattr(server, "_call", fake_call)
+    answer = await server.os_test_result("s1")
+    assert answer["status"] == "done"
+    assert answer["test"] == "clickbot:my"
+    assert answer["clickbot"]["failed"][0]["xmlid"] == "my.menu_a"
+    assert answer["stderr_lines"] == 3
+
+
+async def test_history_shows_a_click_run_as_clickbot_module(monkeypatch):
+    async def fake_call(method, path, session_id=None, **kwargs):
+
+        return {"session": {"session_id": "s1"}, "entries": [CLICK_ENTRY]}
+
+    monkeypatch.setattr(server, "_call", fake_call)
+    entry = (await server.os_history("s1"))["entries"][0]
+    assert entry["test"] == "clickbot:my"
+    assert entry["clickbot"]["failed"][0]["root"] == "my.menu_app"
+
+
+def test_the_click_module_tool_says_what_it_cannot_do():
+    text = server.CLICK_MODULE_DESCRIPTION
+    for says in ("one module", "debug", "os_test_result", "unreached", "hidden"):
+        assert says in text, says
