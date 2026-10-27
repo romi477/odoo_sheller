@@ -225,3 +225,88 @@ def test_the_budget_ends_at_one_second():
     assert NS["_os_click_budget"](100.0, 40.0) == 60.0
     assert NS["_os_click_budget"](100.0, 99.0) is None
     assert NS["_os_click_budget"](100.0, 120.0) is None
+
+
+class Base:
+    def load_menus(self, debug):
+        menus, _ = sample()
+
+        return menus
+
+
+class Model(Base):
+    pass
+
+
+class Own:
+    def load_menus(self, debug):
+        return {}
+
+
+def install(cls, holder):
+    before = NS["_os_click_before"](cls)
+    original = cls.load_menus
+    cls.load_menus = NS["_os_click_wrapper"](original, holder)
+
+    return before
+
+
+def test_an_inherited_method_is_deleted_not_set_back():
+    before = install(Model, {"allowed": {1}})
+    assert "load_menus" in Model.__dict__
+    NS["_os_click_undo"](Model, before)
+    assert "load_menus" not in Model.__dict__
+    assert NS["_os_click_is_undone"](Model, before)
+
+
+def test_an_own_method_is_put_back_as_the_same_object():
+    original = Own.__dict__["load_menus"]
+    before = install(Own, {"allowed": set()})
+    assert Own.__dict__["load_menus"] is not original
+    NS["_os_click_undo"](Own, before)
+    assert Own.__dict__["load_menus"] is original
+    assert NS["_os_click_is_undone"](Own, before)
+
+
+def test_undo_twice_is_harmless():
+    before = install(Model, {"allowed": set()})
+    NS["_os_click_undo"](Model, before)
+    NS["_os_click_undo"](Model, before)
+    assert "load_menus" not in Model.__dict__
+    assert "load_menus" in Base.__dict__
+
+
+def test_is_undone_sees_a_leftover():
+    before = NS["_os_click_before"](Model)
+    Model.load_menus = Base.load_menus
+    try:
+        assert not NS["_os_click_is_undone"](Model, before)
+    finally:
+        del Model.load_menus
+    own_before = NS["_os_click_before"](Own)
+    saved = Own.__dict__["load_menus"]
+    Own.load_menus = lambda self, debug: {}
+    try:
+        assert not NS["_os_click_is_undone"](Own, own_before)
+    finally:
+        Own.load_menus = saved
+
+
+def test_the_wrapper_trims_to_what_the_holder_says_now():
+    menus, own = sample()
+    tree = NS["_os_click_tree"](menus, own, False)
+    holder = {"allowed": tree["allowed"]}
+    returned = []
+
+    def original(self, debug):
+        returned.append(sample()[0])
+
+        return returned[-1]
+
+    wrapper = NS["_os_click_wrapper"](original, holder)
+    first = wrapper(None, "1")
+    holder["allowed"] = NS["_os_click_shrink"](tree, {3})
+    second = wrapper(None, "1")
+    assert first["root"]["children"] == [1, 10]
+    assert second["root"]["children"] == [10]
+    assert returned[-1] == sample()[0]

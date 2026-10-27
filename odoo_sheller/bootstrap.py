@@ -622,6 +622,47 @@ def _os_click_budget(deadline, now):
     return left if left > 1 else None
 
 
+
+def _os_click_before(cls):
+    """Whether `cls` has a `load_menus` of its own, and which, before a run."""
+    own = "load_menus" in cls.__dict__
+
+    return (own, cls.__dict__["load_menus"] if own else None)
+
+
+def _os_click_undo(cls, before):
+    """Put `cls` back as `before` found it.
+
+    `load_menus` is inherited on a registry class: it is not in the class's
+    own `__dict__`, and setting the original back would leave an attribute
+    that was never there. So it is deleted, as `mock.patch.object` does.
+    """
+    own, original = before
+    if not own:
+        if "load_menus" in cls.__dict__:
+            delattr(cls, "load_menus")
+    elif cls.__dict__.get("load_menus") is not original:
+        setattr(cls, "load_menus", original)
+
+
+def _os_click_is_undone(cls, before):
+    own, original = before
+    if not own:
+
+        return "load_menus" not in cls.__dict__
+
+    return cls.__dict__.get("load_menus") is original
+
+
+def _os_click_wrapper(original, holder):
+    """`load_menus` answering only `holder["allowed"]`, read at every call."""
+    def load_menus(self, debug):
+
+        return _os_click_trim(original(self, debug), holder["allowed"])
+
+    return load_menus
+
+
 def _os_flush(env):
     """Write out pending computations. `flush_all` arrived in 16."""
     if hasattr(env, "flush_all"):
