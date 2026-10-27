@@ -468,6 +468,9 @@ def _install_fake_click(module):
                 if entry["xmlid"] in CLICK.get("fail", []):
                     log.error("RPC_ERROR in %s", entry["xmlid"])
                     raise AssertionError("The test code failed")
+                if entry["xmlid"] in CLICK.get("crash", []):
+                    # Chrome gone, a devtools call timed out: not browser_js's fail().
+                    raise RuntimeError("Chrome died under %s" % entry["xmlid"])
                 if key == root:
                     pending = list(entry["children"])
             log.info("Successfully tested 1 apps")

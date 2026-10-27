@@ -954,6 +954,11 @@ def _os_click_root(case, state, root_id, entry):
                             timeout=budget, **extra)
         except AssertionError as exc:
             text = str(exc) or type(exc).__name__
+        except unittest.SkipTest:
+            # No browser at all: the run's counts say so, not a menu.
+            raise
+        except Exception as exc:  # noqa: BLE001 - Chrome gone, a devtools call timed out
+            text = "%s: %s" % (type(exc).__name__, exc)
         finally:
             if flavour["own_browser"]:
                 case.terminate_browser()

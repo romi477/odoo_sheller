@@ -655,6 +655,16 @@ def test_a_foreign_root_failing_blames_its_first_target():
     assert clickbot["roots"][0]["error"] is None
 
 
+def test_a_browser_that_breaks_otherwise_is_a_failure_with_its_reason():
+    """Not every way a browser_js ends is its own fail(): Chrome dies, a call times out."""
+    answer, _, _ = click(click_world(crash=["my.menu_a"]))
+    clickbot = answer["clickbot"]
+    assert [failure["xmlid"] for failure in clickbot["failed"]] == ["my.menu_a"]
+    assert "RuntimeError: Chrome died under my.menu_a" in clickbot["failed"][0]["reason"]
+    assert "my.menu_b" in clickbot["clicked"]
+    assert answer["test"]["success"] is False
+
+
 def test_two_failures_under_two_roots_are_both_found():
     answer, _, _ = click(click_world(fail=["my.menu_a", "my.menu_b"]))
     failed = answer["clickbot"]["failed"]
