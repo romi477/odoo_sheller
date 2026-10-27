@@ -310,3 +310,47 @@ def test_the_wrapper_trims_to_what_the_holder_says_now():
     assert first["root"]["children"] == [1, 10]
     assert second["root"]["children"] == [10]
     assert returned[-1] == sample()[0]
+
+
+SOURCES = Path("/opt/odoo-src")
+START_17 = ("odoo.loader.modules.get('@web/webclient/clickbot/clickbot_loader')"
+            ".startClickEverywhere('%s');")
+FLAVOURS = {
+    15: {"start": "odoo.__DEBUG__.services['web.clickEverywhere']('%s');", "url": "/web",
+         "signal": None, "options": False, "error_checker": False, "own_browser": True,
+         "root_is_target": True},
+    17: {"start": START_17, "url": "/web", "signal": None, "options": False,
+         "error_checker": False, "own_browser": False, "root_is_target": True},
+    18: {"start": START_17, "url": "/odoo", "signal": "clickbot test succeeded",
+         "options": False, "error_checker": False, "own_browser": False,
+         "root_is_target": True},
+    20: {"start": ("odoo.loader.modules.get('@web/webclient/clickbot/clickbot_loader')"
+                   ".startClickEverywhere({ xmlId: '%s', logger: true });"),
+         "url": "/odoo", "signal": "clickbot test succeeded", "options": True,
+         "error_checker": True, "own_browser": False, "root_is_target": False},
+}
+FLAVOURS[16] = FLAVOURS[15]
+FLAVOURS[19] = FLAVOURS[18]
+
+
+def web_sources(major):
+    web = SOURCES / f"odoo{major}" / "addons" / "web"
+    loader = web / "static" / "src" / "webclient" / "clickbot" / "clickbot_loader.js"
+    test = web / "tests" / "test_click_everywhere.py"
+    if not loader.exists() or not test.exists():
+        pytest.skip(f"no Odoo {major} source under {SOURCES}")
+
+    return loader.read_text(encoding="utf-8"), test.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("major", sorted(FLAVOURS))
+def test_each_version_is_recognised(major):
+    assert NS["_os_click_flavour"](*web_sources(major)) == FLAVOURS[major]
+
+
+def test_an_unknown_loader_is_refused():
+    loader, test = web_sources(19)
+    with pytest.raises(ValueError, match="unknown clickbot"):
+        NS["_os_click_flavour"](loader, "class TestMenusAdmin:\n    pass\n")
+    with pytest.raises(ValueError, match="unknown clickbot"):
+        NS["_os_click_flavour"]("export function somethingElse() {}", test)

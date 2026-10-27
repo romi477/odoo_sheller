@@ -663,6 +663,83 @@ def _os_click_wrapper(original, holder):
     return load_menus
 
 
+
+def _os_click_text(node):
+    """The text of a string literal node, on every `ast` this may run under."""
+    if type(node).__name__ in ("Str", "Constant"):
+        # `value` from 3.8, `s` before it (and deprecated after).
+        value = node.value if hasattr(node, "value") else node.s
+        if isinstance(value, str):
+
+            return value
+
+    return None
+
+
+def _os_click_flavour(loader_js, test_py):
+    """How this Odoo starts its clickbot, read off its own test and loader.
+
+    Odoo's `test_click_everywhere.py` holds the call per app: the URL, the
+    line that starts the clickbot (`%s` where the app's xmlid goes) and the
+    success signal, if not the default one. 15 and 16 keep one browser for
+    the class and stop it after each app. 20's loader builds a
+    `ClickbotLauncher`: that clickbot goes on past a failing menu, logs an
+    `Error found:` block for each, and clicks an app root only when it has no
+    menus under it.
+    """
+    try:
+        nodes = list(ast.walk(ast.parse(test_py)))
+    except SyntaxError:
+        nodes = []
+    call = None
+    own_browser = False
+    for node in nodes:
+        if type(node).__name__ != "Call":
+            continue
+        name = getattr(node.func, "attr", None)
+        if name == "terminate_browser":
+            own_browser = True
+        if name != "browser_js" or call is not None or len(node.args) < 2:
+            continue
+        start = node.args[1]
+        if type(start).__name__ == "BinOp" and "%s" in (_os_click_text(start.left) or ""):
+            call = node
+    if call is None or "startClickEverywhere" not in loader_js:
+        raise ValueError("unknown clickbot: no per-app browser_js call in "
+                         "test_click_everywhere.py, or no startClickEverywhere")
+    url = _os_click_text(call.args[0])
+    start = _os_click_text(call.args[1].left)
+    signal_text = None
+    for keyword in call.keywords:
+        if keyword.arg == "success_signal":
+            signal_text = _os_click_text(keyword.value)
+    if url is None:
+        raise ValueError("unknown clickbot: the browser_js URL is not a literal")
+    launcher = "ClickbotLauncher" in loader_js
+
+    return {
+        "start": start,
+        "url": url,
+        "signal": signal_text,
+        "options": "startClickEverywhere({" in start,
+        "error_checker": launcher,
+        "own_browser": own_browser,
+        "root_is_target": not launcher,
+    }
+
+
+def _os_click_sources(odoo):
+    """The text of the two files `_os_click_flavour` reads, from `web` itself."""
+    web = odoo.modules.module.get_module_path("web")
+    texts = []
+    for parts in (("static", "src", "webclient", "clickbot", "clickbot_loader.js"),
+                  ("tests", "test_click_everywhere.py")):
+        with io.open(os.path.join(web, *parts), encoding="utf-8") as handle:
+            texts.append(handle.read())
+
+    return texts[0], texts[1]
+
+
 def _os_flush(env):
     """Write out pending computations. `flush_all` arrived in 16."""
     if hasattr(env, "flush_all"):
