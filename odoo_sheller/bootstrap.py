@@ -10,12 +10,14 @@ import copy
 import importlib
 import io
 import json
+import logging
 import os
 import signal
 import socket
 import sys
 import time
 import traceback
+import unittest
 
 _PT_PROTOCOL = 1
 _OS_MAX_STDOUT = 1000000
@@ -195,6 +197,17 @@ def _os_test_counts(report):
     return count("failures"), count("errors"), count("skipped")
 
 
+def _os_release_cursor(env):
+    try:
+        ready = importlib.import_module("psycopg2.extensions").STATUS_READY
+        if env.cr._cnx.status != ready:
+            # A cursor holding a lock deadlocks the suite. Odoo's own runner
+            # rolls back here too; the session reports it as discarded work.
+            env.cr.rollback()
+    except Exception:  # noqa: BLE001, S110 - the check is an optimisation
+        pass
+
+
 def _os_run_tests_fallback(env, test_tags, modules):
     """What `odoo/tests/shell.py` does, for the versions that do not ship it.
 
@@ -227,14 +240,7 @@ def _os_run_tests_fallback(env, test_tags, modules):
         # container's own by the caller.
         server.http_spawn()
 
-    try:
-        ready = importlib.import_module("psycopg2.extensions").STATUS_READY
-        if env.cr._cnx.status != ready:
-            # A cursor holding a lock deadlocks the suite. Odoo's own runner
-            # rolls back here too; the session reports it as discarded work.
-            env.cr.rollback()
-    except Exception:  # noqa: BLE001, S110 - the check is an optimisation
-        pass
+    _os_release_cursor(env)
 
     for name in list(sys.modules):
         # reload_tests=True: an edited test file must be seen on the next run.
@@ -295,6 +301,67 @@ def _os_forget_asset_lists(env):
         pass
 
 
+def _os_prepare_test_run(env):
+    """What every test run needs from this process before its runner starts.
+
+    The HTTP server's port moved off the container's own, Odoo 20's missing
+    `httpd` supplied, the asset lists forgotten. Returns the server.
+    """
+    server = importlib.import_module("odoo.service.server").server
+    # `getattr`, not `server.httpd`: 20 moved that attribute to
+    # GeventServer only, and in shell mode this is a ThreadedServer.
+    if getattr(server, "httpd", None) is None:
+        # Only before the first spawn in this process: run_tests() itself
+        # skips spawning a second time, and clobbering the port afterwards
+        # would desync it from the daemon actually already listening.
+        # `server.port` is what http_spawn() actually binds — it was set
+        # from config['http_port'] back when this shell process started
+        # (odoo/cli/shell.py calls server.start() before our loop ever
+        # runs), so mutating the config dict alone here has no effect;
+        # the server object's own attribute has to change too.
+        config = importlib.import_module("odoo.tools").config
+        free_port = _os_free_port(server.interface or config["http_interface"]
+                                  or "0.0.0.0")
+        server.port = free_port
+        config["http_port"] = free_port
+        if not hasattr(server, "httpd"):
+            # `httpd` is Odoo's reference to the running HTTP daemon, not
+            # a flag. Through 19 `ThreadedServer.http_spawn()` stored the
+            # WSGI server there so `stop()` could shut it down. In 20 the
+            # socket lives inside `http_server_thread` under a `with`, so
+            # there is nothing left to hold and the attribute is gone from
+            # that class — only `GeventServer` still has one.
+            #
+            # `odoo/tests/shell.py` was not updated with it and still does
+            # `if not server.httpd`, so on a threaded server — which is
+            # what shell mode runs — the runner dies of AttributeError
+            # before a single test executes. That is an upstream bug; this
+            # is the shim.
+            #
+            # Setting it to None is not enough: `http_spawn()` here never
+            # assigns it back, so the guard would stay false and every
+            # later run would start another daemon on the same port. So
+            # spawn once and answer the guard's real question, "is one up
+            # already", truthfully.
+            #
+            # Assigning a non-server value is safe because nothing ever
+            # dereferences it on this class: in the whole 20 tree the only
+            # reads are `tests/shell.py:31` (truthiness) and
+            # `service/server.py:656-794`, all inside `GeventServer`. A
+            # sentence rather than `True` so a traceback that ever prints
+            # it says where it came from.
+            #
+            # Both ways this can age are harmless: restore the attribute
+            # on `ThreadedServer` and `hasattr` sends us past this block;
+            # fix `tests/shell.py` instead and we set something nobody
+            # reads.
+            server.http_spawn()
+            server.httpd = "spawned by odoo-sheller"
+    _os_forget_asset_lists(env)
+
+    return server
+
+
 def _os_run_test(env, module, test_class, test_method, params=None):
     captured = io.StringIO()
     saved_stdout = sys.stdout
@@ -328,57 +395,7 @@ def _os_run_test(env, module, test_class, test_method, params=None):
                     "odoo.tests.loader (Odoo 13 keeps its test runner in "
                     "odoo.modules.module)"
                 ) from None
-        server = importlib.import_module("odoo.service.server").server
-        # `getattr`, not `server.httpd`: 20 moved that attribute to
-        # GeventServer only, and in shell mode this is a ThreadedServer.
-        if getattr(server, "httpd", None) is None:
-            # Only before the first spawn in this process: run_tests() itself
-            # skips spawning a second time, and clobbering the port afterwards
-            # would desync it from the daemon actually already listening.
-            # `server.port` is what http_spawn() actually binds — it was set
-            # from config['http_port'] back when this shell process started
-            # (odoo/cli/shell.py calls server.start() before our loop ever
-            # runs), so mutating the config dict alone here has no effect;
-            # the server object's own attribute has to change too.
-            config = importlib.import_module("odoo.tools").config
-            free_port = _os_free_port(server.interface or config["http_interface"]
-                                      or "0.0.0.0")
-            server.port = free_port
-            config["http_port"] = free_port
-            if not hasattr(server, "httpd"):
-                # `httpd` is Odoo's reference to the running HTTP daemon, not
-                # a flag. Through 19 `ThreadedServer.http_spawn()` stored the
-                # WSGI server there so `stop()` could shut it down. In 20 the
-                # socket lives inside `http_server_thread` under a `with`, so
-                # there is nothing left to hold and the attribute is gone from
-                # that class — only `GeventServer` still has one.
-                #
-                # `odoo/tests/shell.py` was not updated with it and still does
-                # `if not server.httpd`, so on a threaded server — which is
-                # what shell mode runs — the runner dies of AttributeError
-                # before a single test executes. That is an upstream bug; this
-                # is the shim.
-                #
-                # Setting it to None is not enough: `http_spawn()` here never
-                # assigns it back, so the guard would stay false and every
-                # later run would start another daemon on the same port. So
-                # spawn once and answer the guard's real question, "is one up
-                # already", truthfully.
-                #
-                # Assigning a non-server value is safe because nothing ever
-                # dereferences it on this class: in the whole 20 tree the only
-                # reads are `tests/shell.py:31` (truthiness) and
-                # `service/server.py:656-794`, all inside `GeventServer`. A
-                # sentence rather than `True` so a traceback that ever prints
-                # it says where it came from.
-                #
-                # Both ways this can age are harmless: restore the attribute
-                # on `ThreadedServer` and `hasattr` sends us past this block;
-                # fix `tests/shell.py` instead and we set something nobody
-                # reads.
-                server.http_spawn()
-                server.httpd = "spawned by odoo-sheller"
-        _os_forget_asset_lists(env)
+        _os_prepare_test_run(env)
         test_tags = _os_test_tags(module, test_class, test_method, params)
         if shell is None:
             report = _os_run_tests_fallback(env, test_tags, [module])
@@ -740,6 +757,336 @@ def _os_click_sources(odoo):
     return texts[0], texts[1]
 
 
+
+_OS_CLICK_REASON = 800
+_OS_CLICK_START = "odoo.isReady === true"
+
+
+def _os_click_accept(self, password, env):
+    """`_check_credentials` for the run on 15 to 17, as 18 patches it itself."""
+
+    return None
+
+
+def _os_click_needs_credentials(http_case):
+    """Whether `authenticate` checks a real password: 15 to 17 do.
+
+    18 and later patch `_check_credentials` inside it with a function named
+    `patched_check_credentials`, which is a code constant of `authenticate`.
+    """
+    code = getattr(getattr(http_case, "authenticate", None), "__code__", None)
+    for const in getattr(code, "co_consts", ()):
+        if getattr(const, "co_name", None) == "patched_check_credentials":
+
+            return False
+
+    return True
+
+
+class _OsClickHandler(logging.Handler):
+    """Hears the browser's console while the clickbot runs, in-process.
+
+    The test must know which menu a failed `browser_js` was in before it
+    starts the next one; the session reads stderr only after the run.
+    """
+
+    def __init__(self, state):
+        logging.Handler.__init__(self)
+        self.state = state
+
+    def emit(self, record):
+        if not record.name.endswith(".browser"):
+            return
+        try:
+            message = record.getMessage()
+        except Exception:  # noqa: BLE001 - a record that will not format says nothing
+            return
+        if message.startswith("Error received after termination: "):
+            return
+        run = self.state["run"]
+        line = _os_click_line(message)
+        if record.levelno >= logging.ERROR and run["reason"] is None:
+            run["reason"] = message
+        if line is None:
+            return
+        if line[0] == "menu":
+            run["logged"].append(line[1])
+        elif line[0] == "error":
+            run["errors"].append((line[1], message))
+        else:
+            counts = self.state["clickbot"]
+            counts[line[1]] = counts.get(line[1], 0) + line[2]
+
+
+def _os_click_lookup(env, module, login):
+    """(refusal, user, own xmlids) before anything is started."""
+    found = env["ir.module.module"].sudo().search([("name", "=", module)], limit=1)
+    if not found:
+
+        return "unknown_module", None, None
+    if found.state != "installed":
+
+        return "module_not_installed", None, None
+    if login is None:
+        admin = env.ref("base.user_admin", raise_if_not_found=False)
+        login = admin.login if admin else None
+    user = env["res.users"].sudo().search([("login", "=", login)], limit=1) if login else None
+    if not user:
+
+        return "unknown_login", None, None
+    rows = env["ir.model.data"].sudo().search_read(
+        [("model", "=", "ir.ui.menu"), ("module", "=", module)], ["name", "res_id"])
+    # A row can outlive its menu; it is no menu of the module's.
+    existing = set(env["ir.ui.menu"].sudo().with_context(active_test=False).browse(
+        [row["res_id"] for row in rows]).exists().ids)
+    own = set(module + "." + row["name"] for row in rows if row["res_id"] in existing)
+    if not own:
+
+        return "no_menus", user, None
+
+    return None, user, own
+
+
+def _os_click_root(case, state, root_id, entry):
+    """Every browser_js one app root takes; restarts past a failure on 15 to 19."""
+    tree = state["tree"]
+    menus = state["menus"]
+    flavour = state["flavour"]
+    done = state["done"]
+    ids = dict((menus[key].get("xmlid"), key) for key in tree["targets"])
+    extra = {}
+    if flavour["signal"]:
+        extra["success_signal"] = flavour["signal"]
+    if flavour["error_checker"]:
+        # 20's clickbot logs one `Error found:` block per failing menu and goes
+        # on; browser_js would stop at the first. Every other error line ends
+        # the run, and browser_js fails the test on all of them at its end.
+        extra["error_checker"] = lambda message: not message.startswith("Error found:")
+    url = flavour["url"] + ("?debug=1" if state["debug"] else "")
+    start = flavour["start"] % entry["xmlid"]
+    failed_before = len(state["failed"])
+    while True:
+        left = [menu_id for menu_id in tree["targets"]
+                if menu_id not in done and _os_click_root_of(tree, menu_id) == root_id]
+        if not left:
+            break
+        budget = _os_click_budget(state["deadline"], time.time())
+        if budget is None:
+            entry["error"] = "timeout"
+            break
+        run = {"logged": [], "errors": [], "reason": None}
+        state["run"] = run
+        text = None
+        try:
+            case.browser_js(url, start, _OS_CLICK_START, login=state["login"],
+                            timeout=budget, **extra)
+        except AssertionError as exc:
+            text = str(exc) or type(exc).__name__
+        finally:
+            if flavour["own_browser"]:
+                case.terminate_browser()
+        for xmlid in run["logged"]:
+            if xmlid in state["own"] and xmlid not in state["clicked"]:
+                state["clicked"].append(xmlid)
+        logged = set(ids[xmlid] for xmlid in run["logged"] if xmlid in ids)
+        if text is None:
+            done.update(logged)
+            break
+        reason = _os_clip(run["reason"] or text, _OS_CLICK_REASON)[0]
+        if _os_click_budget(state["deadline"], time.time()) is None:
+            done.update(logged)
+            entry["error"] = "timeout"
+            break
+        if flavour["error_checker"]:
+            done.update(logged)
+            for xmlid, message in run["errors"]:
+                if xmlid:
+                    state["failed"].append({"xmlid": xmlid, "root": entry["xmlid"],
+                                            "reason": _os_clip(message, _OS_CLICK_REASON)[0]})
+            if len(state["failed"]) == failed_before:
+                entry["error"] = reason
+            break
+        culprit = _os_click_blame(run["logged"], root_id, tree, menus, done)
+        done.update(logged)
+        if culprit is None:
+            entry["error"] = reason
+            break
+        done.add(culprit)
+        state["failed"].append({"xmlid": menus[culprit]["xmlid"], "root": entry["xmlid"],
+                                "reason": reason})
+        if culprit == root_id:
+            # The module's own app root fails as it is clicked, and every run
+            # clicks it first: what is under it cannot be reached.
+            break
+        state["holder"]["allowed"] = _os_click_shrink(tree, done)
+    entry["success"] = entry["error"] is None and len(state["failed"]) == failed_before
+    if not entry["success"]:
+        case.fail("clickbot failed under %s: %s" % (
+            entry["xmlid"], entry["error"] or ", ".join(
+                failure["xmlid"] for failure in state["failed"][failed_before:])))
+
+
+def _os_click_drive(case, state):
+    """The body of the one test method."""
+    env = case.env
+    menu_cls = type(env["ir.ui.menu"])
+    # Undone by the test's own cleanups; the bootstrap checks it after.
+    case.patch(menu_cls, "load_menus", _os_click_wrapper(menu_cls.load_menus, state["holder"]))
+    if state["patch_credentials"]:
+        case.patch(type(env["res.users"]), "_check_credentials", _os_click_accept)
+    user = env["res.users"].browse(state["uid"])
+    if "tour_enabled" in user._fields:
+        user.tour_enabled = False
+    logger = logging.getLogger(type(case).__module__)
+    level = logger.level
+    handler = _OsClickHandler(state)
+    # A container logging above INFO would drop the console lines before
+    # any handler saw them.
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    try:
+        for root_id in state["tree"]["roots"]:
+            entry = {"xmlid": state["menus"][root_id].get("xmlid"), "success": False,
+                     "error": None}
+            state["clickbot"]["roots"].append(entry)
+            with case.subTest(root=entry["xmlid"]):
+                _os_click_root(case, state, root_id, entry)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(level)
+
+
+def _os_click_case(http_case, module, state):
+    def test_click_module(self):
+        _os_click_drive(self, state)
+
+    attrs = {
+        # BaseCase reads its module and tags off a name under odoo.addons, and
+        # HttpCase names its loggers after it.
+        "__module__": "odoo.addons.%s.tests.os_click_module" % module,
+        "test_click_module": test_click_module,
+    }
+
+    return type(http_case)("OsClickModule", (http_case,), attrs)
+
+
+def _os_click_module(env, module, login, debug, timeout=900.0):
+    captured = io.StringIO()
+    saved_stdout = sys.stdout
+    sys.stdout = captured
+    started = time.time()
+    error = None
+    test = None
+    clickbot = {
+        "module": module, "login": login, "debug": bool(debug), "roots": [], "clicked": [],
+        "failed": [], "unreached": [], "hidden": [], "refused": None, "restored": True,
+    }
+    try:
+        _OS_LIVE[0] = True
+        refused, user, own = _os_click_lookup(env, module, login)
+        if user:
+            clickbot["login"] = user.login
+        tree = None
+        menus = None
+        flavour = None
+        if refused is None:
+            odoo = importlib.import_module("odoo")
+            importlib.import_module("odoo.modules.module")
+            flavour = _os_click_flavour(*_os_click_sources(odoo))
+            menus = env["ir.ui.menu"].with_user(user).load_menus("1" if debug else "")
+            tree = _os_click_tree(menus, own, flavour["root_is_target"])
+            clickbot["hidden"] = tree["hidden"]
+            if not tree["targets"]:
+                refused = "no_visible_menus"
+        clickbot["refused"] = refused
+        if refused is None:
+            test = _os_click_run(env, module, clickbot, {
+                "tree": tree, "menus": menus, "flavour": flavour, "own": own,
+                "uid": user.id, "login": user.login, "debug": bool(debug),
+                "deadline": started + timeout - min(60.0, timeout * 0.1),
+                "holder": {"allowed": tree["allowed"]}, "done": set(),
+                "failed": clickbot["failed"], "clicked": clickbot["clicked"],
+                "clickbot": clickbot, "run": {"logged": [], "errors": [], "reason": None},
+            })
+            failed = set(failure["xmlid"] for failure in clickbot["failed"])
+            clickbot["unreached"] = [
+                menus[menu_id]["xmlid"] for menu_id in tree["targets"]
+                if menus[menu_id]["xmlid"] not in clickbot["clicked"]
+                and menus[menu_id]["xmlid"] not in failed
+            ] + tree["unreached_static"]
+        _OS_LIVE[0] = False
+    # BaseException on purpose: an interrupted run is an ordinary result.
+    except BaseException as exc:  # noqa: BLE001
+        _OS_LIVE[0] = False
+        error = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+    finally:
+        sys.stdout = saved_stdout
+    duration = time.time() - started
+    stdout, stdout_truncated = _os_clip(captured.getvalue(), _OS_MAX_STDOUT)
+
+    return {
+        "stdout": stdout,
+        "stdout_truncated": stdout_truncated,
+        "result": None,
+        "result_truncated": False,
+        "error": error,
+        "duration": duration,
+        "test": test,
+        "clickbot": clickbot,
+    }
+
+
+def _os_click_run(env, module, clickbot, state):
+    """One HttpCase of one test through Odoo's own suite runner."""
+    common = importlib.import_module("odoo.tests.common")
+    loader = importlib.import_module("odoo.tests.loader")
+    try:
+        results = importlib.import_module("odoo.tests.result")
+    except ImportError:
+        # 15 keeps OdooTestResult in odoo/tests/runner.py.
+        results = importlib.import_module("odoo.tests.runner")
+    config = importlib.import_module("odoo.tools").config
+    if config["workers"] != 0:
+        raise TestRunnerUnsupported(
+            "the test runner refused to run: the container's Odoo config must "
+            "have workers=0 (threaded mode)")
+    server = _os_prepare_test_run(env)
+    if not getattr(server, "httpd", None):
+        server.http_spawn()
+    _os_release_cursor(env)
+    state["patch_credentials"] = _os_click_needs_credentials(common.HttpCase)
+    menu_cls = type(env["ir.ui.menu"])
+    before = _os_click_before(menu_cls)
+    case = _os_click_case(common.HttpCase, module, state)
+    config["test_enable"] = True
+    try:
+        report = results.OdooTestResult()
+        suite = unittest.TestSuite([case("test_click_module")])
+        report.update(_os_run_suite(loader, suite, report))
+    finally:
+        config["test_enable"] = None
+        # The test's cleanups undo the patch; an interrupt can leave unittest
+        # before they run.
+        _os_click_undo(menu_cls, before)
+        clickbot["restored"] = _os_click_is_undone(menu_cls, before)
+    failures, errors, skipped = _os_test_counts(report)
+
+    return {
+        "module": module,
+        "test_class": None,
+        "test_method": None,
+        "tests_run": report.testsRun,
+        "failures": failures,
+        "errors": errors,
+        "skipped": skipped,
+        "success": report.wasSuccessful(),
+    }
+
+
 def _os_flush(env):
     """Write out pending computations. `flush_all` arrived in 16."""
     if hasattr(env, "flush_all"):
@@ -875,6 +1222,14 @@ def _os_answer(namespace, env, frame):
             frame.get("test_class", ""),
             frame.get("test_method"),
             frame.get("params"),
+        )
+    elif kind == "click_module":
+        answer = _os_click_module(
+            env,
+            frame.get("module", ""),
+            frame.get("login"),
+            frame.get("debug", True),
+            frame.get("timeout") or 900.0,
         )
     elif kind in ("commit", "rollback"):
 

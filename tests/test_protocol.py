@@ -54,6 +54,14 @@ def test_run_test_frame_carries_params_only_when_given():
     }
 
 
+def test_click_module_frame_carries_login_debug_and_timeout():
+    assert protocol.click_module_frame(3, "my", None, True, 900.0) == {
+        "t": "click_module", "id": 3, "module": "my", "login": None, "debug": True,
+        "timeout": 900.0,
+    }
+    assert protocol.click_module_frame(4, "my", "demo", False, 60.0)["login"] == "demo"
+
+
 def test_frame_line_limit_covers_a_clipped_bootstrap_payload():
     """64 KiB is asyncio's default; a clipped stdout+result frame is larger."""
     assert protocol.FRAME_LINE_LIMIT > 64 * 1024

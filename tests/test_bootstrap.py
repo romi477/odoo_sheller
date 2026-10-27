@@ -13,11 +13,12 @@ BOOTSTRAP = ROOT / "odoo_sheller" / "bootstrap.py"
 HARNESS = ROOT / "tests" / "bootstrap_harness.py"
 
 ALLOWED_IMPORTS = {
-    "ast", "copy", "importlib", "io", "json", "os", "signal", "socket", "sys", "time", "traceback",
+    "ast", "copy", "importlib", "io", "json", "logging", "os", "signal", "socket", "sys", "time",
+    "traceback", "unittest",
 }
 
 
-def run_bootstrap(frames, timeout=15, fake_odoo=None, fake_js=None):
+def run_bootstrap(frames, timeout=15, fake_odoo=None, fake_js=None, fake_click=None):
     """Feed frames over stdin, return (out_frames, stderr_text, transaction_calls)."""
     stdin = "".join(json.dumps(frame) + "\n" for frame in frames)
     env = {"OS_CMD_FD": "0", "PATH": "/usr/bin:/bin"}
@@ -25,6 +26,8 @@ def run_bootstrap(frames, timeout=15, fake_odoo=None, fake_js=None):
         env["OS_FAKE_ODOO"] = fake_odoo
     if fake_js is not None:
         env["OS_FAKE_JS"] = fake_js
+    if fake_click is not None:
+        env["OS_FAKE_CLICK"] = json.dumps(fake_click)
     proc = subprocess.run(
         [sys.executable, str(HARNESS), str(BOOTSTRAP)],
         input=stdin,
@@ -502,3 +505,189 @@ def test_run_test_on_thirteen_says_it_is_not_there_and_starts_nothing():
     assert "13" in result["error"]["message"]
     assert not [call for call in calls if call.startswith("http_spawn")], calls
     assert out[2]["result"] == "'alive'", "the session is still usable"
+
+
+def click_world(**changes):
+    """A foreign app holding one menu of `my`, and an app of `my`'s own."""
+    def menu(menu_id, xmlid, children=(), action=False):
+        return {"id": menu_id, "xmlid": xmlid, "name": xmlid.split(".")[1],
+                "children": list(children), "action": action}
+
+    world = {
+        "modules": {"my": "installed", "sale": "installed", "draft": "uninstalled"},
+        "users": ["admin", "demo"],
+        "menus": {
+            "root": {"id": False, "name": "root", "children": [1, 10]},
+            "1": menu(1, "sale.menu_root", [2]),
+            "2": menu(2, "sale.menu_sales", [3, 4]),
+            "3": menu(3, "my.menu_a", action="ir.actions.act_window,7"),
+            "4": menu(4, "sale.menu_orders", action="ir.actions.act_window,8"),
+            "10": menu(10, "my.menu_app", [11], action="ir.actions.act_window,9"),
+            "11": menu(11, "my.menu_cfg", [12]),
+            "12": menu(12, "my.menu_b", action="ir.actions.act_window,10"),
+        },
+        "data": [["my", "menu_a", 3], ["my", "menu_app", 10], ["my", "menu_cfg", 11],
+                 ["my", "menu_b", 12], ["sale", "menu_root", 1]],
+    }
+    world.update(changes)
+
+    return world
+
+
+def click(world, module="my", login=None, debug=True):
+    frame = protocol_click_frame(module, login, debug)
+    out, stderr, calls = run_bootstrap([frame, {"t": "close", "id": 2}], fake_odoo="16",
+                                       fake_click=world)
+    assert out[1]["id"] == 1, stderr
+
+    return out[1], calls, stderr
+
+
+def protocol_click_frame(module, login, debug):
+    from odoo_sheller import protocol
+
+    return protocol.click_module_frame(1, module, login, debug, 120.0)
+
+
+def test_an_unknown_module_is_refused_before_any_server_starts():
+    answer, calls, _ = click(click_world(), module="nope")
+    assert answer["clickbot"]["refused"] == "unknown_module"
+    assert answer["test"] is None
+    assert not any(call.startswith(("http_spawn", "browser_js")) for call in calls)
+
+
+def test_a_module_that_is_not_installed_is_refused():
+    answer, calls, _ = click(click_world(), module="draft")
+    assert answer["clickbot"]["refused"] == "module_not_installed"
+    assert not any(call.startswith("http_spawn") for call in calls)
+
+
+def test_an_unknown_login_is_refused():
+    answer, calls, _ = click(click_world(), login="ghost")
+    assert answer["clickbot"]["refused"] == "unknown_login"
+    assert answer["error"] is None
+    assert not any(call.startswith("http_spawn") for call in calls)
+
+
+def test_a_missing_admin_is_an_unknown_login_too():
+    answer, _, _ = click(click_world(admin="someone@example.com"))
+    assert answer["clickbot"]["refused"] == "unknown_login"
+
+
+def test_a_module_without_menus_is_refused():
+    answer, calls, _ = click(click_world(), module="sale", login="admin")
+    # sale owns only its root here, which holds no target of its own.
+    assert answer["clickbot"]["refused"] == "no_visible_menus"
+    answer, calls, _ = click(click_world(data=[]))
+    assert answer["clickbot"]["refused"] == "no_menus"
+    assert not any(call.startswith("http_spawn") for call in calls)
+
+
+def test_a_dangling_menu_xmlid_is_skipped():
+    world = click_world()
+    world["data"].append(["my", "menu_deleted", 99])
+    answer, _, _ = click(world)
+    assert answer["error"] is None, answer["error"]
+    assert "my.menu_deleted" not in answer["clickbot"]["hidden"]
+    assert answer["clickbot"]["refused"] is None
+
+
+def test_click_module_shares_run_tests_preparation():
+    answer, calls, stderr = click(click_world())
+    assert answer["error"] is None, answer["error"]
+    spawn = next(i for i, call in enumerate(calls) if call.startswith("http_spawn"))
+    first = next(i for i, call in enumerate(calls) if call.startswith("browser_js"))
+    assert spawn < first
+    assert "after:own_load_menus=False" in calls
+    clickbot = answer["clickbot"]
+    assert clickbot["restored"] is True
+    assert clickbot["login"] == "admin"
+    assert answer["test"]["success"] is True
+    assert answer["test"]["tests_run"] == 1
+    assert clickbot["clicked"] == ["my.menu_a", "my.menu_app", "my.menu_b"]
+    assert clickbot["failed"] == [] and clickbot["unreached"] == []
+    assert [root["xmlid"] for root in clickbot["roots"]] == ["sale.menu_root", "my.menu_app"]
+    assert clickbot["apps"] == 2
+
+
+def test_the_browser_is_shown_only_the_modules_tree_in_debug():
+    _, calls, _ = click(click_world())
+    shown = [call for call in calls if call.startswith("browser_js")]
+    assert shown[0].startswith("browser_js(/odoo?debug=1,")
+    assert "startClickEverywhere('sale.menu_root')" in shown[0]
+    assert "load_menus('1')" in calls
+
+
+def test_without_debug_the_tree_and_browser_agree():
+    _, calls, _ = click(click_world(), debug=False)
+    assert "load_menus('')" in calls
+    assert any(call.startswith("browser_js(/odoo,") for call in calls)
+
+
+def test_a_failing_menu_is_blamed_and_the_rest_still_clicked():
+    answer, calls, _ = click(click_world(fail=["my.menu_a"]))
+    clickbot = answer["clickbot"]
+    assert [failure["xmlid"] for failure in clickbot["failed"]] == ["my.menu_a"]
+    assert clickbot["failed"][0]["root"] == "sale.menu_root"
+    assert "RPC_ERROR in my.menu_a" in clickbot["failed"][0]["reason"]
+    assert "my.menu_b" in clickbot["clicked"]
+    assert answer["test"]["success"] is False
+    assert clickbot["roots"][0]["success"] is False
+    assert clickbot["roots"][1]["success"] is True
+    assert "after:own_load_menus=False" in calls
+
+
+def test_an_own_root_that_fails_ends_its_app():
+    """15 to 19 click the app root first on every run: nothing under it is reached."""
+    answer, calls, _ = click(click_world(fail=["my.menu_app"]))
+    clickbot = answer["clickbot"]
+    assert [failure["xmlid"] for failure in clickbot["failed"]] == ["my.menu_app"]
+    assert clickbot["roots"][1] == {"xmlid": "my.menu_app", "success": False, "error": None}
+    assert clickbot["unreached"] == ["my.menu_b"]
+    assert len([call for call in calls if "startClickEverywhere('my.menu_app')" in call]) == 1
+
+
+def test_a_foreign_root_failing_blames_its_first_target():
+    answer, calls, _ = click(click_world(fail=["sale.menu_root"]))
+    clickbot = answer["clickbot"]
+    assert clickbot["failed"][0]["xmlid"] == "my.menu_a"
+    assert clickbot["failed"][0]["root"] == "sale.menu_root"
+    assert clickbot["roots"][0]["error"] is None
+
+
+def test_two_failures_under_two_roots_are_both_found():
+    answer, _, _ = click(click_world(fail=["my.menu_a", "my.menu_b"]))
+    failed = answer["clickbot"]["failed"]
+    assert [(failure["xmlid"], failure["root"]) for failure in failed] == [
+        ("my.menu_a", "sale.menu_root"), ("my.menu_b", "my.menu_app")]
+    assert answer["clickbot"]["unreached"] == []
+
+
+def test_a_skipped_browser_is_counted_as_a_skip():
+    answer, _, _ = click(click_world(skip=True))
+    assert answer["test"]["skipped"] >= 1
+    assert answer["clickbot"]["restored"] is True
+
+
+def test_the_password_check_is_patched_where_authenticate_does_not():
+    answer, _, _ = click(click_world())
+    assert "a real password check" not in json.dumps(answer)
+
+
+def test_15_stops_its_browser_after_every_app():
+    answer, calls, _ = click(click_world(flavour="15", fail=["my.menu_a"]))
+    assert answer["clickbot"]["failed"][0]["xmlid"] == "my.menu_a"
+    shown = [i for i, call in enumerate(calls) if call.startswith("browser_js(/web?debug=1,")]
+    assert shown and all(calls[i + 1] == "terminate_browser" for i in shown)
+
+
+def test_20_goes_on_past_a_failure_in_one_run():
+    answer, calls, _ = click(click_world(flavour="20", fail=["my.menu_a", "my.menu_b"]))
+    clickbot = answer["clickbot"]
+    assert [failure["xmlid"] for failure in clickbot["failed"]] == ["my.menu_a", "my.menu_b"]
+    assert "Current testing menu is menu_b (my.menu_b)" in clickbot["failed"][1]["reason"]
+    assert calls.count("error_checker=True") == 2
+    assert all(root["error"] is None for root in clickbot["roots"])
+    # 20 clicks an app root only when nothing is under it: not a target there.
+    assert "my.menu_app" not in clickbot["unreached"] + clickbot["clicked"]
+    assert clickbot["menus"] == 4

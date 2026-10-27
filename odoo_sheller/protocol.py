@@ -83,6 +83,23 @@ def run_test_frame(
     return frame
 
 
+def click_module_frame(
+    request_id: int, module: str, login: str | None, debug: bool, timeout: float,
+) -> dict:
+    """The clickbot over one module. `timeout` is the run's, so the bootstrap
+    can give each browser what is left of it and answer before the daemon
+    gives up."""
+
+    return {
+        "t": "click_module",
+        "id": request_id,
+        "module": module,
+        "login": login,
+        "debug": debug,
+        "timeout": timeout,
+    }
+
+
 def spec_of(
     module: str,
     test_class: str | None = None,
