@@ -250,6 +250,13 @@ reason. `os_session` carries `clickbot: {available, reason}` next to
 16 `available` is `null` (`chrome_not_checked`). It is journalled as a
 `run_test` with a `clickbot` key and shown as `clickbot:<module>`.
 
+Verified on 19, on a database whose every menu failed with the same server
+error (a column the code has and the table lacks): the browser was shown only
+the module's app, each of the module's menus was blamed in turn under its
+foreign root with that error as the reason, the run went on past each, and an
+interrupt mid-run left `load_menus` restored. A clean pass, 15 to 18 and 20
+(whose `error_checker` path is read from source) have not been run.
+
 ### Rules for the Odoo major
 
 The same agent writes for 15 in the morning and for 19 after lunch, and what
