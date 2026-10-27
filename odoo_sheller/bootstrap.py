@@ -537,6 +537,91 @@ def _os_click_trim(menus, allowed):
     return trimmed
 
 
+
+def _os_click_line(message):
+    """What one line of the clickbot's console says, or None.
+
+    15 to 19 log `Testing menu <name> <xmlid>`, `Testing app menu: <xmlid>`,
+    `Error while testing <name> <xmlid>` and `Successfully tested N <what>`.
+    20 logs `Testing menu <name> (<xmlid>)`, `Testing app: <name> (<xmlid>)`,
+    one `Error found:` block per failing menu naming it, and `Tested N <what>`.
+    """
+    lines = (message or "").splitlines()
+    if not lines:
+
+        return None
+    first = lines[0].strip()
+    if first == "Error found:":
+        marker = " - Current testing menu is "
+        for line in lines[1:]:
+            if line.startswith(marker) and line.rstrip().endswith(")"):
+
+                return ("error", line.rstrip()[:-1].rsplit("(", 1)[-1])
+
+        return ("error", None)
+    for prefix, kind in (("Testing app menu: ", "menu"), ("Testing app: ", "menu"),
+                         ("Testing menu ", "menu"), ("Error while testing ", "error")):
+        if first.startswith(prefix):
+            rest = first[len(prefix):].strip()
+            if rest.endswith(")") and "(" in rest:
+
+                return (kind, rest[:-1].rsplit("(", 1)[-1])
+            words = rest.split()
+
+            return (kind, words[-1]) if words else None
+    words = first.split()
+    for prefix in (["Successfully", "tested"], ["Tested"]):
+        size = len(prefix)
+        if words[:size] == prefix and len(words) > size + 1 and words[size].isdigit():
+
+            return ("count", "_".join(words[size + 1:]), int(words[size]))
+
+    return None
+
+
+def _os_click_root_of(tree, menu_id):
+    parents = tree["parents"]
+    while parents.get(menu_id, "root") != "root":
+        menu_id = parents[menu_id]
+
+    return menu_id
+
+
+def _os_click_blame(logged, root_id, tree, menus, done):
+    """The target a failed browser_js is blamed on, or None to end the root.
+
+    The last menu the clickbot named is the one it was in. A foreign app root
+    with no action of its own runs its first target's action when clicked, so
+    that target is the one at fault. A root with an action owns its failure.
+    """
+    ids = dict((entry.get("xmlid"), key) for key, entry in menus.items() if key != "root")
+    last = None
+    for xmlid in reversed(logged):
+        if xmlid in ids:
+            last = ids[xmlid]
+            break
+    if last is None:
+
+        return None
+    if last in tree["targets"] and last not in done:
+
+        return last
+    if last == root_id and not tree["root_action"].get(root_id):
+        for menu_id in tree["targets"]:
+            if menu_id not in done and _os_click_root_of(tree, menu_id) == root_id:
+
+                return menu_id
+
+    return None
+
+
+def _os_click_budget(deadline, now):
+    """Seconds left for the next browser_js; None once there is no real time."""
+    left = deadline - now
+
+    return left if left > 1 else None
+
+
 def _os_flush(env):
     """Write out pending computations. `flush_all` arrived in 16."""
     if hasattr(env, "flush_all"):
