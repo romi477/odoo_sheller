@@ -2434,3 +2434,116 @@ async def test_a_skipped_tour_in_a_python_run_keeps_its_old_answer(tmp_path):
     assert result["error"] is None
     assert "hoot" not in result
     await session.close()
+
+
+CLICK_FAKE = r"""
+import json, sys, time
+sys.stdout.write(json.dumps({"t":"hello","protocol":1,"odoo":"15.0","python":"3.8.0",
+                             "db":"db","uid":1,"pid":4242,
+                             "js":{"chrome":None,"websocket":True}}) + "\n")
+sys.stdout.flush()
+LOG = "2026-10-27 10:00:00,123 42 INFO db odoo.addons.my.tests.os_click_module: %s\n"
+for line in sys.stdin:
+    frame = json.loads(line)
+    if frame["t"] == "close":
+        sys.stdout.write(json.dumps({"t":"bye","id":frame["id"]}) + "\n")
+        sys.stdout.flush()
+        break
+    module = frame["module"]
+    clickbot = {"module": module, "login": frame["login"] or "admin", "debug": frame["debug"],
+                "roots": [{"xmlid": "my.menu_app", "success": True, "error": None}],
+                "clicked": ["my.menu_app"], "failed": [], "unreached": [], "hidden": [],
+                "refused": None, "restored": True, "frame_timeout": frame["timeout"]}
+    test = {"module": module, "test_class": None, "test_method": None, "tests_run": 1,
+            "failures": 0, "errors": 0, "skipped": 0, "success": True}
+    if module == "refuse":
+        clickbot["refused"], test = "no_menus", None
+    elif module == "none":
+        test["tests_run"] = 0
+    elif module == "skip":
+        # 15 logs a skip with no reason.
+        sys.stderr.write(LOG % "skipped OsClickModule.test_click_module")
+        test["skipped"] = 1
+    elif module == "leak":
+        clickbot["restored"] = False
+    sys.stderr.flush()
+    time.sleep(0.1)
+    sys.stdout.write(json.dumps({"t":"result","id":frame["id"],"stdout":"",
+                                 "stdout_truncated":False,"result":None,
+                                 "result_truncated":False,"error":None,"duration":0.01,
+                                 "test":test,"clickbot":clickbot}) + "\n")
+    sys.stdout.flush()
+"""
+
+
+def journal_records(tmp_path):
+    return [json.loads(line) for line in (tmp_path / "s1.jsonl").read_text().splitlines()]
+
+
+async def test_a_click_run_is_journalled_as_a_run_test_with_its_clickbot_key(tmp_path):
+    session = await make_session(tmp_path, script=CLICK_FAKE)
+    await session.start()
+    assert session.describe()["clickbot"] == {"available": None, "reason": "chrome_not_checked"}
+    result = await session.click_module("my", login="demo", debug=False, timeout=60.0)
+    assert result["error"] is None
+    assert result["test"]["success"] is True
+    assert result["clickbot"]["login"] == "demo"
+    assert result["clickbot"]["frame_timeout"] == 60.0
+    assert result["discarded_pending"] is False
+    await session.close()
+    started = [record for record in journal_records(tmp_path) if record["kind"] == "run_test"][-1]
+    assert started["module"] == "my"
+    assert started["test_class"] is None and started["params"] is None
+    assert started["clickbot"] == {"login": "demo", "debug": False}
+    booked = [record for record in journal_records(tmp_path) if record["kind"] == "result"][-1]
+    assert booked["clickbot"]["clicked"] == ["my.menu_app"]
+
+
+async def test_a_click_run_shows_its_spec_and_activity_while_it_runs(tmp_path):
+    session = await make_session(tmp_path, script=CLICK_FAKE)
+    await session.start()
+    task = asyncio.create_task(session.click_module("my"))
+    await asyncio.sleep(0.05)
+    described = session.describe()
+    assert described["activity"] == "run_test"
+    assert described["test_progress"]["spec"] == "clickbot:my"
+    await task
+    await session.close()
+
+
+async def test_a_click_run_with_no_test_run_is_skipped_not_passed(tmp_path):
+    session = await make_session(tmp_path, script=CLICK_FAKE)
+    await session.start()
+    result = await session.click_module("none")
+    assert result["error"] == "js_tests_skipped"
+    assert result["test"]["success"] is False
+    assert result["clickbot"]["skipped"] == {"reason": None}
+    await session.close()
+
+
+async def test_a_reasonless_skip_is_still_skipped(tmp_path):
+    session = await make_session(tmp_path, script=CLICK_FAKE)
+    await session.start()
+    result = await session.click_module("skip")
+    assert result["error"] == "js_tests_skipped"
+    assert result["test"]["success"] is False
+    await session.close()
+
+
+async def test_a_refusal_is_the_error(tmp_path):
+    session = await make_session(tmp_path, script=CLICK_FAKE)
+    await session.start()
+    result = await session.click_module("refuse")
+    assert result["error"] == "no_menus"
+    assert result["test"]["success"] is False
+    await session.close()
+
+
+async def test_a_failed_restore_is_journalled_and_never_a_pass(tmp_path):
+    session = await make_session(tmp_path, script=CLICK_FAKE)
+    await session.start()
+    result = await session.click_module("leak")
+    assert result["error"] == "clickbot_restore_failed"
+    assert result["test"]["success"] is False
+    await session.close()
+    assert any(record["kind"] == "clickbot_restore_failed" for record in journal_records(tmp_path))

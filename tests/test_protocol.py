@@ -66,3 +66,11 @@ def test_frame_line_limit_covers_a_clipped_bootstrap_payload():
     """64 KiB is asyncio's default; a clipped stdout+result frame is larger."""
     assert protocol.FRAME_LINE_LIMIT > 64 * 1024
     assert protocol.FRAME_LINE_LIMIT >= protocol.MAX_STDOUT + protocol.MAX_RESULT
+
+
+def test_run_spec_names_a_click_run_by_its_module():
+    assert protocol.run_spec({"module": "my", "clickbot": {"login": None}}) == "clickbot:my"
+    assert protocol.run_spec(
+        {"module": "web", "test_class": "WebSuite", "test_method": "test_unit_desktop",
+         "params": "@my"}
+    ) == "web.WebSuite.test_unit_desktop[@my]"

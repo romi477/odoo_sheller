@@ -15,6 +15,7 @@ from odoo_sheller import js_tests
 from odoo_sheller.journal import Journal
 from odoo_sheller.protocol import (
     ProtocolError,
+    click_module_frame,
     close_frame,
     commit_frame,
     decode_frame,
@@ -435,6 +436,9 @@ class Session:
             "activity": self._activity,
             "test_progress": dict(self._test_progress) if self._test_progress else None,
             "js_tests": dict(self.js_tests) if self.js_tests else None,
+            # Odoo's clickbot needs a browser and not Hoot's runner, so it
+            # runs where `js_tests` cannot: os_click_module.
+            "clickbot": js_tests.clickbot_capability(self.hello) if self.hello else None,
         }
 
     def _js_tests(self) -> dict:
@@ -789,6 +793,44 @@ class Session:
             raise RunParamsUnsupported(
                 f"Odoo {self.hello.get('odoo')} test tags take no params; they arrived in 16"
             )
+
+        return await self._run_activity(
+            lambda request_id: run_test_frame(request_id, module, test_class, test_method, params),
+            {"module": module, "test_class": test_class, "test_method": test_method,
+             "params": params},
+            spec_of(module, test_class, test_method, params),
+            module,
+            params,
+            # A browser suite asked for: Odoo skipping it is not a pass.
+            bool(params) or spec_of(module, test_class, test_method) == js_tests.HOOT_TEST,
+            timeout,
+        )
+
+    async def click_module(
+        self,
+        module: str,
+        login: str | None = None,
+        debug: bool = True,
+        timeout: float = 900.0,
+    ) -> dict:
+        """Odoo's clickbot over one module's menus: a run, booked as one."""
+        self._ensure_acceptable("run_test")
+
+        return await self._run_activity(
+            lambda request_id: click_module_frame(request_id, module, login, debug, timeout),
+            {"module": module, "test_class": None, "test_method": None, "params": None,
+             "clickbot": {"login": login, "debug": debug}},
+            f"clickbot:{module}",
+            module,
+            None,
+            # Its skip is read off its own counts, in `_run_result`.
+            False,
+            timeout,
+        )
+
+    async def _run_activity(
+        self, frame_for, journalled, spec, module, params, browser, timeout,
+    ) -> dict:
         # Odoo's own run_tests() rolls back env.cr if it holds an open
         # transaction before testing (odoo/tests/shell.py) — silently, unless
         # we say so here. Whatever was pending is gone either way.
@@ -796,17 +838,14 @@ class Session:
         self.pending_commands = 0
         self.inherited_pending = 0
         request_id = self._take_id()
-        self.journal.write(
-            "run_test", id=request_id, module=module, test_class=test_class,
-            test_method=test_method, params=params, actor=dict(self.owner),
-        )
+        self.journal.write("run_test", id=request_id, **journalled, actor=dict(self.owner))
         self._ran_test = True
         window = _StderrWindow(RUN_STDERR_LIMIT)
         self._stderr_collectors.append(window)
         # Cleared with `_activity`, when the session leaves BUSY: a timed-out
         # run is still running and still worth watching.
         self._test_progress = {
-            "spec": spec_of(module, test_class, test_method, params),
+            "spec": spec,
             "current": None,
             "started": 0,
             "failures": 0,
@@ -823,13 +862,12 @@ class Session:
         self._test_module = module
         self._run = {
             "window": window, "discarded_pending": discarded_pending, "params": params,
-            # A browser suite asked for: Odoo skipping it is not a pass.
-            "browser": bool(params) or spec_of(module, test_class, test_method) == js_tests.HOOT_TEST,
-            "js_skip": None,
+            "browser": browser, "js_skip": None,
         }
         try:
+            # Booked, shown and abandoned as a run whatever its frame.
             result = await self._request(
-                run_test_frame(request_id, module, test_class, test_method, params), timeout
+                frame_for(request_id), timeout, account="run_test", activity="run_test"
             )
             await asyncio.sleep(STDERR_DRAIN)  # let the reader catch up on the tail
         except TimeoutError:
@@ -870,8 +908,35 @@ class Session:
             if isinstance(result.get("test"), dict):
                 result["test"] = {**result["test"], "success": False}
             result["error"] = result.get("error") or "js_tests_skipped"
+        if isinstance(result.get("clickbot"), dict):
+            result = self._clickbot_result(result, run)
 
         return result
+
+    def _clickbot_result(self, result: dict, run: dict) -> dict:
+        """What a clickbot run comes to. Nothing that clicked nothing is a pass."""
+        clickbot = dict(result["clickbot"])
+        test = result.get("test")
+        test = dict(test) if isinstance(test, dict) else {
+            "module": clickbot.get("module"), "test_class": None, "test_method": None,
+            "tests_run": 0, "failures": 0, "errors": 0, "skipped": 0, "success": False,
+        }
+        error = result.get("error")
+        if clickbot.get("restored") is False:
+            # The process goes on answering menus through our wrapper.
+            self.journal.write("clickbot_restore_failed", id=result.get("id"))
+            error = "clickbot_restore_failed"
+        elif error is None and clickbot.get("refused"):
+            error = clickbot["refused"]
+        elif error is None and (test["tests_run"] == 0 or test["skipped"] > 0):
+            # ChromeBrowser skips its test when it cannot start, and 15 logs
+            # that skip with no reason: decided from the counts, not the line.
+            clickbot["skipped"] = {"reason": run["js_skip"]}
+            error = "js_tests_skipped"
+        if error is not None:
+            test["success"] = False
+
+        return {**result, "clickbot": clickbot, "test": test, "error": error}
 
     def _end_run(self) -> None:
         run, self._run = self._run, None
@@ -938,13 +1003,15 @@ class Session:
             raise SessionBusy(self._busy_reason())
 
     async def _request(
-        self, frame: dict, timeout: float, account: str | None = None
+        self, frame: dict, timeout: float, account: str | None = None,
+        activity: str | None = None,
     ) -> dict:
         """Send one frame and wait for its answer.
 
         `account` is how a late answer is booked if this one is abandoned —
         the frame type unless the caller says otherwise; see
-        `_settle_abandoned`.
+        `_settle_abandoned`. `activity` is what the session says it is doing,
+        the frame type by default.
         """
         self._ensure_acceptable(frame.get("t", ""))
 
@@ -956,7 +1023,7 @@ class Session:
         # accepted while busy must not overwrite it: the original command is
         # still what the container is doing.
         if self._state is not SessionState.BUSY:
-            self._activity = frame.get("t")
+            self._activity = activity or frame.get("t")
         self._set_state(SessionState.BUSY)
         self.process.stdin.write(encode_frame(frame).encode("utf-8"))
         await self.process.stdin.drain()

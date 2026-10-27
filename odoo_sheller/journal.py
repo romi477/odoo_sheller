@@ -12,7 +12,7 @@ from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
-from odoo_sheller.protocol import spec_of
+from odoo_sheller.protocol import run_spec
 
 logger = logging.getLogger(__name__)
 
@@ -345,11 +345,7 @@ def to_markdown(records: list[dict], meta: dict | None = None) -> str:
             ordinals[record.get("id")] = next_ordinal
             actor = record.get("actor") or {}
             by = f" by {actor.get('kind')} ({_named(actor)})" if actor else ""
-            spec = spec_of(
-                record.get("module"), record.get("test_class"), record.get("test_method"),
-                record.get("params"),
-            )
-            lines.append(f"## Test {next_ordinal}{by} — `{spec}` — {stamp}\n")
+            lines.append(f"## Test {next_ordinal}{by} — `{run_spec(record)}` — {stamp}\n")
         elif kind in ("result", "abandoned_result"):
             if kind == "abandoned_result":
                 n = ordinals.get(record.get("id"), record.get("id"))
@@ -533,6 +529,8 @@ def feed_from_records(
                 "result": None,
                 "actor": record.get("actor"),
             }
+            if record.get("clickbot"):
+                entry["clickbot"] = record["clickbot"]
             entries.append(entry)
             pending[request_id] = entry
             continue

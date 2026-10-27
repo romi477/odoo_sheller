@@ -110,3 +110,15 @@ def spec_of(
     spec = ".".join(part for part in (module, test_class, test_method) if part)
 
     return f"{spec}[{params}]" if params else spec
+
+
+def run_spec(record: dict) -> str:
+    """A journalled run as one string: `clickbot:<module>` for a clickbot run."""
+    if record.get("clickbot"):
+
+        return f"clickbot:{record.get('module')}"
+
+    return spec_of(
+        record.get("module"), record.get("test_class"), record.get("test_method"),
+        record.get("params"),
+    )
