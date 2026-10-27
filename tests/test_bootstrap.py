@@ -607,7 +607,9 @@ def test_click_module_shares_run_tests_preparation():
     assert clickbot["clicked"] == ["my.menu_a", "my.menu_app", "my.menu_b"]
     assert clickbot["failed"] == [] and clickbot["unreached"] == []
     assert [root["xmlid"] for root in clickbot["roots"]] == ["sale.menu_root", "my.menu_app"]
-    assert clickbot["apps"] == 2
+    # Two filters for each of the four menus clicked: the roots and the targets.
+    assert clickbot["filters"] == 8
+    assert "apps" not in clickbot and "menus" not in clickbot
 
 
 def test_the_browser_is_shown_only_the_modules_tree_in_debug():
@@ -665,6 +667,21 @@ def test_a_browser_that_breaks_otherwise_is_a_failure_with_its_reason():
     assert answer["test"]["success"] is False
 
 
+def test_counts_take_in_what_a_restarted_root_clicked_before_it_failed():
+    world = click_world()
+    world["menus"]["10"]["children"] = [11, 13]
+    world["menus"]["13"] = {"id": 13, "xmlid": "my.menu_c", "name": "menu_c", "children": [],
+                            "action": "ir.actions.act_window,11"}
+    world["data"].append(["my", "menu_c", 13])
+    answer, _, _ = click(dict(world, fail=["my.menu_b"]))
+    clickbot = answer["clickbot"]
+    assert [failure["xmlid"] for failure in clickbot["failed"]] == ["my.menu_b"]
+    assert "my.menu_c" in clickbot["clicked"]
+    # sale's root and my.menu_a; then my.menu_app before my.menu_b failed, and
+    # my.menu_app and my.menu_c in the run after: five menus, two filters each.
+    assert clickbot["filters"] == 10
+
+
 def test_two_failures_under_two_roots_are_both_found():
     answer, _, _ = click(click_world(fail=["my.menu_a", "my.menu_b"]))
     failed = answer["clickbot"]["failed"]
@@ -720,4 +737,4 @@ def test_20_goes_on_past_a_failure_in_one_run():
     assert all(root["error"] is None for root in clickbot["roots"])
     # 20 clicks an app root only when nothing is under it: not a target there.
     assert "my.menu_app" not in clickbot["unreached"] + clickbot["clicked"]
-    assert clickbot["menus"] == 4
+    assert "menus" not in clickbot

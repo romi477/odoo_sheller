@@ -568,9 +568,12 @@ def _os_click_line(message):
     """What one line of the clickbot's console says, or None.
 
     15 to 19 log `Testing menu <name> <xmlid>`, `Testing app menu: <xmlid>`,
-    `Error while testing <name> <xmlid>` and `Successfully tested N <what>`.
-    20 logs `Testing menu <name> (<xmlid>)`, `Testing app: <name> (<xmlid>)`,
-    one `Error found:` block per failing menu naming it, and `Tested N <what>`.
+    `Error while testing <name> <xmlid>`. 20 logs `Testing menu <name>
+    (<xmlid>)`, `Testing app: <name> (<xmlid>)` and one `Error found:` block
+    per failing menu naming it. The counts are read off each event — `Testing
+    N filters`, `Testing view switch: <type>`, `Modal detected: …` — and not
+    off the totals at the end, which only a run that got there prints: a root
+    restarted past a failure would lose what its failed runs clicked.
     """
     lines = (message or "").splitlines()
     if not lines:
@@ -595,12 +598,16 @@ def _os_click_line(message):
             words = rest.split()
 
             return (kind, words[-1]) if words else None
-    words = first.split()
-    for prefix in (["Successfully", "tested"], ["Tested"]):
-        size = len(prefix)
-        if words[:size] == prefix and len(words) > size + 1 and words[size].isdigit():
+    if first.startswith("Testing view switch: "):
 
-            return ("count", "_".join(words[size + 1:]), int(words[size]))
+        return ("count", "views", 1)
+    if first.startswith("Modal detected: "):
+
+        return ("count", "modals", 1)
+    words = first.split()
+    if len(words) == 3 and words[0] == "Testing" and words[1].isdigit() and words[2] == "filters":
+
+        return ("count", "filters", int(words[1]))
 
     return None
 

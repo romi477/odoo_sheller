@@ -245,8 +245,10 @@ an empty one starts every app the browser is shown. So is a URL menu, which
 would take the page away from the clickbot.
 
 The answer carries `clickbot: {module, login, debug, roots, clicked, failed,
-unreached, hidden, refused, restored}` and the clickbot's own counts where it
-printed them (`apps`, `menus`, `modals`, `filters`, `views`, …). `failed` is a
+unreached, hidden, refused, restored}` and the counts `filters`, `views` and
+`modals`, read off the clickbot's line for each event across every browser of
+the run — not off its totals, which a run restarted past a failure never
+prints (a key is absent when nothing of its kind was logged). `failed` is a
 list of `{xmlid, root, reason}`; `reason` is the first error the browser
 logged in that run, or the test's own failure text on 15, which raises before
 it logs, clipped to 800 characters. A run that ran no test or skipped one is

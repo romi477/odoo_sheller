@@ -175,20 +175,23 @@ def test_an_error_line_names_its_menu():
 
 
 @pytest.mark.parametrize(("line", "key", "count"), [
-    ("Successfully tested 2  apps", "apps", 2),  # 15 joins " apps" with a space
-    ("Successfully tested 14 menus", "menus", 14),
-    ("Successfully tested 3 modals", "modals", 3),
-    ("Successfully tested 9 filters", "filters", 9),
-    ("Tested 21 views", "views", 21),
-    ("Tested 4 form views", "form_views", 4),
-    ("Tested 5 new record views", "new_record_views", 5),
+    # Read off each event, every version, whether or not the run got to its end.
+    ("Testing 9 filters", "filters", 9),  # 15 and 16 join the parts by a space
+    ("Testing 0 filters", "filters", 0),
+    ("Testing view switch: kanban", "views", 1),
+    ("Modal detected: Configure my.menu_cfg", "modals", 1),  # 17 and later
+    ("Modal detected: Configure (my.menu_cfg)", "modals", 1),  # 20
 ])
-def test_counts_are_read_from_both_wordings(line, key, count):
+def test_counts_are_read_off_each_event(line, key, count):
     assert NS["_os_click_line"](line) == ("count", key, count)
 
 
 @pytest.mark.parametrize("line", [
-    "Testing 9 filters",
+    # The totals: printed only by a run that got to its end, so a run restarted
+    # past a failure would lose what its failed browsers clicked.
+    "Successfully tested 14 menus",
+    "Successfully tested 2  apps",
+    "Tested 21 views",
     "Error found while testing 2 menus",
     "Clicking on: menu toggler",
     "test successful",

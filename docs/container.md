@@ -220,8 +220,8 @@ the same. A Hoot run that executed has no `hoot.skipped`.
 **A clickbot run** (`POST /api/sessions/{id}/click_module`, body
 `{"module", "login", "debug", "timeout"}`) answers as a run does, plus
 `clickbot`: `roots`, `clicked`, `failed` (`xmlid`, `root`, `reason`),
-`unreached`, `hidden`, the clickbot's own counts where it printed them, and
-`restored`. It is never a pass when it clicked nothing: a refusal
+`unreached`, `hidden`, the counts of `filters`, `views` and `modals` the
+clickbot logged across every browser it ran, and `restored`. It is never a pass when it clicked nothing: a refusal
 (`unknown_module`, `module_not_installed`, `unknown_login`, `no_menus`,
 `no_visible_menus`) is the `error`; a run that ran no test or skipped one is
 `"js_tests_skipped"` with `clickbot.skipped.reason`, `null` when Odoo's log
