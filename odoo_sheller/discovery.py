@@ -925,7 +925,7 @@ async def probe_ssh(access: Access, launch: Launch, runner=None) -> dict:
 
 
 async def list_tests(container: str, module: str, runner=None) -> dict:
-    if not module or MODULE_NAME_RE.match(module) is None:
+    if not module or MODULE_NAME_RE.fullmatch(module) is None:
 
         return {
             "ok": False,

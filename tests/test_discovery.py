@@ -467,6 +467,13 @@ async def test_list_tests_rejects_a_dotted_spec_without_docker():
     assert runner.calls == []
 
 
+async def test_list_tests_rejects_a_trailing_newline_without_docker():
+    runner = fake_runner([(0, "{}", "")])
+    result = await discovery.list_tests("qbo19", "sale\n", runner=runner)
+    assert result["error_code"] == "invalid_module_name"
+    assert runner.calls == []
+
+
 async def test_list_tests_rejects_an_empty_module_without_docker():
     runner = fake_runner([(0, "{}", "")])
     result = await discovery.list_tests("qbo19", "", runner=runner)

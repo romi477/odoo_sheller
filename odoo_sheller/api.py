@@ -62,9 +62,6 @@ def _export_headers(path: Path, suffix: str) -> dict:
 # /module` does; a class or a method narrows it.
 TEST_SPEC_RE = re.compile(r"^(\w+)(?:\.(\w+)(?:\.(\w+))?)?$")
 
-
-# A technical module name, as in a manifest's directory.
-MODULE_RE = re.compile(r"^\w+$", re.ASCII)
 LOGIN_LIMIT = 256
 
 
@@ -1163,7 +1160,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
     ):
         session = session_or_404(session_id)
         require_owner(session, x_os_session_key)
-        match = TEST_SPEC_RE.match(body.test)
+        match = TEST_SPEC_RE.fullmatch(body.test)
         if not match:
             raise HTTPException(
                 status_code=400,
@@ -1200,7 +1197,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
     ):
         session = session_or_404(session_id)
         require_owner(session, x_os_session_key)
-        if not MODULE_RE.match(body.module):
+        if discovery.MODULE_NAME_RE.fullmatch(body.module) is None:
             raise HTTPException(
                 status_code=400,
                 detail={

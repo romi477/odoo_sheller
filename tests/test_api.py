@@ -422,6 +422,14 @@ def test_run_test_rejects_a_malformed_spec(client):
     assert client.registry.session.calls == []
 
 
+def test_run_test_rejects_a_spec_with_a_trailing_newline(client):
+    # `$` matches before a final newline; the spec must end where the text does.
+    response = client.post("/api/sessions/s1/run_test", json={"test": "sale.TestSale\n"})
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "invalid_test_spec"
+    assert client.registry.session.calls == []
+
+
 def test_a_spec_with_its_params_in_it_is_told_where_they_go(client):
     """os_run_test and os_history show a run as `spec[params]`; copied back
     whole as the spec, it was refused with no word about `params`."""
@@ -2427,7 +2435,7 @@ def test_click_module_needs_the_owner_key(client):
     assert client.registry.session.calls == []
 
 
-@pytest.mark.parametrize("bad", ["", "my module", "my.menu", "../x", "my-module"])
+@pytest.mark.parametrize("bad", ["", "my module", "my.menu", "../x", "my-module", "my\n"])
 def test_click_module_refuses_a_bad_module_name(client, bad):
     response = client.post("/api/sessions/s1/click_module", json={"module": bad})
     assert response.status_code == 400
