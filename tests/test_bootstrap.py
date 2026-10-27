@@ -674,6 +674,26 @@ def test_the_password_check_is_patched_where_authenticate_does_not():
     assert "a real password check" not in json.dumps(answer)
 
 
+def test_the_password_check_is_off_only_inside_authenticate():
+    """18 and later patch it around the one call; 15 to 17 get the same, no more.
+
+    The test's HTTP server listens on every interface for the whole run: a
+    patch that outlived `authenticate` would let anyone log in as anyone.
+    """
+    answer, calls, _ = click(click_world())
+    assert answer["test"]["success"] is True, answer
+    assert "password_check_outside_authenticate=real" in calls
+    assert "password_check_outside_authenticate=off" not in calls
+    assert "after:own_check_credentials=False" in calls
+
+
+def test_an_interrupt_inside_authenticate_leaves_the_password_check_real():
+    answer, calls, _ = click(click_world(interrupt_in_auth=True))
+    assert answer["error"]["type"] == "KeyboardInterrupt"
+    assert "after:own_check_credentials=False" in calls
+    assert answer["clickbot"]["restored"] is True
+
+
 def test_15_stops_its_browser_after_every_app():
     answer, calls, _ = click(click_world(flavour="15", fail=["my.menu_a"]))
     assert answer["clickbot"]["failed"][0]["xmlid"] == "my.menu_a"

@@ -644,11 +644,11 @@ def _os_click_budget(deadline, now):
 
 
 
-def _os_click_before(cls):
-    """Whether `cls` has a `load_menus` of its own, and which, before a run."""
-    own = "load_menus" in cls.__dict__
+def _os_click_before(cls, name="load_menus"):
+    """Whether `cls` has `name` of its own, and which, before a run."""
+    own = name in cls.__dict__
 
-    return (own, cls.__dict__["load_menus"] if own else None)
+    return (name, own, cls.__dict__[name] if own else None)
 
 
 def _os_click_undo(cls, before):
@@ -658,21 +658,21 @@ def _os_click_undo(cls, before):
     own `__dict__`, and setting the original back would leave an attribute
     that was never there. So it is deleted, as `mock.patch.object` does.
     """
-    own, original = before
+    name, own, original = before
     if not own:
-        if "load_menus" in cls.__dict__:
-            delattr(cls, "load_menus")
-    elif cls.__dict__.get("load_menus") is not original:
-        setattr(cls, "load_menus", original)
+        if name in cls.__dict__:
+            delattr(cls, name)
+    elif cls.__dict__.get(name) is not original:
+        setattr(cls, name, original)
 
 
 def _os_click_is_undone(cls, before):
-    own, original = before
+    name, own, original = before
     if not own:
 
-        return "load_menus" not in cls.__dict__
+        return name not in cls.__dict__
 
-    return cls.__dict__.get("load_menus") is original
+    return cls.__dict__.get(name) is original
 
 
 def _os_click_wrapper(original, holder):
@@ -767,9 +767,29 @@ _OS_CLICK_START = "odoo.isReady === true"
 
 
 def _os_click_accept(self, password, env):
-    """`_check_credentials` for the run on 15 to 17, as 18 patches it itself."""
+    """`_check_credentials` inside `authenticate` on 15 to 17, as 18 patches it."""
 
     return None
+
+
+def _os_click_authenticate(original, users_cls):
+    """`authenticate` with the password check off for its own call only.
+
+    That is the whole of what 18 and later do, with a `with patch(...)` around
+    the one call. Off for the whole run instead, the test's HTTP server —
+    listening on every interface — would let anyone log in as anyone while the
+    clickbot clicks. A `finally`, so not even an interrupt leaves it off.
+    """
+    def authenticate(*args, **kwargs):
+        before = _os_click_before(users_cls, "_check_credentials")
+        setattr(users_cls, "_check_credentials", _os_click_accept)
+        try:
+
+            return original(*args, **kwargs)
+        finally:
+            _os_click_undo(users_cls, before)
+
+    return authenticate
 
 
 def _os_click_needs_credentials(http_case):
@@ -980,7 +1000,8 @@ def _os_click_drive(case, state):
     # Undone by the test's own cleanups; the bootstrap checks it after.
     case.patch(menu_cls, "load_menus", _os_click_wrapper(menu_cls.load_menus, state["holder"]))
     if state["patch_credentials"]:
-        case.patch(type(env["res.users"]), "_check_credentials", _os_click_accept)
+        # On the test only: nothing to undo on any class.
+        case.authenticate = _os_click_authenticate(case.authenticate, type(env["res.users"]))
     user = env["res.users"].browse(state["uid"])
     if "tour_enabled" in user._fields:
         user.tour_enabled = False

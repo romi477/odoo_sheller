@@ -428,6 +428,8 @@ def _install_fake_click(module):
         def authenticate(self, user, password):
             # 15 to 17: no patched_check_credentials constant in here.
             CLICK_MODELS["res.users"]._check_credentials(password, None)
+            if CLICK.get("interrupt_in_auth"):
+                raise KeyboardInterrupt
 
         def terminate_browser(self):
             CALLS.append("terminate_browser")
@@ -436,6 +438,12 @@ def _install_fake_click(module):
             if CLICK.get("skip"):
                 raise unittest.SkipTest("Chrome executable not found")
             self.authenticate(login, login)
+            # Whoever logs in at /web/login while the clickbot runs.
+            try:
+                CLICK_MODELS["res.users"]._check_credentials("guess", None)
+                CALLS.append("password_check_outside_authenticate=off")
+            except AssertionError:
+                CALLS.append("password_check_outside_authenticate=real")
             menus = CLICK_MODELS["ir.ui.menu"].load_menus("1" if "debug=1" in url else "")
             CALLS.append(f"browser_js({url},{code},roots={menus['root']['children']})")
             log = logging.getLogger(f"{type(self).__module__}.{type(self).__name__}"
@@ -519,6 +527,7 @@ def _install_fake_click(module):
 def _dump():
     if CLICK:
         CALLS.append(f"after:own_load_menus={'load_menus' in FakeMenu.__dict__}")
+        CALLS.append(f"after:own_check_credentials={'_check_credentials' in FakeUsers.__dict__}")
     sys.stderr.write("PTLOG:" + json.dumps(CALLS) + "\n")
     sys.stderr.flush()
 
