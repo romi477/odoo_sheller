@@ -7,6 +7,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.12.0] — 2026-10-27
+
+An agent can click through the menus of one module with Odoo's own clickbot:
+a smoke test for a module under development that catches a broken view, a
+filter on a field that is gone, a component that crashes, a menu the user may
+not open — without clicking the whole app the module's menus sit in. Nothing is
+removed from the API or the MCP surface. Two existing checks got stricter: a
+test spec or module name with a newline at its end is refused.
+
+Verified live on Odoo 19 only, and only on a database whose menus all fail;
+15 to 18 and 20 follow from their sources.
+
 ### Added
 
 - `os_click_module(module)` and `POST /api/sessions/{id}/click_module`: Odoo's
@@ -15,10 +27,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `load_menus` is trimmed in memory for the run and put back after; nothing is
   written to hide menus. The answer's `clickbot` names the menus `clicked`,
   every one that `failed` with its reason, those `unreached` and those
-  `hidden` from that user; on 15 to 19 the run restarts past a failing menu
-  so one run finds them all. A run that clicked nothing is never a pass.
-  Booked and shown as a run (`clickbot:<module>`), collected with
-  `os_test_result`. Sessions carry `clickbot: {available, reason}`.
+  `hidden` from that user, and counts the `filters`, `views` and `modals` it
+  went through; on 15 to 19 the run restarts past a failing menu so one run
+  finds them all. A run that clicked nothing is never a pass. A menu under an
+  app made in the UI, which has no xmlid to start the clickbot by, is
+  `unreached`. On 15 to 17, whose test login checks a real password, the check
+  is off only inside that one call, as 18 and later do it. Booked and shown as
+  a run (`clickbot:<module>`), collected with `os_test_result`. Sessions carry
+  `clickbot: {available, reason}`.
+
+### Fixed
+
+- `POST /api/sessions/{id}/run_test` took `sale.TestSale` followed by a newline
+  as a valid spec, and `GET /api/containers/{name}/tests` a module name with a
+  newline at its end: the patterns were matched with `$`, which stops before a
+  final newline. Both are refused now.
+- A `run_test` on Odoo 15 or 16 whose container runs workers moved the shell's
+  HTTP port before refusing to run. The refusal now comes first.
 
 ## [1.11.1] — 2026-10-23
 
@@ -1854,6 +1879,7 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
+[1.12.0]: https://github.com/romi477/odoo_sheller/compare/v1.11.1...v1.12.0
 [1.11.1]: https://github.com/romi477/odoo_sheller/compare/v1.11.0...v1.11.1
 [1.11.0]: https://github.com/romi477/odoo_sheller/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/romi477/odoo_sheller/compare/v1.9.0...v1.10.0
