@@ -238,6 +238,11 @@ starts the browser again on what is left. 20's clickbot goes on by itself
 and gets an `error_checker` that lets its `Error found:` blocks through. Each
 `browser_js` gets what is left of the run's timeout.
 
+A target under an app root with no xmlid — an app made in the UI — is put in
+`unreached` without a browser: the clickbot starts an app by its xmlid, and
+an empty one starts every app the browser is shown. So is a URL menu, which
+would take the page away from the clickbot.
+
 The answer carries `clickbot: {module, login, debug, roots, clicked, failed,
 unreached, hidden, refused, restored}` and the clickbot's own counts where it
 printed them (`apps`, `menus`, `modals`, `filters`, `views`, …). `failed` is a

@@ -480,7 +480,9 @@ def _os_click_tree(menus, own, root_is_target):
     A target is a menu of the module with an action and no visible children:
     nothing else is ever clicked. The module's own app root is one too where
     the clickbot clicks roots before their menus (`root_is_target`). A URL
-    action would take the page away from the clickbot, so it is set aside.
+    action would take the page away from the clickbot, so it is set aside, and
+    so is a menu under an app root with no xmlid (one made in the UI): the
+    clickbot starts an app by its xmlid, and an empty one starts every app.
     """
     parents = {}
     for key, entry in menus.items():
@@ -510,7 +512,10 @@ def _os_click_tree(menus, own, root_is_target):
         is_root = parents.get(menu_id) == "root"
         if not model or children and not (is_root and root_is_target):
             continue
-        if model == "ir.actions.act_url":
+        root = menu_id
+        while parents.get(root, "root") != "root":
+            root = parents[root]
+        if model == "ir.actions.act_url" or not menus[root].get("xmlid"):
             unreached.append(xmlid)
             continue
         targets.append(menu_id)

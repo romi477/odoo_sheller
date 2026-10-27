@@ -668,7 +668,9 @@ the app `root` it was under and the `reason`, the error the browser logged —
 `unreached`, the module's menus the clickbot never got to, and `hidden`, the
 module's menus this user does not see at all. `unreached` is not a failure
 and not coverage either: the navbar shows three levels below an app, so a
-deeper menu is out of the clickbot's reach. Under `demo`, `hidden` is the
+deeper menu is out of the clickbot's reach, and so is a menu under an app
+made in the UI, which has no xmlid to start the clickbot by. A URL menu is
+never clicked either. Under `demo`, `hidden` is the
 finding. After a failure the run goes on to the module's other menus, so one
 run names every broken one. A failure of a foreign app's own action is that
 app's, in `roots[].error`, not the module's.

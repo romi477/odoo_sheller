@@ -99,6 +99,20 @@ def test_the_action_model_form_is_read_too():
     assert tree["unreached_static"] == ["my.menu_url"]
 
 
+def test_an_app_root_without_an_xmlid_cannot_be_started():
+    """A root made in the UI has no xmlid, and the clickbot starts an app by one.
+
+    `startClickEverywhere('')` would walk every app the browser is shown.
+    """
+    menus, own = sample()
+    menus[1]["xmlid"] = ""
+    tree = NS["_os_click_tree"](menus, own, False)
+    assert tree["targets"] == [12]
+    assert tree["roots"] == [10]
+    assert 1 not in tree["allowed"]
+    assert tree["unreached_static"] == ["my.menu_a", "my.menu_url"]
+
+
 def test_a_root_with_no_target_left_is_not_a_root():
     menus, own = sample()
     tree = NS["_os_click_tree"](menus, own - {"my.menu_a"}, False)
