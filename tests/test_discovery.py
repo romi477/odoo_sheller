@@ -976,8 +976,10 @@ def test_a_file_under_another_bundle_is_not_in_the_unit_tests(tmp_path):
     [
         # A name, not a literal: the manifest is read, never executed.
         "BUNDLE = 'web.assets_unit_tests'\n{'name': 'widget', 'assets': {BUNDLE: []}}\n",
-        "{'name': 'widget', 'assets': {'web.assets_unit_tests': "
-        "[('include', 'web.assets_unit_tests_setup')]}}\n",
+        (
+            "{'name': 'widget', 'assets': {'web.assets_unit_tests': "
+            "[('include', 'web.assets_unit_tests_setup')]}}\n"
+        ),
         "{'name': 'widget', 'assets': {'web.assets_unit_tests': 'widget/static/tests/*'}}\n",
         "{'name': 'widget', 'assets': ['web.assets_unit_tests']}\n",
         "{'name': 'widget'\n",

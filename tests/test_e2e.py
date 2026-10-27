@@ -215,7 +215,8 @@ async def test_click_module_clicks_a_module_and_restores_load_menus(session):
         "len(env['ir.ui.menu'].load_menus('1')['root']['children']))"
     )
     assert after["error"] is None
-    own, roots = eval(after["result"])  # noqa: S307 - our own repr of a tuple
+    # Our own repr of a tuple.
+    own, roots = eval(after["result"])
     assert own is False
     assert roots > len(clickbot["roots"]), "load_menus still answers trimmed"
 

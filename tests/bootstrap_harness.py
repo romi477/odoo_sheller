@@ -355,7 +355,7 @@ class FakeClickModel(FakeRecords):
     def browse(self, ids):
         ids = [ids] if isinstance(ids, int) else ids
         rows = [row for row in self.rows if row["id"] in ids]
-        known = set(row["id"] for row in rows)
+        known = {row["id"] for row in rows}
 
         return FakeRecords(self, rows + [{"id": i, "exists": False} for i in ids if i not in known])
 
@@ -471,7 +471,7 @@ def _install_fake_click(module):
                     raise AssertionError("The test code failed")
                 if entry["xmlid"] in CLICK.get("crash", []):
                     # Chrome gone, a devtools call timed out: not browser_js's fail().
-                    raise RuntimeError("Chrome died under %s" % entry["xmlid"])
+                    raise RuntimeError(f"Chrome died under {entry['xmlid']}")
                 log.info("Testing 2 filters")
                 if key == root:
                     pending = list(entry["children"])
@@ -492,10 +492,10 @@ def _install_fake_click(module):
                 continue
             log.info("Testing menu %s (%s)", entry["name"], entry["xmlid"])
             if entry["xmlid"] in CLICK.get("fail", []):
-                block = ("Error found:\n - Current testing app is %s (%s)\n"
-                         " - Current testing menu is %s (%s)\nThe error is :\nboom"
-                         % (menus[root]["name"], menus[root]["xmlid"], entry["name"],
-                            entry["xmlid"]))
+                block = (f"Error found:\n - Current testing app is {menus[root]['name']}"
+                         f" ({menus[root]['xmlid']})\n"
+                         f" - Current testing menu is {entry['name']} ({entry['xmlid']})\n"
+                         "The error is :\nboom")
                 log.error("%s", block)
                 failed = True
                 if not kw["error_checker"](block):

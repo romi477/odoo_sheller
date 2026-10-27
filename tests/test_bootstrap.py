@@ -600,7 +600,7 @@ def test_a_container_running_workers_is_refused_as_run_test_refuses_it():
 
 
 def test_click_module_shares_run_tests_preparation():
-    answer, calls, stderr = click(click_world())
+    answer, calls, _ = click(click_world())
     assert answer["error"] is None, answer["error"]
     spawn = next(i for i, call in enumerate(calls) if call.startswith("http_spawn"))
     first = next(i for i, call in enumerate(calls) if call.startswith("browser_js"))
@@ -657,7 +657,7 @@ def test_an_own_root_that_fails_ends_its_app():
 
 
 def test_a_foreign_root_failing_blames_its_first_target():
-    answer, calls, _ = click(click_world(fail=["sale.menu_root"]))
+    answer, _, _ = click(click_world(fail=["sale.menu_root"]))
     clickbot = answer["clickbot"]
     assert clickbot["failed"][0]["xmlid"] == "my.menu_a"
     assert clickbot["failed"][0]["root"] == "sale.menu_root"

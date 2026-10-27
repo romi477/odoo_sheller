@@ -19,8 +19,8 @@ def bootstrap_namespace():
     lines = source.splitlines()
     assert lines.count(ENTRY) == 1, "the bootstrap's entry point moved"
     namespace = {"__name__": "os_bootstrap_under_test"}
-    exec(compile("\n".join(line for line in lines if line != ENTRY), str(BOOTSTRAP), "exec"),
-         namespace)
+    code = compile("\n".join(line for line in lines if line != ENTRY), str(BOOTSTRAP), "exec")
+    exec(code, namespace)  # noqa: S102 - our own source, as the session sends it
 
     return namespace
 

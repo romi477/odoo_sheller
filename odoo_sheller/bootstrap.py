@@ -550,10 +550,10 @@ def _os_click_tree(menus, own, root_is_target):
     tree["allowed"] = _os_click_shrink(tree, set())
     tree["roots"] = [menu_id for menu_id in menus["root"].get("children") or ()
                      if menu_id in tree["allowed"]]
-    tree["root_action"] = dict(
-        (menu_id, _os_click_action_model(menus[menu_id]) is not None)
+    tree["root_action"] = {
+        menu_id: _os_click_action_model(menus[menu_id]) is not None
         for menu_id in tree["roots"]
-    )
+    }
 
     return tree
 
@@ -649,7 +649,7 @@ def _os_click_blame(logged, root_id, tree, menus, done):
     with no action of its own runs its first target's action when clicked, so
     that target is the one at fault. A root with an action owns its failure.
     """
-    ids = dict((entry.get("xmlid"), key) for key, entry in menus.items() if key != "root")
+    ids = {entry.get("xmlid"): key for key, entry in menus.items() if key != "root"}
     last = None
     for xmlid in reversed(logged):
         if xmlid in ids:
@@ -789,7 +789,7 @@ def _os_click_sources(odoo):
     texts = []
     for parts in (("static", "src", "webclient", "clickbot", "clickbot_loader.js"),
                   ("tests", "test_click_everywhere.py")):
-        with io.open(os.path.join(web, *parts), encoding="utf-8") as handle:
+        with open(os.path.join(web, *parts), encoding="utf-8") as handle:
             texts.append(handle.read())
 
     return texts[0], texts[1]
@@ -802,8 +802,6 @@ _OS_CLICK_START = "odoo.isReady === true"
 
 def _os_click_accept(self, password, env):
     """`_check_credentials` inside `authenticate` on 15 to 17, as 18 patches it."""
-
-    return None
 
 
 def _os_click_authenticate(original, users_cls):
@@ -880,8 +878,8 @@ class _OsClickHandler(logging.Handler):
                 return
             exc = record.exc_info[1] if record.exc_info else None
             if record.levelno >= logging.ERROR and exc is not None and run["server"] is None:
-                text = ("%s" % exc).strip().splitlines()
-                run["server"] = "%s: %s" % (type(exc).__name__, text[0] if text else "")
+                text = str(exc).strip().splitlines()
+                run["server"] = f"{type(exc).__name__}: {text[0] if text else ''}"
             return
         try:
             message = record.getMessage()
@@ -940,7 +938,7 @@ def _os_click_lookup(env, module, login):
     # A row can outlive its menu; it is no menu of the module's.
     existing = set(env["ir.ui.menu"].sudo().with_context(active_test=False).browse(
         [row["res_id"] for row in rows]).exists().ids)
-    own = set(module + "." + row["name"] for row in rows if row["res_id"] in existing)
+    own = {module + "." + row["name"] for row in rows if row["res_id"] in existing}
     if not own:
 
         return "no_menus", user, None
@@ -959,7 +957,7 @@ def _os_click_root(case, state, root_id, entry):
     menus = state["menus"]
     flavour = state["flavour"]
     done = state["done"]
-    ids = dict((menus[key].get("xmlid"), key) for key in tree["targets"])
+    ids = {menus[key].get("xmlid"): key for key in tree["targets"]}
     extra = {}
     if flavour["signal"]:
         extra["success_signal"] = flavour["signal"]
@@ -992,14 +990,14 @@ def _os_click_root(case, state, root_id, entry):
             # No browser at all: the run's counts say so, not a menu.
             raise
         except Exception as exc:  # noqa: BLE001 - Chrome gone, a devtools call timed out
-            text = "%s: %s" % (type(exc).__name__, exc)
+            text = f"{type(exc).__name__}: {exc}"
         finally:
             if flavour["own_browser"]:
                 case.terminate_browser()
         for xmlid in run["logged"]:
             if xmlid in state["own"] and xmlid not in state["clicked"]:
                 state["clicked"].append(xmlid)
-        logged = set(ids[xmlid] for xmlid in run["logged"] if xmlid in ids)
+        logged = {ids[xmlid] for xmlid in run["logged"] if xmlid in ids}
         if text is None:
             done.update(logged)
             break
@@ -1032,9 +1030,9 @@ def _os_click_root(case, state, root_id, entry):
         state["holder"]["allowed"] = _os_click_shrink(tree, done)
     entry["success"] = entry["error"] is None and len(state["failed"]) == failed_before
     if not entry["success"]:
-        case.fail("clickbot failed under %s: %s" % (
-            entry["xmlid"], entry["error"] or ", ".join(
-                failure["xmlid"] for failure in state["failed"][failed_before:])))
+        named = entry["error"] or ", ".join(
+            failure["xmlid"] for failure in state["failed"][failed_before:])
+        case.fail(f"clickbot failed under {entry['xmlid']}: {named}")
 
 
 def _os_click_drive(case, state):
@@ -1075,7 +1073,7 @@ def _os_click_case(http_case, module, state):
     attrs = {
         # BaseCase reads its module and tags off a name under odoo.addons, and
         # HttpCase names its loggers after it.
-        "__module__": "odoo.addons.%s.tests.os_click_module" % module,
+        "__module__": f"odoo.addons.{module}.tests.os_click_module",
         "test_click_module": test_click_module,
     }
 
@@ -1120,7 +1118,7 @@ def _os_click_module(env, module, login, debug, timeout=900.0):
                 "failed": clickbot["failed"], "clicked": clickbot["clicked"],
                 "clickbot": clickbot, "run": _os_click_new_run(),
             })
-            failed = set(failure["xmlid"] for failure in clickbot["failed"])
+            failed = {failure["xmlid"] for failure in clickbot["failed"]}
             clickbot["unreached"] = [
                 menus[menu_id]["xmlid"] for menu_id in tree["targets"]
                 if menus[menu_id]["xmlid"] not in clickbot["clicked"]
@@ -1248,7 +1246,7 @@ def _os_js_probe():
     # Never the reason a session fails to start.
     except BaseException as exc:  # noqa: BLE001
 
-        return {"error": "%s: %s" % (type(exc).__name__, exc)}
+        return {"error": f"{type(exc).__name__}: {exc}"}
 
 
 def _os_hello(namespace):
