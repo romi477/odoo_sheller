@@ -231,7 +231,9 @@ The test is built by the bootstrap and run through Odoo's suite runner, one
 `browser_js` per app root, each in a `subTest`, as the session's `run_test`
 would: the HTTP server on its free port, a test transaction, rolled back.
 On 15 to 17, whose `authenticate` checks a real password, `_check_credentials`
-is patched for the run as 18 patches it. On 15 to 19 the clickbot leaves an
+is patched around the test's own `authenticate` call and nothing else, as 18
+patches it: the test's HTTP server listens on every interface, and a patch
+that outlived the call would let anyone log in as anyone while the run lasts. On 15 to 19 the clickbot leaves an
 app at its first failing menu; the test hears the console in-process, blames
 the last menu logged — or, for a foreign root without an action of its own,
 its first target, whose action the root runs — takes it out of the tree and
