@@ -179,6 +179,7 @@ Daemon → bootstrap:
 |---|---|---|
 | `exec` | `id`, `code` | run this code |
 | `run_test` | `id`, `module`, `test_class`, `test_method` | run one Odoo test method or a whole class |
+| `click_module` | `id`, `module`, `login`, `debug`, `timeout` | Odoo's clickbot over one module's menus; answered as a `run_test` with a `clickbot` key (`docs/agent-guide.md`, *Clicking a module*) |
 | `commit` | `id` | end the transaction, keep it |
 | `rollback` | `id` | end the transaction, discard it |
 | `close` | `id` | leave the loop |
@@ -188,7 +189,7 @@ Bootstrap → daemon:
 | `t` | Fields |
 |---|---|
 | `hello` | `protocol`, `odoo`, `python`, `db`, `uid`, `pid` |
-| `result` | `id`, `stdout`, `result`, `error`, `duration`, `test` (only for `run_test`) |
+| `result` | `id`, `stdout`, `result`, `error`, `duration`, `test` (only for `run_test` and `click_module`), `clickbot` (only for `click_module`) |
 | `bye` | `id` |
 
 Unknown frame types are ignored on both sides, so a future addition (a

@@ -143,9 +143,9 @@ the same texts from `GET /api/help`:
 `os_run_test(`, the served text says `{{run_test}}(`, and the client puts its
 own name for that action there. `markers` is the whole list, the MCP tools
 without their `os_` prefix: `exec`, `source`, `journal`, `history`,
-`run_test`, `test_result`, `list_tests`, `open_session`, `close_session`,
-`commit`, `rollback`, `interrupt`, `session`, `attach_session`, `help`,
-`list_sessions`, `list_containers`. A client that substitutes nothing still
+`run_test`, `click_module`, `test_result`, `list_tests`, `open_session`,
+`close_session`, `commit`, `rollback`, `interrupt`, `session`,
+`attach_session`, `help`, `list_sessions`, `list_containers`. A client that substitutes nothing still
 reads plain text. Topics about a flow an HTTP client may not have — sessions,
 ownership, commit, remote_server, watching — are served like the rest; the
 client chooses.
