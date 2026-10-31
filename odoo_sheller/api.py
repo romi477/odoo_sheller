@@ -70,8 +70,10 @@ PSQL_STATUS: dict[type, tuple[int, str]] = {
     psql.PsqlRefused: (400, "take that out; a transaction here ends the way the call says"),
     psql.PsqlCommitNotAllowed: (
         403,
-        "stop and ask the human to turn on 'agents may commit' for this container; "
-        "no tool can do it. Without it this call runs read-only and rolls back",
+        (
+            "stop and ask the human to turn on 'agents may commit' for this container; "
+            "no tool can do it. Without it this call runs read-only and rolls back"
+        ),
     ),
     psql.PsqlNotAvailable: (403, "psql is for local containers; use exec in the session"),
     psql.PsqlUnavailable: (503, "this container cannot run it; use exec in a session"),
@@ -79,8 +81,10 @@ PSQL_STATUS: dict[type, tuple[int, str]] = {
     psql.PsqlBusy: (409, "a call is running on this container; wait for it"),
     psql.PsqlTimedOut: (
         504,
-        "the transaction was stopped; split the work, or use exec, which has more time. "
-        "If committed is null, check the data before trying again",
+        (
+            "the transaction was stopped; split the work, or use exec, which has more "
+            "time. If committed is null, check the data before trying again"
+        ),
     ),
 }
 

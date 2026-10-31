@@ -2543,6 +2543,13 @@ def test_psql_target_must_be_named_one_way(psql_client, monkeypatch, body):
     assert calls == []
 
 
+def test_psql_takes_a_database_name_that_is_not_ascii(psql_client, monkeypatch):
+    calls = _stub_psql(monkeypatch)
+    body = {"sql": "select 1", "container": "odoo17", "database": "integra_db_19ś"}
+    assert psql_client.post("/api/psql", json=body).status_code == 200
+    assert calls[0]["target"].database == "integra_db_19ś"
+
+
 @pytest.mark.parametrize(
     ("container", "database"),
     [("--privileged", "db"), ("a/b", "db"), ("odoo17", "-c x"), ("odoo17", "a b"), ("odoo17", "")],

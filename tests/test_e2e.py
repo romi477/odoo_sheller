@@ -13,18 +13,25 @@ Override the target with PT_E2E_CONTAINER, PT_E2E_DB, PT_E2E_ODOO_BIN.
 
 import asyncio
 import os
+import re
+import secrets
+import subprocess
 
 import pytest
 
-from odoo_sheller import discovery
+from odoo_sheller import discovery, psql
+from odoo_sheller.agent_commit import AgentCommitStore
 from odoo_sheller.discovery import SUPPORTED_MAJORS
+from odoo_sheller.psql import PsqlCommitNotAllowed, PsqlRefused, PsqlTimedOut
 from odoo_sheller.registry import Registry
 from odoo_sheller.session import CommitNotAllowed
+from odoo_sheller.transport import DOCKER, Target, spawn
 
 CONTAINER = os.environ.get("PT_E2E_CONTAINER", "integra19")
 DATABASE = os.environ.get("PT_E2E_DB", "integra_db_19_presta")
 ODOO_BIN = os.environ.get("PT_E2E_ODOO_BIN", "/opt/odoo/odoo-bin")
 NON_ODOO = os.environ.get("PT_E2E_NON_ODOO", "odoo-postgres")
+CONFIG_PATH = os.environ.get("PT_E2E_CONFIG", "/opt/odoo.conf")
 # A core test that exists, under the same names, in every supported major.
 # `base.TestFloatPrecision` used to be that and is not any more: 20 moved the
 # float tests out of `addons/base/tests`, which turns a run here into
@@ -294,3 +301,199 @@ async def test_handover_keeps_the_namespace_and_moves_the_right_to_type(session)
     assert handover["to"]["label"] == "e2e-agent"
     actors = [r["actor"]["kind"] for r in records if r["kind"] == "exec"]
     assert actors == ["human", "agent"]
+
+
+# --- os_psql ----------------------------------------------------------------
+#
+# Writes one scratch table, under a name nothing else can have, and drops it.
+
+
+def _docker(*argv):
+
+    return subprocess.run(
+        ["docker", *argv], capture_output=True, text=True, timeout=30, check=False
+    )
+
+
+def _psql_processes() -> set[str]:
+    """Pids of `psql` in the container, from /proc: the image need not have `ps`."""
+    code = (
+        "import os\n"
+        "for p in filter(str.isdigit, os.listdir('/proc')):\n"
+        "    try:\n"
+        "        c = open('/proc/%s/comm' % p).read().strip()\n"
+        "    except OSError:\n"
+        "        continue\n"
+        "    if c == 'psql':\n"
+        "        print(p)\n"
+    )
+
+    return set(_docker("exec", CONTAINER, "python3", "-c", code).stdout.split())
+
+
+async def _until_no_new_psql(before: set[str], seconds: float) -> None:
+    for _ in range(int(seconds * 4)):
+        if _psql_processes() <= before:
+
+            return
+        await asyncio.sleep(0.25)
+    raise AssertionError(f"psql still running: {_psql_processes() - before}")
+
+
+@pytest.fixture
+async def psql_target(tmp_path):
+    """A registry whose switch is ours: the human's file is never read."""
+    store = AgentCommitStore(tmp_path / "agent-commit.json")
+    registry = Registry(journal_root=tmp_path / "journals", agent_commit=store)
+    table = f"pt_e2e_psql_{secrets.token_hex(6)}"
+    target = Target(kind=DOCKER, container=CONTAINER, database=DATABASE)
+    store.turn_on(CONTAINER)
+    await registry.run_psql(target, f"create table {table} (a int);", True, 10.0)
+    store.turn_off(CONTAINER)
+    yield registry, store, target, table
+    store.turn_on(CONTAINER)
+    await registry.run_psql(target, f"drop table if exists {table};", True, 10.0)
+
+
+async def _rows(registry, target, table) -> str:
+    answer = await registry.run_psql(target, f"select count(*) from {table};", False, 10.0)
+    assert answer["error"] is None
+
+    return answer["output"].split()[2]
+
+
+async def test_psql_read_only_cannot_write(psql_target):
+    registry, _store, target, table = psql_target
+    answer = await registry.run_psql(target, f"insert into {table} values (1);", False, 10.0)
+    assert "read-only transaction" in answer["error"]
+    assert answer["mode"] == "read_only"
+    assert answer["committed"] is False
+    assert await _rows(registry, target, table) == "0"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "set transaction read write; insert into t values (1);",
+        "select set_config('transaction_read_only', 'off', true);",
+        "\\set AUTOCOMMIT on",
+        "commit;",
+    ],
+)
+async def test_psql_escapes_from_read_only_are_refused(psql_target, sql):
+    registry, _store, target, _table = psql_target
+    with pytest.raises(PsqlRefused):
+        await registry.run_psql(target, sql, False, 10.0)
+
+
+async def test_psql_dry_run_writes_and_leaves_nothing(psql_target):
+    registry, store, target, table = psql_target
+    store.turn_on(CONTAINER)
+    sql = f"insert into {table} values (1); select count(*) from {table};"
+    answer = await registry.run_psql(target, sql, False, 10.0)
+    assert answer["error"] is None
+    assert "INSERT 0 1" in answer["output"]
+    assert answer["committed"] is False
+    assert answer["rolled_back"] is True
+    assert await _rows(registry, target, table) == "0"
+
+
+async def test_psql_commit_persists_with_the_switch_on(psql_target):
+    registry, store, target, table = psql_target
+    store.turn_on(CONTAINER)
+    answer = await registry.run_psql(target, f"insert into {table} values (1);", True, 10.0)
+    assert answer["committed"] is True
+    assert answer["error"] is None
+    assert await _rows(registry, target, table) == "1"
+
+
+async def test_psql_commit_with_the_switch_off_runs_nothing(psql_target):
+    registry, _store, target, table = psql_target
+    with pytest.raises(PsqlCommitNotAllowed):
+        await registry.run_psql(target, f"insert into {table} values (1);", True, 10.0)
+    assert await _rows(registry, target, table) == "0"
+
+
+async def test_psql_error_in_the_second_statement_leaves_no_first_write(psql_target):
+    registry, store, target, table = psql_target
+    store.turn_on(CONTAINER)
+    sql = f"insert into {table} values (1);\nselect nonsense from nowhere;"
+    answer = await registry.run_psql(target, sql, True, 10.0)
+    assert "nowhere" in answer["error"]
+    assert answer["committed"] is False
+    assert await _rows(registry, target, table) == "0"
+
+
+async def test_psql_sql_without_a_semicolon_commits_cleanly(psql_target):
+    registry, store, target, table = psql_target
+    store.turn_on(CONTAINER)
+    answer = await registry.run_psql(target, f"insert into {table} values (1) -- done", True, 10.0)
+    assert answer["committed"] is True
+    assert await _rows(registry, target, table) == "1"
+
+
+async def test_psql_deadline_ends_psql_and_the_backend(psql_target):
+    registry, _store, target, _table = psql_target
+    before = _psql_processes()
+    tag = f"pt_e2e_{secrets.token_hex(6)}"
+    sql = f"/* {tag} */ select pg_sleep(30); select pg_sleep(30);"
+    with pytest.raises(PsqlTimedOut) as timed_out:
+        await registry.run_psql(target, sql, False, 2.0)
+    assert timed_out.value.committed is False
+    await _until_no_new_psql(before, 5)
+    await asyncio.sleep(3)  # the server's own timeout, two seconds past the daemon's
+    answer = await registry.run_psql(
+        target,
+        f"select count(*) from pg_stat_activity "
+        f"where query like '%{tag}%' and pid <> pg_backend_pid();",
+        False,
+        10.0,
+    )
+    assert answer["output"].split()[2] == "0"
+
+
+async def test_psql_killed_client_leaves_nothing_committed(psql_target):
+    """The daemon dying: its `docker exec` client goes, and with it `psql`'s stdin."""
+    registry, store, target, table = psql_target
+    store.turn_on(CONTAINER)
+    before = _psql_processes()
+    proc = await spawn(psql.build_command(target, read_only=False, timeout=6.0))
+    proc.stdin.write(
+        f"\\set AUTOCOMMIT off\nBEGIN;\ninsert into {table} values (1);\n"
+        "select pg_sleep(2);\n;\n\\echo m\n".encode()
+    )
+    await proc.stdin.drain()
+    await asyncio.sleep(1)
+    proc.kill()
+    await proc.wait()
+    await _until_no_new_psql(before, 20)
+    assert await _rows(registry, target, table) == "0"
+
+
+async def test_psql_password_is_nowhere_it_should_not_be(psql_target, tmp_path):
+    registry, store, target, table = psql_target
+    store.turn_on(CONTAINER)
+    config = _docker("exec", CONTAINER, "sh", "-c", f"cat {CONFIG_PATH}").stdout
+    found = re.search(r"^db_password\s*=\s*(.+)$", config, re.MULTILINE)
+    assert found, "this test needs a password in the config"
+    password = found.group(1).strip()
+    sql = f"select pg_sleep(1); insert into {table} values (1);"
+    running = asyncio.create_task(registry.run_psql(target, sql, True, 10.0))
+    await asyncio.sleep(0.5)
+    host_ps = (
+        await asyncio.to_thread(
+            subprocess.run, ["ps", "axwww"], capture_output=True, text=True, timeout=10, check=False
+        )
+    ).stdout
+    answer = await running
+    assert answer["committed"] is True
+    inspected = _docker("inspect", CONTAINER).stdout
+    journals = "".join(p.read_text() for p in (tmp_path / "journals").glob("*.jsonl"))
+    # The script itself is in argv and names the variable; the value is the point.
+    # `inspect` holds the container's own environment, which may well have the
+    # same value under a name of its own, so it is the pair that is looked for.
+    needle = f"PGPASSWORD={password}"
+    assert needle not in host_ps, "the password reached a host process list"
+    assert needle not in inspected, "the password reached docker inspect"
+    assert needle not in journals, "the password reached a journal"
+    assert "db_password" not in journals, "the config reached a journal"

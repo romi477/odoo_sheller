@@ -107,7 +107,7 @@ def test_allowed(sql):
     check_sql(sql)
 
 
-PG_ENV = re.compile(r"^(PG[A-Z]+)=(.*)$", re.M)
+PG_ENV = re.compile(r"^(PG[A-Z]+)=(.*)$", re.MULTILINE)
 
 
 def _fake_psql(tmp_path, body=None):
@@ -142,6 +142,7 @@ def _run_runner(tmp_path, bin_dir, config=None, read_only="1"):
         capture_output=True,
         text=True,
         timeout=20,
+        check=False,
     )
 
 
@@ -155,8 +156,8 @@ def _recorded(log) -> dict:
     text = log.read_text(encoding="utf-8")
 
     return {
-        "pid": re.search(r"^pid=(\d+)$", text, re.M).group(1),
-        "argv": re.search(r"^argv=(.*)$", text, re.M).group(1),
+        "pid": re.search(r"^pid=(\d+)$", text, re.MULTILINE).group(1),
+        "argv": re.search(r"^argv=(.*)$", text, re.MULTILINE).group(1),
         "env": dict(PG_ENV.findall(text)),
     }
 
@@ -448,3 +449,9 @@ def test_a_lone_surrogate_in_the_sql_does_not_crash_the_feed(double):
     done = double.run("select '\ud800';")
     assert double.lines()[-1] == "ROLLBACK;"
     assert done["error"] is None
+
+
+def test_docker_saying_something_else_is_an_error_not_output(double, monkeypatch):
+    monkeypatch.setenv("PSQL_DOUBLE_MODE", "docker_other")
+    done = double.run("select 1;")
+    assert "cannot exec" in done["error"]

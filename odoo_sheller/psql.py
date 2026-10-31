@@ -10,6 +10,7 @@ of the text would show.
 """
 
 import asyncio
+import itertools
 import logging
 import re
 import secrets
@@ -38,7 +39,8 @@ class PsqlRefused(PsqlError):
 
 # No rule for this exists to reuse. It travels by environment and never as an
 # argument, so this is about a name that could not be one.
-DATABASE_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}")
+# Unicode: a real one here is called `integra_db_19ś`.
+DATABASE_RE = re.compile(r"\w[\w.-]{0,62}")
 
 # Refused as the first word of a statement. `SET` inside an `UPDATE` and `END`
 # inside a `CASE` are the reason it is only the first word.
@@ -197,7 +199,7 @@ def _check_keywords(statement: list[str]) -> None:
         raise PsqlRefused("prepare transaction")
     elif first == "copy":
         words = _top_level(statement)
-        allowed = any(a == "to" and b == "stdout" for a, b in zip(words, words[1:]))
+        allowed = any(a == "to" and b == "stdout" for a, b in itertools.pairwise(words))
         if not allowed or "from" in words or "program" in words:
             raise PsqlRefused(first)
 
@@ -210,7 +212,7 @@ def check_sql(sql: str) -> None:
         raise PsqlRefused("empty")
     for statement in statements:
         _check_keywords(statement)
-    for token, following in zip(tokens, tokens[1:]):
+    for token, following in itertools.pairwise(tokens):
         if following == _OPEN and token in _FUNCTIONS:
             raise PsqlRefused(token)
 
@@ -493,10 +495,14 @@ class _Call:
         if self.missing:
             raise PsqlUnavailable(self.missing)
         if self.pid is None:
-            if "No such container" in errors or "is not running" in errors:
-                raise PsqlTargetGone(errors)
-            if code in (125, 126, 127) and "python3" in errors:
+            # The script never ran, so this is Docker talking, and it says some of
+            # this on stdout.
+            said = f"{errors}\n{self.text()}"
+            if "No such container" in said or "is not running" in said:
+                raise PsqlTargetGone(said.strip())
+            if code in (125, 126, 127) and "python3" in said:
                 raise PsqlUnavailable("python3")
+            errors = said.strip()
         if self.commit_seen and code == 0:
             committed: bool | None = True
         elif self.commit_sent:

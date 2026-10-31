@@ -18,20 +18,25 @@ def out(text: str) -> None:
 
 
 def main() -> int:
-    log = open(os.environ["PSQL_DOUBLE_LOG"], "a", encoding="utf-8", buffering=1)
+    log = open(os.environ["PSQL_DOUBLE_LOG"], "a", encoding="utf-8", buffering=1)  # noqa: SIM115
     mode = os.environ.get("PSQL_DOUBLE_MODE")
     if mode == "missing":
         out("OSPSQL-MISSING psql")
 
         return 0
+    if mode == "docker_other":
+        out("cannot exec in a paused container")
+
+        return 1
     if mode == "gone":
         sys.stderr.write("Error response from daemon: No such container: nope\n")
 
         return 1
     if mode == "no_python":
-        sys.stderr.write('OCI runtime exec failed: exec: "python3": executable file not found\n')
+        # Docker says this on stdout, measured on a real container with no python3.
+        out('OCI runtime exec failed: exec: "python3": executable file not found in $PATH')
 
-        return 126
+        return 127
     out(f"OSPSQL-PID {os.getpid()}")
     pending = []
     swallow_commit_marker = False

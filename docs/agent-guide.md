@@ -296,6 +296,15 @@ container needs `python3`, `psql` and an Odoo config, or the call is
 Each call has its own journal, under an id such as `psql_0123abcd4567`, for
 `os_journal`. Refused calls have one too. An odoo.sh or SSH target leaves none.
 
+Verified on Odoo 17 (`integra17`, `integra_db_17`, a scratch table): read-only
+cannot write, escapes are refused, a dry run leaves nothing, commit persists, an
+error in the second statement leaves no first write, a deadline ends `psql` and the
+server backend, killing the `docker exec` client leaves nothing committed, a call
+beside a busy session leaves it busy, and a database name that is not ASCII works.
+Not run live: a container with `python3` but no `psql`, one with `python3` but no
+Odoo config, and `committed: null`; those are covered by unit tests only, as odoo.sh
+and SSH are.
+
 ### Rules for the Odoo major
 
 The same agent writes for 15 in the morning and for 19 after lunch, and what
