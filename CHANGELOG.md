@@ -7,6 +7,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- `os_psql` and `POST /api/psql`: one transaction through `psql` in a local
+  container, for a registry that does not load or a session that is stuck, with
+  `os_exec` named as the first choice. No session is needed. It is read-only and
+  rolled back unless a human turned on *agents may commit* for the container, which
+  then allows a dry run, or a commit with `commit=True`. `COMMIT` is sent only after
+  the agent's SQL has finished. Meta-commands, transaction control, `SET`, `DO`, and
+  calls such as `dblink` are refused before anything runs; this guards against
+  accidents and is not a boundary (`docs/security.md`). odoo.sh and SSH targets
+  answer `psql_not_available`. Each call leaves a journal of its own.
+
 ## [1.12.0] — 2026-10-27
 
 An agent can click through the menus of one module with Odoo's own clickbot:

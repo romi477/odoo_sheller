@@ -268,6 +268,34 @@ foreign root with that error as the reason, the run went on past each, and an
 interrupt mid-run left `load_menus` restored. A clean pass, 15 to 18 and 20
 (whose `error_checker` path is read from source) have not been run.
 
+### SQL when no session can run it
+
+`os_exec` with `env.cr.execute` stays the normal way. `os_psql` is for a registry
+that does not load, and for reading `pg_stat_activity` and the locks beside a
+session that is stuck. It needs no session: name the target by `container` and
+`database`, or by `session_id`, which needs no key and leaves that session as it
+is, even while busy. odoo.sh and SSH targets answer `psql_not_available`.
+
+| *agents may commit* | `commit` | Transaction | Ends with |
+|---|---|---|---|
+| off | `False` | read-only | rollback |
+| off | `True` | none: `commit_not_allowed` | nothing ran |
+| on | `False` | read-write | rollback: the dry run |
+| on | `True` | read-write | `COMMIT`, once every statement has passed |
+
+One call is one transaction, at most 35 seconds, 30 by default. There is no running
+state and nothing to poll: long work belongs in `os_exec`. The answer has `output`,
+`error`, `mode`, `rolled_back`, `truncated`, `journal` and `committed`, which is
+`null` when `COMMIT` was sent and no answer came back. Then check the data before
+trying again; the same goes for `request_timed_out`. A failed statement is an
+ordinary answer with `error` set. `psql_refused` names the word; `os_help('psql')`
+and [security.md](security.md) list what is refused and how far that goes. The
+container needs `python3`, `psql` and an Odoo config, or the call is
+`psql_unavailable`; a second call while one runs on that container is `psql_busy`.
+
+Each call has its own journal, under an id such as `psql_0123abcd4567`, for
+`os_journal`. Refused calls have one too. An odoo.sh or SSH target leaves none.
+
 ### Rules for the Odoo major
 
 The same agent writes for 15 in the morning and for 19 after lunch, and what

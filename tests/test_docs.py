@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from odoo_sheller import mcp as server
+from odoo_sheller.psql import PsqlRefused, check_sql
 
 DOCS = Path(__file__).resolve().parent.parent / "docs"
 README = Path(__file__).resolve().parent.parent / "README.md"
@@ -396,3 +397,13 @@ def test_the_container_contract_documents_what_an_http_client_codes_against():
         assert f"`{reason}`" in text, reason
     for says in ("js_tests", "in_manifest", "js_tests_skipped", "hoot.skipped", "`hash`"):
         assert says in text, says
+
+
+def test_the_security_doc_names_the_limits_of_the_psql_guard():
+    text = (DOCS / "security.md").read_text(encoding="utf-8")
+    assert "os_psql" in text
+    assert "dblink" in text
+    assert "accident" in text
+    for sql in ("do $$ begin null; end $$", "set a = 1", "\\! ls"):
+        with pytest.raises(PsqlRefused):
+            check_sql(sql)

@@ -560,6 +560,8 @@ class Registry:
             switch_on=switch_on,
             commit=commit,
             mode="read_only" if read_only else "read_write",
+            # What the journal list shows as the owner column.
+            owner={"kind": "agent", "label": "os_psql"},
         )
         record.write("psql_sql", sql=sql)
         owned = False

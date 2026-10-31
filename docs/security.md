@@ -80,6 +80,38 @@ the same name inherits it. The journal of every session it changes records
 the change and its reason, and a session that opened with the right says it
 came from the container (`commit_grant`).
 
+**`os_psql` is SQL with no session, and that switch decides what it may do.**
+It exists for a registry that does not load and a session that is stuck. One call
+is one transaction through `psql` in a local container. With the switch off it is
+read-only and rolls back, and `commit=True` runs nothing. With the switch on,
+`commit=True` commits once every statement has passed. A session's `allow_commit`
+plays no part, in either direction. What this widens is a write with no session
+around it, on a container a human has already opened.
+
+An odoo.sh or SSH target is refused by its kind, before any command is built. The
+tool takes no host, build or card, so such a target can only be named through a
+session a human opened, and that session gets `psql_not_available`. Enabling
+remote targets would be its own decision, and `commit_forbidden` would still have
+to win on production.
+
+`COMMIT` is written to `psql` only after the agent's SQL has finished. Nothing in
+its input can reach a commit on its own, so a killed client or a dead daemon means
+a rollback. The password goes from the Odoo config to `psql` by environment, inside
+the container: never through argv, an answer or a journal.
+
+The text is read first, and that reading is **an accident guard, not a boundary**,
+in the same way that the session keys are:
+
+- It refuses meta-commands, transaction control, `SET`, `DO`, `COPY` to anywhere
+  but stdout, and calls such as `set_config`, `dblink` and `pg_read_file`. It does
+  not read the bodies of functions. A function already in the database that uses
+  `dblink` can commit on another connection, from a read-only call.
+- `db_user` is often a superuser in a local Postgres image. SQL there can do more
+  than this list catches.
+- `DROP TABLE` with `commit=True` on an opened container works, exactly as
+  `env.cr.execute` followed by `os_commit` does today.
+- Daemon and agent run as the same user, and `os_exec` reaches the same database.
+
 **The admin key exists for the same reason, one level up.** It's needed to
 act on a session you never owned, or to delete a journal file — actions
 where "any local process can do this anyway" isn't quite true, because they

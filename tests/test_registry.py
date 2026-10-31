@@ -1354,6 +1354,7 @@ async def test_psql_journal_records_sql_and_outcome(tmp_path, transactions):
     assert "-" not in session_id
     assert [r["kind"] for r in records] == ["psql_open", "psql_sql", "psql_result"]
     assert records[0]["switch_on"] is True
+    assert records[0]["owner"] == {"kind": "agent", "label": "os_psql"}
     assert records[0]["container"] == "mig18"
     assert records[2]["committed"] is True
     assert records[2]["output"] == "x\n"
