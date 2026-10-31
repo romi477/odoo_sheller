@@ -265,12 +265,6 @@ def _check_keywords(statement: list[str]) -> None:
             raise PsqlRefused(first)
 
 
-def statements(sql: str) -> list[list[str]]:
-    """The statements this text holds, as `check_sql` reads them."""
-
-    return _statements(_tokens(sql))
-
-
 def check_sql(sql: str) -> None:
     """Raises `PsqlRefused` unless this text may be handed to `psql`."""
     tokens = _tokens(sql)

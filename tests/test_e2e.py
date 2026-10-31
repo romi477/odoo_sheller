@@ -385,7 +385,7 @@ async def test_the_guard_counts_statements_as_real_psql_does(sql):
     answer = await psql.run_transaction(target, sql, read_only=True, commit=False, timeout=10.0)
     assert answer["error"] is None
     results = len(re.findall(r"^\(\d+ rows?\)$", answer["output"], re.MULTILINE))
-    assert results == len(psql.statements(sql))
+    assert results == len(psql._statements(psql._tokens(sql)))
 
 
 async def test_psql_read_only_cannot_write(psql_target):
