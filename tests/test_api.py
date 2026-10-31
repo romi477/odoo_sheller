@@ -10,8 +10,8 @@ from fastapi.testclient import TestClient
 
 from odoo_sheller import journal
 from odoo_sheller.agent_commit import AgentCommitStore
-from odoo_sheller.api import create_app
-from odoo_sheller.psql import PsqlTargetGone, PsqlTimedOut, PsqlUnavailable
+from odoo_sheller.api import PSQL_STATUS, create_app
+from odoo_sheller.psql import PsqlError, PsqlTargetGone, PsqlTimedOut, PsqlUnavailable
 from odoo_sheller.registry import Registry
 from odoo_sheller.session import (
     CommitNotAllowed,
@@ -2674,3 +2674,8 @@ def test_the_guard_covers_the_psql_route(psql_client, monkeypatch):
     )
     assert response.status_code == 403
     assert calls == []
+
+
+def test_every_psql_failure_has_an_answer():
+    """The route looks a failure up by its exact type: a new one must be listed."""
+    assert set(PsqlError.__subclasses__()) == set(PSQL_STATUS)
