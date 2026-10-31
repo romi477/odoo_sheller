@@ -17,12 +17,12 @@ from odoo_sheller import mcp as server
 # a commit that changes that text's wording on purpose, never to make a
 # refactor pass.
 MCP_GOLDEN = {
-    "instructions": "f535e62784a064db23a28f191649dbdfd2ae4b6bf39a7d7662190758862c3864",
+    "instructions": "5f4d3fd9613b2eb9e428f65e60505981431c0c615cf1babe0a24eba51a085780",
     "sessions": "f279071f06d2a72b141caac228164e467205feedd8a355a352d5ca1dc2156bb5",
     "ownership": "a7dfdbc2da4f62f93ac40110271f76e3e3607b2b53ded4432ae37609bde313c6",
     "commit": "706b40b5cfc3ce94917e5a51b80f5b64fd72ca27ef3a969d6509ee7f8d70fc0c",
     "remote_server": "809bb8517bf1789aecb3d8ae60a5bcd3234b98e6441cce3d1a64d577ed3a316e",
-    "limits": "2ed02929ffd28b600388968a63ffd8f1da64708b055117d424e448b832b78076",
+    "limits": "20dd27192499f9f42ce507560287d6b25dedb174d5076bbb0b247df65b4e040b",
     "orm": "29ce479be88e26e3c260c056cc2e71c2001be5069a1de0e8c6ef308a4aefd031",
     "code": "9695582a4342042586018028a87e617a9adffe8333083f67a3b4326914a14638",
     "log": "25be6d6b541c96978a501be05720c193444cdda9b29671724676c2673184b1a3",
@@ -30,6 +30,7 @@ MCP_GOLDEN = {
     "modules": "0955570535534c2d4e6279884172dab9a8452c3fcab5dfcdd753f10856eecbca",
     "jobs": "c853c98be14913bfc4e739cbcaae82491f034aa509f136a30954ed6d5580f37f",
     "tests": "2a89a69148efcb67fc336da04c927dc2cf5ced4aaec9b0d176aa5f4e2014fbde",
+    "psql": "148b5a2305c08943dabb9a37b20151208a1085d641f2a9d64aa5a4350b71ea26",
     "watching": "1500647eb44f8b12be718b6dda83d48427492fff6b6cddcbfb8106adcb0612be",
     "odoo_15": "2d3110ec58af1f02ebdc4fd22bfbf0418703ccfd0dd13301d86a3a55d0fff6be",
     "odoo_16": "f8246fbfb092aebc8498298a2a1fbc998880fbcdfaf9c1d816e7e22a3898fc51",
