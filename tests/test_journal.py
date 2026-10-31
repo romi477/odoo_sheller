@@ -712,3 +712,88 @@ def test_a_plain_run_has_no_clickbot_key_in_its_entry():
     records = [dict(CLICK_RECORDS[0]), CLICK_RECORDS[1]]
     del records[0]["clickbot"]
     assert "clickbot" not in journal.feed_from_records(records)["entries"][0]
+
+
+def _psql_journal(tmp_path, committed=False, error=None):
+    path = journal.journal_path(
+        tmp_path, "psql_abc123", "odoo17", "somedb", datetime(2026, 10, 31, tzinfo=UTC)
+    )
+    written = journal.Journal(path)
+    written.write(
+        "psql_open", container="odoo17", database="somedb", target_kind="docker",
+        switch_on=True, commit=True, mode="read_write",
+    )  # fmt: skip
+    written.write("psql_sql", sql="update t set a = 1;")
+    written.write(
+        "psql_result", output="UPDATE 3\n", error=error, committed=committed,
+        rolled_back=committed is False, truncated=False, refused=None, code=None,
+    )  # fmt: skip
+    written.close()
+
+    return path
+
+
+def test_session_meta_reads_a_psql_journal(tmp_path):
+    records = journal.Journal(_psql_journal(tmp_path, committed=True)).records()
+    meta = journal.session_meta(records, "psql_abc123")
+    assert meta["container"] == "odoo17"
+    assert meta["database"] == "somedb"
+    assert meta["commands"] == 1
+    assert meta["committed"] is True
+    assert meta["closed_at"]
+    assert meta["ended_as"] == "psql_result"
+
+
+def test_session_meta_does_not_call_an_unknown_commit_committed(tmp_path):
+    records = journal.Journal(_psql_journal(tmp_path, committed=None)).records()
+    assert journal.session_meta(records)["committed"] is False
+
+
+def test_a_psql_journal_offers_no_reopen(tmp_path):
+    records = journal.Journal(_psql_journal(tmp_path)).records()
+    assert journal.target_from_records(records) is None
+
+
+def test_listing_shows_a_psql_journal(tmp_path):
+    path = _psql_journal(tmp_path)
+    assert journal.find_journal(tmp_path, "psql_abc123") == path
+    listed = journal.list_journals(tmp_path)
+    assert [entry["session_id"] for entry in listed] == ["psql_abc123"]
+    assert listed[0]["container"] == "odoo17"
+
+
+@pytest.mark.parametrize(
+    ("committed", "said"),
+    [(True, "committed"), (False, "rolled back"), (None, "unknown")],
+)
+def test_markdown_shows_sql_and_output(tmp_path, committed, said):
+    records = journal.Journal(_psql_journal(tmp_path, committed=committed)).records()
+    text = journal.to_markdown(records, journal.session_meta(records, "psql_abc123"))
+    assert "update t set a = 1;" in text
+    assert "UPDATE 3" in text
+    assert "read_write" in text
+    assert said in text
+
+
+def test_markdown_shows_a_refusal(tmp_path):
+    path = tmp_path / "x-odoo17-somedb-psql_r.jsonl"
+    written = journal.Journal(path)
+    written.write("psql_open", container="odoo17", database="somedb", mode="read_only")
+    written.write("psql_sql", sql="\\! ls")
+    written.write("psql_result", refused="\\", code="psql_refused", committed=False)
+    written.close()
+    text = journal.to_markdown(journal.Journal(path).records())
+    assert "psql_refused" in text
+
+
+def test_feed_of_a_psql_journal_is_empty(tmp_path):
+    records = journal.Journal(_psql_journal(tmp_path)).records()
+    feed = journal.feed_from_records(records)
+    assert feed["entries"] == []
+    assert feed["history"] == []
+
+
+def test_delete_removes_a_psql_journal(tmp_path):
+    path = _psql_journal(tmp_path)
+    journal.delete_journal(tmp_path, "psql_abc123")
+    assert not path.exists()
