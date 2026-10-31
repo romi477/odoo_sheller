@@ -11,6 +11,8 @@ of the text would show.
 
 import re
 
+from odoo_sheller.transport import DOCKER, Target, docker_bin
+
 
 class PsqlRefused(Exception):
     """The text holds something that would defeat the transaction."""
@@ -193,3 +195,97 @@ def check_sql(sql: str) -> None:
     for token, following in zip(tokens, tokens[1:]):
         if following == _OPEN and token in _FUNCTIONS:
             raise PsqlRefused(token)
+
+
+class PsqlNotAvailable(Exception):
+    """This kind of target has no `psql` tool, whatever it is called."""
+
+
+MISSING_PREFIX = "OSPSQL-MISSING "
+PID_PREFIX = "OSPSQL-PID "
+
+# Runs in the container: stdlib only, and nothing in its argv is a secret. It
+# goes in argv rather than on stdin, unlike the probe, because stdin stays open
+# for `psql`. `execve` keeps the pid, so the one printed is the one to signal.
+# The config's rules are the probe's, and a test keeps the candidates in step.
+RUNNER_SOURCE = r'''
+import configparser, os, shutil, sys
+
+def missing(what):
+    print("OSPSQL-MISSING " + what, flush=True)
+    raise SystemExit(0)
+
+psql = shutil.which("psql")
+if not psql:
+    missing("psql")
+
+odoo_bin = None
+for path in [shutil.which("odoo-bin"), "/opt/odoo/odoo-bin", "/usr/bin/odoo",
+             "/odoo/odoo-bin", "/mnt/odoo/odoo-bin", "/usr/lib/python3/dist-packages/odoo-bin"]:
+    if path and os.path.exists(path):
+        odoo_bin = path
+        break
+
+config = None
+for path in [os.environ.get("ODOO_RC"), "/etc/odoo/odoo.conf", "/etc/odoo.conf",
+             "/opt/odoo.conf", os.path.join(os.path.dirname(odoo_bin or ""), "odoo.conf"),
+             os.path.expanduser("~/.odoorc")]:
+    if path and os.path.exists(path):
+        config = path
+        break
+if not config:
+    missing("odoo config")
+
+def clean(value):
+    if value is None or value in ("False", "false", ""):
+
+        return None
+
+    return value
+
+# Raw: a `%` in a password is a password, not an interpolation. An error names
+# its type only, because a parser's message quotes the file.
+try:
+    parser = configparser.RawConfigParser()
+    parser.read(config)
+    options = parser["options"] if parser.has_section("options") else {}
+    host = clean(options.get("db_host")) or "localhost"
+    port = clean(options.get("db_port")) or "5432"
+    user = clean(options.get("db_user")) or "odoo"
+    password = clean(options.get("db_password"))
+except Exception as exc:
+    missing("odoo config (%s)" % type(exc).__name__)
+
+database, read_only, statement_ms, lock_ms, idle_ms = sys.argv[1:6]
+pg_options = ("-c statement_timeout=%s -c lock_timeout=%s "
+              "-c idle_in_transaction_session_timeout=%s" % (statement_ms, lock_ms, idle_ms))
+if read_only == "1":
+    pg_options += " -c default_transaction_read_only=on"
+
+env = dict(os.environ)
+env.update({"PGHOST": host, "PGPORT": port, "PGUSER": user, "PGDATABASE": database,
+            "PGOPTIONS": pg_options})
+env.pop("PGPASSWORD", None)
+if password:
+    env["PGPASSWORD"] = password
+
+print("OSPSQL-PID %d" % os.getpid(), flush=True)
+os.execve(psql, ["psql", "-X", "-w", "-P", "pager=off", "-v", "ON_ERROR_STOP=1"], env)
+'''
+
+
+def build_command(target: Target, read_only: bool, timeout: float) -> list[str]:
+    """The command for one call, by the target's kind and never by a name.
+
+    Past the daemon's own deadline by two seconds, so that it fires first and the
+    server still clears up shortly after if nothing else does.
+    """
+    if target.kind != DOCKER:
+        raise PsqlNotAvailable(target.kind)
+    server_ms = str(int((timeout + 2) * 1000))
+    lock_ms = str(int(timeout * 500))
+
+    return [
+        docker_bin(), "exec", "-i", target.container, "python3", "-c", RUNNER_SOURCE,
+        target.database, "1" if read_only else "0", server_ms, lock_ms, server_ms,
+    ]  # fmt: skip
