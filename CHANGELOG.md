@@ -7,17 +7,36 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.13.0] — 2026-10-31
+
+An agent can run SQL through `psql` when the Odoo shell cannot help: a registry
+that does not load, or a session that is stuck and has to be looked at from a second
+connection. `os_exec` stays the first choice, and the tool says so. Nothing is removed
+from the API or the MCP surface.
+
+Verified live on Odoo 17 only, including a test that counts statements through real
+`psql` against the guard. odoo.sh and SSH targets are refused and covered by unit tests;
+a container with no `psql` or no Odoo config was not available to try.
+
 ### Added
 
 - `os_psql` and `POST /api/psql`: one transaction through `psql` in a local
-  container, for a registry that does not load or a session that is stuck, with
-  `os_exec` named as the first choice. No session is needed. It is read-only and
-  rolled back unless a human turned on *agents may commit* for the container, which
-  then allows a dry run, or a commit with `commit=True`. `COMMIT` is sent only after
-  the agent's SQL has finished. Meta-commands, transaction control, `SET`, `DO`, and
-  calls such as `dblink` are refused before anything runs; this guards against
-  accidents and is not a boundary (`docs/security.md`). odoo.sh and SSH targets
-  answer `psql_not_available`. Each call leaves a journal of its own.
+  container, with no session needed, at most 35 seconds. It is read-only and rolled
+  back unless a human turned on *agents may commit* for the container, which then
+  allows a dry run, or a commit with `commit=True`. `COMMIT` is sent only after the
+  agent's SQL has finished, so a killed client or a dead daemon means a rollback.
+  `committed` is `null` only when nobody can say: `COMMIT` was sent and no answer came
+  back. A one-call transaction cannot show its result and then commit that same result:
+  a dry run followed by `commit=True` runs the SQL twice.
+- Refused before anything runs: meta-commands, transaction control, `SET`, `DO`, `COPY`
+  other than to stdout, control characters, an unclosed parenthesis, `U&"..."` names,
+  and calls such as `set_config` and the `dblink` family. The text is read by `psql`'s
+  own lexing rules. This guards against accidents and is not a boundary: a function
+  already in the database that uses `dblink` can still commit on another connection
+  (`docs/security.md`).
+- odoo.sh and SSH targets answer `psql_not_available`, by their kind. Each call leaves a
+  journal of its own, under an id starting `psql_`, listed with the others.
+- `psql` topic in `os_help`, and in the `/api/help` marker list.
 
 ## [1.12.0] — 2026-10-27
 
@@ -1891,6 +1910,7 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
+[1.13.0]: https://github.com/romi477/odoo_sheller/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/romi477/odoo_sheller/compare/v1.11.1...v1.12.0
 [1.11.1]: https://github.com/romi477/odoo_sheller/compare/v1.11.0...v1.11.1
 [1.11.0]: https://github.com/romi477/odoo_sheller/compare/v1.10.0...v1.11.0

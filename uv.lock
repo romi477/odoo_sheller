@@ -435,7 +435,7 @@ wheels = [
 
 [[package]]
 name = "odoo-sheller"
-version = "1.12.0"
+version = "1.13.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

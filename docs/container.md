@@ -86,7 +86,7 @@ no session on its own, so `healthy` means ready.
 ```json
 {
   "ok": true,
-  "version": "1.12.0",
+  "version": "1.13.0",
   "container": true,
   "mcp": {
     "command": "docker",
@@ -117,7 +117,7 @@ the same texts from `GET /api/help`:
 
 ```json
 {
-  "version": "1.12.0",
+  "version": "1.13.0",
   "instructions": "odoo-sheller runs Python in a live Odoo shell. ...",
   "topics": {
     "limits":  {"text": "...", "hash": "<sha256 of text, hex>"},
