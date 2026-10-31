@@ -46,16 +46,13 @@ DATABASE_RE = re.compile(r"\w[\w.-]{0,62}")
 # inside a `CASE` are the reason it is only the first word.
 _CONTROL = frozenset({"begin", "start", "commit", "end", "abort", "set", "reset", "do"})
 # Refused anywhere as a call. Each leaves the transaction or touches the server;
-# the role in `db_user` is often a superuser in a local Postgres image.
+# the role in `db_user` is often a superuser in a local Postgres image. Families by
+# prefix, because the whole of `dblink` commits on a connection of its own and new
+# ones keep arriving; still not a list that claims to be complete.
 _FUNCTIONS = frozenset(
     {
         "set_config",
-        "dblink",
-        "dblink_exec",
-        "dblink_connect",
-        "pg_read_file",
-        "pg_read_binary_file",
-        "pg_ls_dir",
+        "pg_stat_file",
         "lo_import",
         "lo_export",
         "pg_terminate_backend",
@@ -63,6 +60,7 @@ _FUNCTIONS = frozenset(
         "pg_reload_conf",
     }
 )
+_FUNCTION_PREFIXES = ("dblink", "pg_read_", "pg_ls_", "pg_file_")
 
 # psql's own classes (`psqlscan.l`), not Python's: it reads bytes, every byte from
 # 0x80 up is an identifier character, and only ASCII is space. Where the two
@@ -283,7 +281,7 @@ def check_sql(sql: str) -> None:
     for statement in statements:
         _check_keywords(statement)
     for token, following in itertools.pairwise(tokens):
-        if following == _OPEN and token in _FUNCTIONS:
+        if following == _OPEN and (token in _FUNCTIONS or token.startswith(_FUNCTION_PREFIXES)):
             raise PsqlRefused(token)
 
 
