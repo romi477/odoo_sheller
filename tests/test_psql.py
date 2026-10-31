@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,18 @@ from odoo_sheller.transport import DOCKER, ODOOSH, SSH, Target, docker_bin
         ("select $a$ x", "unterminated"),
         ('select "x', "unterminated"),
         ("/* x", "unterminated"),
+        # What psql reads differently from a first attempt at reading it.
+        ("select 1; -- x\rcommit;", "commit"),
+        ("select 1 -- x\r\\! id", "\\"),
+        ("select 1 as €$a$; commit; -- $a$", "commit"),
+        ("select 1 as\u00a0x$a$; commit; -- $a$", "commit"),
+        ("select $€$ ' $€$; commit; -- '", "commit"),
+        ("select 1; \0 /*\ncommit; -- */", "control character"),
+        ("select '\0'", "control character"),
+        ('select U&"dblink\\005fexec"(1)', 'U&"'),
+        ('select u&"set!005fconfig" UESCAPE \'!\' (1)', 'U&"'),
+        ("select E'a'\n'\\'  ' ; commit ; --'", "string continuation"),
+        ("select E'a' /* x */ 'b'", "string continuation"),
         ("", "empty"),
         ("  -- only a comment\n", "empty"),
         (";;", "empty"),
@@ -101,6 +114,15 @@ def test_refused(sql, word):
         # Postgres's and the switch's business, not the guard's: the spec says so.
         "drop table t",
         "with a as (select 1) select * from a",
+        "select 1 as €",
+        # `1`, then a dollar quote, as psql reads it too: the commit is in the quote.
+        "select 1$a$; commit; -- $a$",
+        "select $€$ x $€$",
+        "select 1 -- x\r\nfrom t",
+        "select\t1\f",
+        "select U&'d\\0061t'",
+        "select 'a'\n'b'",
+        "select E'a', 'b'",
     ],
 )
 def test_allowed(sql):
@@ -202,6 +224,7 @@ def test_read_only_call_sets_the_default_and_timeouts(tmp_path):
     assert "-c statement_timeout=32000" in options
     assert "-c lock_timeout=15000" in options
     assert "-c idle_in_transaction_session_timeout=32000" in options
+    assert "-c standard_conforming_strings=on" in options
 
 
 def test_writing_call_leaves_the_read_only_default_out(tmp_path):
@@ -291,9 +314,11 @@ class Double:
     def __init__(self, tmp_path):
         self.log = tmp_path / "double.log"
         self.signals = []
+        self.signal_delay = 0.0
 
     async def signal(self, pid, name):
         self.signals.append((pid, name))
+        await asyncio.sleep(self.signal_delay)
 
     def lines(self):
 
@@ -455,3 +480,22 @@ def test_docker_saying_something_else_is_an_error_not_output(double, monkeypatch
     monkeypatch.setenv("PSQL_DOUBLE_MODE", "docker_other")
     done = double.run("select 1;")
     assert "cannot exec" in done["error"]
+
+
+def test_endless_output_is_truncated_not_timed_out(double):
+    # Past the cap nobody needs the bytes, but somebody has to read them: a pipe
+    # left unread never reaches its end, and the call waits out its deadline.
+    double.signal_delay = 0.3
+    started = time.monotonic()
+    done = double.run("ENDLESS;", read_only=False, commit=True, timeout=15.0)
+    assert done["truncated"] is True
+    assert done["committed"] is False
+    assert time.monotonic() - started < 10
+
+
+def test_a_flood_during_the_deadline_cannot_hang_the_call(double):
+    double.signal_delay = 1.0
+    started = time.monotonic()
+    with pytest.raises(PsqlTimedOut):
+        double.run("LATEFLOOD;", timeout=0.3)
+    assert time.monotonic() - started < 10

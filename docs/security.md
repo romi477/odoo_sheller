@@ -103,7 +103,9 @@ The text is read first, and that reading is **an accident guard, not a boundary*
 in the same way that the session keys are:
 
 - It refuses meta-commands, transaction control, `SET`, `DO`, `COPY` to anywhere
-  but stdout, and calls such as `set_config`, `dblink` and `pg_read_file`. It does
+  but stdout, control characters, `U&"..."` identifiers, an `E''` string continued
+  on another line, and calls such as `set_config`, `dblink` and `pg_read_file`. It
+  reads text as `psql`'s own lexer does, and a live test holds the two together. It does
   not read the bodies of functions. A function already in the database that uses
   `dblink` can commit on another connection, from a read-only call.
 - `db_user` is often a superuser in a local Postgres image. SQL there can do more

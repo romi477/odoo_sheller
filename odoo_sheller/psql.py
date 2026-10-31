@@ -64,9 +64,17 @@ _FUNCTIONS = frozenset(
     }
 )
 
-_IDENT = re.compile(r"[^\W\d][\w$]*")
-_NUMBER = re.compile(r"\d[\w$.]*")
-_DOLLAR_TAG = re.compile(r"\$(?:[^\W\d]\w*)?\$")
+# psql's own classes (`psqlscan.l`), not Python's: it reads bytes, every byte from
+# 0x80 up is an identifier character, and only ASCII is space. Where the two
+# disagree, a `€` or a no-break space hides a statement from this reading.
+_SPACE = " \t\n\r\f"
+_IDENT_START = r"A-Za-z_\x80-\U0010FFFF"
+_IDENT = re.compile(rf"[{_IDENT_START}][{_IDENT_START}0-9$]*")
+_NUMBER = re.compile(r"[0-9][0-9.]*")
+_DOLLAR_TAG = re.compile(rf"\$(?:[{_IDENT_START}][{_IDENT_START}0-9]*)?\$")
+# psql reads a line with `fgets` and keeps it as a C string: a NUL drops the rest
+# of the line, so what this sees after one is not what runs.
+_CONTROL_CHAR = re.compile(r"[\x00-\x08\x0b\x0e-\x1f\x7f]")
 
 # What one token is, once its content no longer matters.
 _LITERAL = "'"
@@ -111,20 +119,51 @@ def _skip_block_comment(sql: str, start: int) -> int:
     raise PsqlRefused("unterminated")
 
 
+def _skip_line_comment(sql: str, start: int) -> int:
+    """It ends at a carriage return as well, so `; -- x\\rcommit;` is a commit."""
+    at = start
+    while at < len(sql) and sql[at] not in "\n\r":
+        at += 1
+
+    return at
+
+
+def _refuse_continuation(sql: str, start: int) -> None:
+    """A quote after an `E''` and a newline continues it, still reading backslashes.
+
+    So `E'a'\\n'\\'...'` closes somewhere other than where a second, plain string
+    would. Refused rather than followed: nobody needs it here. Comments count too,
+    which is stricter than psql, and no one is the worse for it.
+    """
+    at = start
+    while at < len(sql):
+        if sql[at] in _SPACE:
+            at += 1
+        elif sql.startswith("--", at):
+            at = _skip_line_comment(sql, at)
+        elif sql.startswith("/*", at):
+            at = _skip_block_comment(sql, at + 2)
+        else:
+            break
+    if sql[at : at + 1] == "'":
+        raise PsqlRefused("string continuation")
+
+
 def _tokens(sql: str) -> list[str]:
     """Words in lower case and the marks above; literals and comments gone.
 
     A backslash outside all of those is a `psql` meta-command, whatever follows.
     """
+    if _CONTROL_CHAR.search(sql):
+        raise PsqlRefused("control character")
     tokens: list[str] = []
     at = 0
     while at < len(sql):
         char = sql[at]
-        if char.isspace():
+        if char in _SPACE:
             at += 1
         elif sql.startswith("--", at):
-            newline = sql.find("\n", at)
-            at = len(sql) if newline < 0 else newline + 1
+            at = _skip_line_comment(sql, at)
         elif sql.startswith("/*", at):
             at = _skip_block_comment(sql, at + 2)
         elif char == "\\":
@@ -135,6 +174,8 @@ def _tokens(sql: str) -> list[str]:
             if escapes:
                 tokens.pop()
             at = _skip_quoted(sql, at + 1, "'", escapes)
+            if escapes:
+                _refuse_continuation(sql, at)
             tokens.append(_LITERAL)
         elif char == '"':
             end = _skip_quoted(sql, at + 1, '"')
@@ -147,6 +188,10 @@ def _tokens(sql: str) -> list[str]:
             at = closing + len(tag.group())
             tokens.append(_LITERAL)
         elif ident := _IDENT.match(sql, at):
+            # Its name is spelled in escapes: `U&"dblink\\005fexec"`. Not decoded,
+            # because nothing here needs one.
+            if ident.group() in ("u", "U") and sql.startswith('&"', ident.end()):
+                raise PsqlRefused('U&"')
             tokens.append(ident.group().lower())
             at = ident.end()
         elif number := _NUMBER.match(sql, at):
@@ -202,6 +247,12 @@ def _check_keywords(statement: list[str]) -> None:
         allowed = any(a == "to" and b == "stdout" for a, b in itertools.pairwise(words))
         if not allowed or "from" in words or "program" in words:
             raise PsqlRefused(first)
+
+
+def statements(sql: str) -> list[list[str]]:
+    """The statements this text holds, as `check_sql` reads them."""
+
+    return _statements(_tokens(sql))
 
 
 def check_sql(sql: str) -> None:
@@ -292,7 +343,8 @@ except Exception as exc:
 
 database, read_only, statement_ms, lock_ms, idle_ms = sys.argv[1:6]
 pg_options = ("-c statement_timeout=%s -c lock_timeout=%s "
-              "-c idle_in_transaction_session_timeout=%s" % (statement_ms, lock_ms, idle_ms))
+              "-c idle_in_transaction_session_timeout=%s "
+              "-c standard_conforming_strings=on" % (statement_ms, lock_ms, idle_ms))
 if read_only == "1":
     pg_options += " -c default_transaction_read_only=on"
 
@@ -331,6 +383,7 @@ _READ_SIZE = 65536
 # A `docker exec … kill` answers at once. The deadline it serves has already
 # passed, and the MCP side stops waiting soon after.
 _SIGNAL_TIMEOUT = 2.0
+_STOP_TIMEOUT = 5.0
 
 
 class PsqlUnavailable(PsqlError):
@@ -388,6 +441,7 @@ class _Call:
         self.output = bytearray()
         self.errors = bytearray()
         self.begin_stripped = False
+        self.stopping: asyncio.Task | None = None
 
     def text(self) -> str:
 
@@ -424,22 +478,29 @@ class _Call:
         self.output += line[:room]
         if len(line) > room:
             self.truncated = True
+            self.decided.set()
 
     async def read_stdout(self) -> None:
         held = b""
         try:
             while chunk := await self.proc.stdout.read(_READ_SIZE):
+                # Past the cap the bytes are thrown away, but they are still read:
+                # a pipe left unread is paused, never reaches its end, and then
+                # waiting for the process waits for ever.
+                if self.truncated:
+                    continue
                 held += chunk
                 *lines, held = held.split(b"\n")
                 for line in lines:
                     self._take(line + b"\n")
                     if self.truncated:
-
-                        return
+                        held = b""
+                        self.stopping = asyncio.create_task(self.stop())
+                        break
                 if len(held) > MAX_OUTPUT:
                     self._take(held)
-
-                    return
+                    held = b""
+                    self.stopping = asyncio.create_task(self.stop())
             if held:
                 self._take(held)
         finally:
@@ -487,7 +548,12 @@ class _Call:
                 logger.warning("could not signal psql %s", self.pid)
         if self.proc.returncode is None:
             self.proc.kill()
-        await self.proc.wait()
+        # Bounded: a caller is waiting behind this, and a container stays busy
+        # until it returns.
+        try:
+            await asyncio.wait_for(self.proc.wait(), _STOP_TIMEOUT)
+        except TimeoutError:
+            logger.warning("docker exec for psql %s did not end", self.pid)
 
     def outcome(self) -> dict:
         code = self.proc.returncode
@@ -546,23 +612,24 @@ async def run_transaction(
         asyncio.create_task(call.read_stderr()),
         asyncio.create_task(call.feed()),
     ]
-    reader = tasks[0]
 
     async def finished() -> None:
-        await reader
-        if call.truncated:
-            await call.stop()
         await asyncio.gather(*tasks)
         await proc.wait()
 
+    # `asyncio.wait`, not `wait_for`: a deadline must not cancel the readers, since
+    # the process has yet to be stopped and its pipes have to keep draining.
+    waiting = asyncio.create_task(finished())
     try:
-        await asyncio.wait_for(finished(), timeout)
-    except TimeoutError:
-        raise PsqlTimedOut(None if call.commit_sent else False, call.text()) from None
+        done, _pending = await asyncio.wait({waiting}, timeout=timeout)
     finally:
         await call.stop()
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        for task in (*tasks, waiting, call.stopping):
+            if task is not None:
+                task.cancel()
+        await asyncio.gather(*tasks, waiting, return_exceptions=True)
+    if not done:
+        raise PsqlTimedOut(None if call.commit_sent else False, call.text())
+    waiting.result()
 
     return call.outcome()

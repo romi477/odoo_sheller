@@ -362,6 +362,32 @@ async def _rows(registry, target, table) -> str:
     return answer["output"].split()[2]
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "select 1 -- x\r; select 2;",
+        "select 1 as €$a$; select 2; -- $a$",
+        "select $€$ ' $€$; select 2; -- '",
+        "select 1 as a$b$c; select 2; -- $b$",
+        "select 1 /* /* */ */; select 2;",
+        "select E'\\''; select 2;",
+        "select '\\'; select 2;",
+        "select 'a'\n'b'; select 2;",
+        'select "a""b" from (select 1 as "a""b") s; select 2;',
+        "select $$;$$; select 2;",
+        "select U&'\\0061'; select 2;",
+    ],
+)
+async def test_the_guard_counts_statements_as_real_psql_does(sql):
+    """The guard's whole claim, tried against what it is a claim about."""
+    target = Target(kind=DOCKER, container=CONTAINER, database=DATABASE)
+    psql.check_sql(sql)
+    answer = await psql.run_transaction(target, sql, read_only=True, commit=False, timeout=10.0)
+    assert answer["error"] is None
+    results = len(re.findall(r"^\(\d+ rows?\)$", answer["output"], re.MULTILINE))
+    assert results == len(psql.statements(sql))
+
+
 async def test_psql_read_only_cannot_write(psql_target):
     registry, _store, target, table = psql_target
     answer = await registry.run_psql(target, f"insert into {table} values (1);", False, 10.0)

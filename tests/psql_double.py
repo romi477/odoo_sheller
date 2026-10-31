@@ -73,6 +73,13 @@ def main() -> int:
         if line.startswith("BIG"):
             for _ in range(40000):
                 out("x" * 99)
+        if line.startswith("ENDLESS"):
+            while True:
+                out("x" * 99)
+        if line.startswith("LATEFLOOD"):
+            time.sleep(0.6)
+            while True:
+                out("x" * 99)
         if line.startswith("BINARY"):
             sys.stdout.buffer.write(b"\xff\xfe\n")
             sys.stdout.buffer.flush()

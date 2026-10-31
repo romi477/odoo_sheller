@@ -713,6 +713,7 @@ a live session's ORM cache until that session's next transaction boundary.
 Refused before anything runs, as `psql_refused` with the word:
 
 - a backslash outside a string, so every `psql` meta-command;
+- control characters, and `U&"..."` identifiers, whose names cannot be read;
 - `BEGIN`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`, `START`, `PREPARE TRANSACTION`,
   because the call decides how the transaction ends (`SAVEPOINT` and `ROLLBACK TO`
   are fine);
