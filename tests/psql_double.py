@@ -41,6 +41,9 @@ def main() -> int:
     pending = []
     swallow_commit_marker = False
     hold = False
+    deferred = False
+    no_tag = False
+    hang_after_commit = False
     for raw in sys.stdin:
         line = raw.rstrip("\n")
         log.write(line + "\n")
@@ -57,13 +60,21 @@ def main() -> int:
                 log.write("early\n")
             if not (swallow_commit_marker and marker.endswith("-commit")):
                 out(marker)
+            if hang_after_commit and marker.endswith("-commit"):
+                time.sleep(60)
             continue
         if line.startswith("-- "):
             out(line)
             continue
-        for word, text in (("BEGIN", "BEGIN"), ("COMMIT;", "COMMIT"), ("ROLLBACK;", "ROLLBACK")):
+        if line.startswith("COMMIT;") and deferred:
+            sys.stderr.write("ERROR:  duplicate key value violates unique constraint\n")
+
+            return 3
+        for word, text in (("BEGIN", "BEGIN"), ("ROLLBACK;", "ROLLBACK")):
             if line.startswith(word):
                 out(text)
+        if line.startswith("COMMIT;"):
+            out("ROLLBACK" if no_tag else "COMMIT")
         if line.startswith("FAIL"):
             sys.stderr.write("ERROR:  boom\n")
 
@@ -89,6 +100,12 @@ def main() -> int:
             swallow_commit_marker = True
         if line.startswith("HOLD"):
             hold = True
+        if line.startswith("DEFERRED"):
+            deferred = True
+        if line.startswith("WRONGTAG"):
+            no_tag = True
+        if line.startswith("LATEHANG"):
+            hang_after_commit = True
         code = re.sub(r"--.*$", "", line).rstrip()
         pending.append(code)
         if code.endswith(";"):

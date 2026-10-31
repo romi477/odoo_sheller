@@ -450,6 +450,20 @@ async def test_psql_error_in_the_second_statement_leaves_no_first_write(psql_tar
     assert await _rows(registry, target, table) == "0"
 
 
+async def test_psql_commit_failing_on_a_deferred_constraint_is_known(psql_target):
+    registry, store, target, table = psql_target
+    store.turn_on(CONTAINER)
+    sql = (
+        f"alter table {table} add unique (a) deferrable initially deferred;"
+        f"insert into {table} values (1), (1);"
+    )
+    answer = await registry.run_psql(target, sql, True, 10.0)
+    assert answer["committed"] is False
+    assert answer["rolled_back"] is True
+    assert "duplicate key" in answer["error"]
+    assert await _rows(registry, target, table) == "0"
+
+
 async def test_psql_sql_without_a_semicolon_commits_cleanly(psql_target):
     registry, store, target, table = psql_target
     store.turn_on(CONTAINER)

@@ -401,6 +401,7 @@ _READ_SIZE = 65536
 # passed, and the MCP side stops waiting soon after.
 _SIGNAL_TIMEOUT = 2.0
 _STOP_TIMEOUT = 5.0
+_EXIT_SCRIPT_ERROR = 3
 
 
 class PsqlUnavailable(PsqlError):
@@ -453,6 +454,7 @@ class _Call:
         self.started = False
         self.past_sql = False
         self.commit_sent = False
+        self.commit_tag = False
         self.commit_seen = False
         self.truncated = False
         self.output = bytearray()
@@ -479,7 +481,10 @@ class _Call:
 
                 return
         if self.past_sql:
-            self.commit_seen = self.commit_seen or bare == self.commit_marker
+            # `\\echo` runs only after COMMIT has answered, and the tag says how:
+            # Postgres answers ROLLBACK to a COMMIT in an aborted transaction.
+            self.commit_tag = self.commit_tag or bare == b"COMMIT"
+            self.commit_seen = self.commit_seen or (self.commit_tag and bare == self.commit_marker)
 
             return
         if bare == self.sql_marker:
@@ -572,6 +577,19 @@ class _Call:
         except TimeoutError:
             logger.warning("docker exec for psql %s did not end", self.pid)
 
+    def committed(self) -> bool | None:
+        """True on the server's word, False if it never got there or said no."""
+        if self.commit_seen:
+
+            return True
+        if not self.commit_sent:
+
+            return False
+
+        # 3 is `ON_ERROR_STOP` ending the script on an error from the server, so a
+        # COMMIT that failed. Anything else, such as a lost connection, says nothing.
+        return False if self.proc.returncode == _EXIT_SCRIPT_ERROR else None
+
     def outcome(self) -> dict:
         code = self.proc.returncode
         errors = bytes(self.errors).decode("utf-8", errors="replace").strip()
@@ -586,12 +604,7 @@ class _Call:
             if code in (125, 126, 127) and "python3" in said:
                 raise PsqlUnavailable("python3")
             errors = said.strip()
-        if self.commit_seen and code == 0:
-            committed: bool | None = True
-        elif self.commit_sent:
-            committed = None
-        else:
-            committed = False
+        committed = self.committed()
 
         return {
             "output": self.text(),
@@ -646,7 +659,7 @@ async def run_transaction(
                 task.cancel()
         await asyncio.gather(*tasks, waiting, return_exceptions=True)
     if not done:
-        raise PsqlTimedOut(None if call.commit_sent else False, call.text())
+        raise PsqlTimedOut(True if call.commit_seen else None if call.commit_sent else False, call.text())
     waiting.result()
 
     return call.outcome()

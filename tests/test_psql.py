@@ -515,3 +515,24 @@ def test_a_flood_during_the_deadline_cannot_hang_the_call(double):
     with pytest.raises(PsqlTimedOut):
         double.run("LATEFLOOD;", timeout=0.3)
     assert time.monotonic() - started < 10
+
+
+def test_a_commit_that_fails_is_known_not_to_have_happened(double):
+    # A deferred constraint fails at COMMIT itself. Postgres has said so, and has
+    # rolled back: there is nothing to go and check.
+    done = double.run("DEFERRED;", read_only=False, commit=True)
+    assert done["committed"] is False
+    assert done["rolled_back"] is True
+    assert "duplicate key" in done["error"]
+
+
+def test_a_deadline_after_the_commit_marker_is_known_to_have_committed(double):
+    with pytest.raises(PsqlTimedOut) as timed_out:
+        double.run("LATEHANG;", read_only=False, commit=True, timeout=0.5)
+    assert timed_out.value.committed is True
+
+
+def test_a_marker_without_the_commit_tag_is_not_a_commit(double):
+    # Postgres answers ROLLBACK to a COMMIT in an aborted transaction, with no error.
+    done = double.run("WRONGTAG;", read_only=False, commit=True)
+    assert done["committed"] is None

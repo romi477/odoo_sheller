@@ -903,8 +903,10 @@ would hold it past the meta-command and send it joined to the next line. The non
 random per call and matched as a whole line. Its coming back means every statement
 passed, since `ON_ERROR_STOP` ends `psql` at the first error. Only then does the daemon
 write `COMMIT;` and `\echo <nonce>-commit`, or `ROLLBACK;`, and close stdin. `committed`
-is true only with that second marker and exit 0, false if `COMMIT` was never sent, and
-null if it was sent and that did not hold.
+is true on the `COMMIT` tag followed by that second marker, even if the deadline then
+passes before `psql` exits. It is false if `COMMIT` was never sent, or failed: exit 3
+is `ON_ERROR_STOP` ending the script on the server's error. It is null otherwise, such
+as a connection lost during `COMMIT`.
 
 A call's journal is a file of its own (`psql_open`, `psql_sql`, `psql_result`). Its id
 has no hyphen, because `session_id_of` reads the text after the filename's last one.
