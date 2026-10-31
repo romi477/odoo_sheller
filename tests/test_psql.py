@@ -1,20 +1,27 @@
 import ast
+import asyncio
 import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from odoo_sheller.discovery import PROBE_SOURCE
 from odoo_sheller.psql import (
+    MAX_OUTPUT,
     MISSING_PREFIX,
     PID_PREFIX,
     RUNNER_SOURCE,
     PsqlNotAvailable,
     PsqlRefused,
+    PsqlTargetGone,
+    PsqlTimedOut,
+    PsqlUnavailable,
     build_command,
     check_sql,
+    run_transaction,
 )
 from odoo_sheller.transport import DOCKER, ODOOSH, SSH, Target, docker_bin
 
@@ -273,3 +280,164 @@ def test_build_command_for_docker():
 def test_build_command_refuses_odoosh_and_ssh(target):
     with pytest.raises(PsqlNotAvailable):
         build_command(target, read_only=True, timeout=30)
+
+
+DOUBLE = [sys.executable, str(Path(__file__).parent / "psql_double.py")]
+LOCAL = Target(kind=DOCKER, container="odoo17", database="somedb")
+
+
+class Double:
+    def __init__(self, tmp_path):
+        self.log = tmp_path / "double.log"
+        self.signals = []
+
+    async def signal(self, pid, name):
+        self.signals.append((pid, name))
+
+    def lines(self):
+
+        return self.log.read_text(encoding="utf-8").splitlines() if self.log.exists() else []
+
+    def run(self, sql, read_only=True, commit=False, timeout=10.0):
+
+        return asyncio.run(
+            run_transaction(
+                LOCAL, sql, read_only=read_only, commit=commit, timeout=timeout,
+                argv=DOUBLE, nonce="N", signal=self.signal,
+            )
+        )  # fmt: skip
+
+
+@pytest.fixture
+def double(tmp_path, monkeypatch):
+    made = Double(tmp_path)
+    monkeypatch.setenv("PSQL_DOUBLE_LOG", str(made.log))
+    monkeypatch.delenv("PSQL_DOUBLE_MODE", raising=False)
+
+    return made
+
+
+def test_rollback_is_the_end_of_a_plain_call(double):
+    done = double.run("select 1;")
+    assert double.lines()[-1] == "ROLLBACK;"
+    assert done["committed"] is False
+    assert done["rolled_back"] is True
+    assert done["error"] is None
+    assert done["mode"] == "read_only"
+
+
+def test_read_only_call_begins_read_only(double):
+    double.run("select 1;")
+    assert "BEGIN READ ONLY;" in double.lines()
+
+
+def test_writing_call_begins_plainly(double):
+    done = double.run("select 1;", read_only=False)
+    assert "BEGIN;" in double.lines()
+    assert done["mode"] == "read_write"
+
+
+def test_autocommit_is_off_before_anything_else(double):
+    double.run("select 1;")
+    assert double.lines()[0] == "\\set AUTOCOMMIT off"
+
+
+def test_commit_is_sent_only_after_the_marker(double):
+    done = double.run("HOLD;", read_only=False, commit=True)
+    lines = double.lines()
+    assert "early" not in lines
+    assert lines.index("\\echo N-sql") < lines.index("COMMIT;")
+    assert lines[-1] == "\\echo N-commit"
+    assert done["committed"] is True
+    assert done["rolled_back"] is False
+
+
+def test_failed_statement_never_sees_commit(double):
+    done = double.run("FAIL;", read_only=False, commit=True)
+    assert "COMMIT;" not in double.lines()
+    assert "boom" in done["error"]
+    assert done["committed"] is False
+    assert done["rolled_back"] is True
+
+
+def test_sql_without_a_semicolon_stays_separate(double):
+    done = double.run("select 1", read_only=False, commit=True)
+    assert "merged" not in double.lines()
+    assert done["committed"] is True
+
+
+def test_sql_ending_in_a_comment_stays_separate(double):
+    done = double.run("select 1 -- the end", read_only=False, commit=True)
+    assert "merged" not in double.lines()
+    assert done["committed"] is True
+
+
+def test_forged_marker_does_not_count(double):
+    done = double.run("FORGE N-sql-old\n;\nFORGE x N-sql\n;\nselect 1;")
+    assert "N-sql-old" in done["output"]
+    assert "x N-sql" in done["output"]
+    assert double.lines()[-1] == "ROLLBACK;"
+
+
+def test_large_sql_does_not_deadlock(double):
+    sql = "-- padding padding padding padding\n" * 30000 + "select 1;"
+    done = double.run(sql, timeout=20.0)
+    assert done["output"].count("-- padding") == 30000
+    assert done["truncated"] is False
+
+
+def test_invalid_utf8_comes_back_replaced(double):
+    done = double.run("BINARY;")
+    assert "�" in done["output"]
+
+
+def test_output_cap_stops_and_never_commits(double):
+    done = double.run("BIG;", read_only=False, commit=True, timeout=20.0)
+    assert done["truncated"] is True
+    assert done["committed"] is False
+    assert done["rolled_back"] is True
+    assert "COMMIT;" not in double.lines()
+    assert len(done["output"].encode()) <= MAX_OUTPUT
+    assert double.signals[0][1] == "TERM"
+
+
+def test_deadline_signals_inside_and_raises(double):
+    with pytest.raises(PsqlTimedOut) as timed_out:
+        double.run("HANG;", timeout=0.5)
+    pid, name = double.signals[0]
+    assert name == "TERM"
+    assert timed_out.value.committed is False
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+def test_lost_commit_marker_is_unknown(double):
+    done = double.run("NOCOMMITMARK;", read_only=False, commit=True)
+    assert "COMMIT;" in double.lines()
+    assert done["committed"] is None
+    assert done["rolled_back"] is False
+
+
+def test_missing_psql_is_named(double, monkeypatch):
+    monkeypatch.setenv("PSQL_DOUBLE_MODE", "missing")
+    with pytest.raises(PsqlUnavailable) as unavailable:
+        double.run("select 1;")
+    assert unavailable.value.missing == "psql"
+
+
+def test_missing_python_is_named(double, monkeypatch):
+    monkeypatch.setenv("PSQL_DOUBLE_MODE", "no_python")
+    with pytest.raises(PsqlUnavailable) as unavailable:
+        double.run("select 1;")
+    assert unavailable.value.missing == "python3"
+
+
+def test_gone_container_is_named(double, monkeypatch):
+    monkeypatch.setenv("PSQL_DOUBLE_MODE", "gone")
+    with pytest.raises(PsqlTargetGone):
+        double.run("select 1;")
+
+
+def test_output_excludes_the_daemons_own_lines(double):
+    done = double.run("FORGE hello\n;")
+    assert done["output"] == "hello\n"
