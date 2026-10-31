@@ -14,7 +14,7 @@ import httpx2 as httpx
 import pytest
 
 from odoo_sheller import mcp as server
-from odoo_sheller import rules
+from odoo_sheller import psql, rules
 from odoo_sheller.api import create_app
 from odoo_sheller.guidance import render_for_mcp
 from odoo_sheller.psql import PsqlRefused
@@ -2574,3 +2574,9 @@ def test_os_psql_description_says_exec_first():
     assert "os_exec first" in tool.description
     assert "agents may commit" in tool.description
     assert not {"host", "build", "card", "target_id"} & set(tool.parameters["properties"])
+
+
+def test_the_worst_psql_deadline_still_answers_inside_the_mcp_wait():
+    """A lost answer to a commit is what the ceiling exists to prevent."""
+    worst = psql.MAX_TIMEOUT + psql._SIGNAL_TIMEOUT + psql._STOP_TIMEOUT
+    assert worst < server.CALL_WAIT

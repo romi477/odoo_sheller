@@ -394,13 +394,17 @@ def build_command(target: Target, read_only: bool, timeout: float) -> list[str]:
     ]  # fmt: skip
 
 
+# Past this the MCP side has stopped waiting, and a lost answer to a commit is the
+# one thing an agent could not recover from. Long work is `exec`'s.
+MAX_TIMEOUT = 35.0
 MAX_OUTPUT = 2 * 1024 * 1024
 MAX_ERROR = 64 * 1024
 _READ_SIZE = 65536
-# A `docker exec … kill` answers at once. The deadline it serves has already
-# passed, and the MCP side stops waiting soon after.
-_SIGNAL_TIMEOUT = 2.0
-_STOP_TIMEOUT = 5.0
+# A `docker exec … kill` answers at once, and a killed client ends at once. The
+# deadline these serve has already passed, and `MAX_TIMEOUT` plus both has to stay
+# inside the MCP side's wait.
+_SIGNAL_TIMEOUT = 1.0
+_STOP_TIMEOUT = 2.0
 _EXIT_SCRIPT_ERROR = 3
 
 

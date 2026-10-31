@@ -95,9 +95,7 @@ class PsqlBody(BaseModel):
     database: str | None = None
     session_id: str | None = None
     commit: bool = False
-    # Past this the MCP side has stopped waiting, and a lost answer to a commit
-    # is the one thing an agent could not recover from. Long work is `exec`'s.
-    timeout: float = Field(default=30, gt=0, le=35)
+    timeout: float = Field(default=30, gt=0, le=psql.MAX_TIMEOUT)
 
 
 class ClickModuleBody(BaseModel):
