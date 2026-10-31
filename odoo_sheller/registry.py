@@ -586,6 +586,11 @@ class Registry:
                 committed=getattr(exc, "committed", False),
             )
             raise
+        except asyncio.CancelledError:
+            # The daemon going down. Only a commit could have sent COMMIT, and from
+            # here nobody can say whether it landed.
+            record.write("psql_result", code="psql_cancelled", committed=None if commit else False)
+            raise
         except Exception as exc:
             record.write("psql_result", code="psql_error", error=repr(exc), committed=None)
             raise

@@ -1390,3 +1390,28 @@ async def test_psql_remote_is_refused_before_any_docker_command(
         await registry.run_psql(target, "select 1", False, 5.0)
     assert transactions == []
     assert not list(tmp_path.glob("journals/*.jsonl"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("commit", "committed"), [(True, None), (False, False)])
+async def test_psql_cancelled_call_still_says_how_it_ended(tmp_path, monkeypatch, commit, committed):
+    """A daemon going down: on a commit, COMMIT may already have gone out."""
+    started = asyncio.Event()
+
+    async def held(target, sql, *, read_only, commit, timeout):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("odoo_sheller.psql.run_transaction", held)
+    registry, _store = _switch_registry(tmp_path, "mig18")
+    call = asyncio.create_task(registry.run_psql(PSQL_LOCAL, "select 1", commit, 5.0))
+    await started.wait()
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    path = next(tmp_path.glob("*.jsonl"))
+    records = Journal(path).records()
+    assert records[-1]["kind"] == "psql_result"
+    assert records[-1]["code"] == "psql_cancelled"
+    assert records[-1]["committed"] is committed
+    assert "mig18" not in registry._psql_running
