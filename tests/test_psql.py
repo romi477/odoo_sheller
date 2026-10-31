@@ -72,6 +72,13 @@ from odoo_sheller.transport import DOCKER, ODOOSH, SSH, Target, docker_bin
         ('select u&"set!005fconfig" UESCAPE \'!\' (1)', 'U&"'),
         ("select E'a'\n'\\'  ' ; commit ; --'", "string continuation"),
         ("select E'a' /* x */ 'b'", "string continuation"),
+        # psql holds these back past the daemon's `\\echo`, so the marker would come
+        # first and say nothing about them.
+        ("select (1", "unclosed parenthesis"),
+        ("insert into t values (1;", "unclosed parenthesis"),
+        (") (", "unclosed parenthesis"),
+        ("create function f() returns int begin atomic select 1;", "begin atomic"),
+        ("create or replace procedure p() begin atomic select 1;", "begin atomic"),
         ("", "empty"),
         ("  -- only a comment\n", "empty"),
         (";;", "empty"),
@@ -114,6 +121,10 @@ def test_refused(sql, word):
         # Postgres's and the switch's business, not the guard's: the spec says so.
         "drop table t",
         "with a as (select 1) select * from a",
+        "select (1)",
+        "select '('",
+        "select 1)",
+        "create function f() returns int as $$ begin return 1; end $$ language plpgsql",
         "select 1 as €",
         # `1`, then a dollar quote, as psql reads it too: the commit is in the quote.
         "select 1$a$; commit; -- $a$",

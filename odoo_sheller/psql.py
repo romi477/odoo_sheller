@@ -216,6 +216,22 @@ def _statements(tokens: list[str]) -> list[list[str]]:
     return [statement for statement in statements if statement]
 
 
+def _check_parentheses(tokens: list[str]) -> None:
+    """Counted as psql counts them, where a `)` with nothing open changes nothing.
+
+    With one left open, `psql` holds every line back, past a meta-command. The
+    daemon's marker would then come back first, and mean nothing.
+    """
+    depth = 0
+    for token in tokens:
+        if token == _OPEN:
+            depth += 1
+        elif token == _CLOSE and depth:
+            depth -= 1
+    if depth:
+        raise PsqlRefused("unclosed parenthesis")
+
+
 def _top_level(statement: list[str]) -> list[str]:
     """The words outside any parentheses."""
     depth = 0
@@ -236,6 +252,8 @@ def _check_keywords(statement: list[str]) -> None:
     rest = statement[1:3]
     if first in _CONTROL:
         raise PsqlRefused(first)
+    if first == "create" and {"function", "procedure"} & set(statement[1:4]) and "begin" in statement:
+        raise PsqlRefused("begin atomic")
     if first == "rollback":
         # A savepoint cannot leave the transaction; the rest of `rollback` can.
         if "to" not in rest:
@@ -261,6 +279,7 @@ def check_sql(sql: str) -> None:
     statements = _statements(tokens)
     if not statements:
         raise PsqlRefused("empty")
+    _check_parentheses(tokens)
     for statement in statements:
         _check_keywords(statement)
     for token, following in itertools.pairwise(tokens):
