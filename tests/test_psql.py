@@ -281,7 +281,7 @@ def test_runner_never_prints_a_config_it_cannot_parse(tmp_path):
     assert done.stdout.startswith(MISSING_PREFIX)
 
 
-CONFIG_PATH = re.compile(r"""["'](/[^"']*\.conf|~/\.odoorc)["']""")
+CONFIG_PATH = re.compile(r"""["'](/[^"']*(?:\.conf|odoo-bin|/odoo)|~/\.odoorc)["']""")
 
 
 def test_runner_uses_the_same_config_candidates_as_the_probe():

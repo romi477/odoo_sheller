@@ -30,7 +30,7 @@ MCP_GOLDEN = {
     "modules": "0955570535534c2d4e6279884172dab9a8452c3fcab5dfcdd753f10856eecbca",
     "jobs": "c853c98be14913bfc4e739cbcaae82491f034aa509f136a30954ed6d5580f37f",
     "tests": "2a89a69148efcb67fc336da04c927dc2cf5ced4aaec9b0d176aa5f4e2014fbde",
-    "psql": "9ae014c7d1c2d4a2d55a34a1fb0501174ceae798dd906dc55e23874f2fed7c84",
+    "psql": "5390eed27f59269f505a3894dcb0282298e7d30fd9e6b11a1d1ae39e65c11e76",
     "watching": "1500647eb44f8b12be718b6dda83d48427492fff6b6cddcbfb8106adcb0612be",
     "odoo_15": "2d3110ec58af1f02ebdc4fd22bfbf0418703ccfd0dd13301d86a3a55d0fff6be",
     "odoo_16": "f8246fbfb092aebc8498298a2a1fbc998880fbcdfaf9c1d816e7e22a3898fc51",
