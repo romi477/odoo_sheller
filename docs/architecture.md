@@ -870,6 +870,48 @@ The test suite pins the cap (`INSTRUCTION_CAP`), that every topic is named in
 the delivered text, and that nothing which used to be in the instructions was
 deleted rather than moved.
 
+## SQL through `psql`
+
+`POST /api/psql` runs one transaction in a local container with no session
+(`psql.py`, `Registry.run_psql`). The tool and its rules are in
+`docs/agent-guide.md`; what it widens is in `docs/security.md`. The mechanism:
+
+```
+docker exec -i <container> python3 -c <script> <db> <read_only> <ms> <ms> <ms>
+```
+
+The script carries no secret and stays out of stdin, which is `psql`'s. It reads the
+Odoo config by the probe's rules, prints `OSPSQL-PID <pid>` or `OSPSQL-MISSING <what>`,
+and `execve`s `psql`, so the printed pid is the one to signal; killing a `docker exec`
+client leaves its process running. The database and password travel by environment.
+`PGOPTIONS` sets `statement_timeout`, `lock_timeout` and
+`idle_in_transaction_session_timeout` so the server clears up on its own, past the
+daemon's deadline by two seconds.
+
+The daemon feeds it in two steps, with stdin open between them:
+
+```
+\set AUTOCOMMIT off
+BEGIN READ ONLY;      (or BEGIN;)
+<the agent's SQL>
+;
+\echo <nonce>-sql
+```
+
+The newline and `;` close the agent's text whatever it ended in: left open, `psql`
+would hold it past the meta-command and send it joined to the next line. The nonce is
+random per call and matched as a whole line. Its coming back means every statement
+passed, since `ON_ERROR_STOP` ends `psql` at the first error. Only then does the daemon
+write `COMMIT;` and `\echo <nonce>-commit`, or `ROLLBACK;`, and close stdin. `committed`
+is true on the `COMMIT` tag followed by that second marker, even if the deadline then
+passes before `psql` exits. It is false if `COMMIT` was never sent, or failed: exit 3
+is `ON_ERROR_STOP` ending the script on the server's error. It is null otherwise, such
+as a connection lost during `COMMIT`.
+
+A call's journal is a file of its own (`psql_open`, `psql_sql`, `psql_result`). Its id
+has no hyphen, because `session_id_of` reads the text after the filename's last one.
+`target_from_records` looks for `session_open`, so it offers no reopen.
+
 ## What's deliberately not here
 
 Outgoing HTTP call tracing, record-level "what changed" diffs, synchronous

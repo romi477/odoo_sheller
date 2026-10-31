@@ -64,6 +64,7 @@ side wants. `os_run_test`'s own session sends `false`: it never commits.
 | `os_run_test` | `test`, `container=None`, `database=None`, `odoo_bin=None`, `timeout=None`, `session_id=None`, `params=None` | runs a whole module's standard tests (`module`), one class or one method; answers with counts and `failed`, each a spec to rerun; opens its own new session (which then closes itself), or runs in one it was handed. Without `timeout` the ceiling follows the spec: 30s, 300s, 1800s — at least 300s whenever `params` is given. `params` rides on the tag as `[params]`; Hoot reads it as a filter, and the answer then carries `hoot` (below) |
 | `os_click_module` | `module`, `login=None`, `debug=True`, `container=None`, `database=None`, `odoo_bin=None`, `timeout=None`, `session_id=None` | runs Odoo's own clickbot over the menus of one installed module only; answers as `os_run_test` does, plus `clickbot` (below). Opens its own self-closing session or runs in one it was handed; 900s by default |
 | `os_test_result` | `session_id` | waits for a run started by `os_run_test` or `os_click_module` and returns its outcome (read-only, no key needed) |
+| `os_psql` | `sql`, `container=None`, `database=None`, `session_id=None`, `commit=False`, `timeout=30` | one transaction through `psql` on a local container, for a session that will not open or is stuck; `os_exec` comes first. See *SQL when no session can run it* below |
 | `os_rollback` | `session_id=None` | discards the open transaction |
 | `os_commit` | `session_id=None`, `include_inherited=False` | fails unless the human has granted commit; refused once as `inherited_pending` on a session handed over with work already in its transaction |
 | `os_interrupt` | `session_id=None` | stops a running command |
@@ -266,6 +267,43 @@ the module's app, each of the module's menus was blamed in turn under its
 foreign root with that error as the reason, the run went on past each, and an
 interrupt mid-run left `load_menus` restored. A clean pass, 15 to 18 and 20
 (whose `error_checker` path is read from source) have not been run.
+
+### SQL when no session can run it
+
+`os_exec` with `env.cr.execute` stays the normal way. `os_psql` is for a registry
+that does not load, and for reading `pg_stat_activity` and the locks beside a
+session that is stuck. It needs no session: name the target by `container` and
+`database`, or by `session_id`, which needs no key and leaves that session as it
+is, even while busy. odoo.sh and SSH targets answer `psql_not_available`.
+
+| *agents may commit* | `commit` | Transaction | Ends with |
+|---|---|---|---|
+| off | `False` | read-only | rollback |
+| off | `True` | none: `commit_not_allowed` | nothing ran |
+| on | `False` | read-write | rollback: the dry run |
+| on | `True` | read-write | `COMMIT`, once every statement has passed |
+
+One call is one transaction, at most 35 seconds, 30 by default. There is no running
+state and nothing to poll: long work belongs in `os_exec`. The answer has `output`,
+`error`, `mode`, `rolled_back`, `truncated`, `journal` and `committed`, which is
+`null` when `COMMIT` was sent and no answer came back. Then check the data before
+trying again; the same goes for `request_timed_out`. A failed statement is an
+ordinary answer with `error` set. `psql_refused` names the word; `os_help('psql')`
+and [security.md](security.md) list what is refused and how far that goes. The
+container needs `python3`, `psql` and an Odoo config, or the call is
+`psql_unavailable`; a second call while one runs on that container is `psql_busy`.
+
+Each call has its own journal, under an id such as `psql_0123abcd4567`, for
+`os_journal`. Refused calls have one too. An odoo.sh or SSH target leaves none.
+
+Verified on Odoo 17 (`integra17`, `integra_db_17`, a scratch table): read-only
+cannot write, escapes are refused, a dry run leaves nothing, commit persists, an
+error in the second statement leaves no first write, a deadline ends `psql` and the
+server backend, killing the `docker exec` client leaves nothing committed, a call
+beside a busy session leaves it busy, and a database name that is not ASCII works.
+Not run live: a container with `python3` but no `psql`, one with `python3` but no
+Odoo config, and `committed: null`; those are covered by unit tests only, as odoo.sh
+and SSH are.
 
 ### Rules for the Odoo major
 

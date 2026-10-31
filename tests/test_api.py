@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 
 from odoo_sheller import journal
 from odoo_sheller.agent_commit import AgentCommitStore
-from odoo_sheller.api import create_app
+from odoo_sheller.api import PSQL_STATUS, create_app
+from odoo_sheller.psql import PsqlError, PsqlTargetGone, PsqlTimedOut, PsqlUnavailable
 from odoo_sheller.registry import Registry
 from odoo_sheller.session import (
     CommitNotAllowed,
@@ -21,6 +22,8 @@ from odoo_sheller.session import (
     SessionState,
 )
 from odoo_sheller.targets import TargetStore
+from odoo_sheller.transport import DOCKER, ODOOSH, Target
+from odoo_sheller.transport import SSH as SSH_KIND
 
 OWNER_KEY = "write-key-s1"
 ADMIN_KEY = "admin-key"
@@ -2458,3 +2461,222 @@ def test_click_module_refuses_a_timeout_out_of_range(client, timeout):
         "/api/sessions/s1/click_module", json={"module": "my", "timeout": timeout})
     assert response.status_code == 422
     assert client.registry.session.calls == []
+
+
+# --- psql -------------------------------------------------------------------
+
+
+@pytest.fixture
+def psql_client(tmp_path, monkeypatch):
+    async def same_name(container, runner=None):
+
+        return container
+
+    monkeypatch.setattr("odoo_sheller.registry.container_name", same_name)
+    registry = Registry(
+        journal_root=tmp_path / "journals",
+        targets=TargetStore(tmp_path / "targets.json", is_file=lambda path: True),
+        agent_commit=AgentCommitStore(tmp_path / "agent-commit.json"),
+    )
+    app = create_app(registry=registry)
+    with TestClient(app, base_url=LOCAL) as test_client:
+        test_client.registry = registry
+        yield test_client
+        registry.sessions.clear()
+
+
+def _stub_psql(monkeypatch, outcome=None, raises=None):
+    calls = []
+
+    async def fake(target, sql, *, read_only, commit, timeout):
+        calls.append({"target": target, "read_only": read_only, "commit": commit, "timeout": timeout})
+        if raises is not None:
+            raise raises
+
+        return {
+            "output": "x\n", "error": None, "committed": commit, "rolled_back": not commit,
+            "truncated": False, "mode": "read_only" if read_only else "read_write",
+            **(outcome or {}),
+        }  # fmt: skip
+
+    monkeypatch.setattr("odoo_sheller.psql.run_transaction", fake)
+
+    return calls
+
+
+TARGET_BODY = {"sql": "select 1", "container": "odoo17", "database": "db"}
+
+
+def test_psql_runs_and_answers_with_its_journal(psql_client, monkeypatch):
+    calls = _stub_psql(monkeypatch)
+    response = psql_client.post("/api/psql", json=TARGET_BODY)
+    assert response.status_code == 200
+    answer = response.json()
+    assert answer["output"] == "x\n"
+    assert answer["mode"] == "read_only"
+    assert answer["journal"].startswith("/api/journals/psql_")
+    assert calls[0]["timeout"] == 30
+    assert psql_client.get(answer["journal"]).status_code == 200
+
+
+def test_psql_failed_statement_is_an_ordinary_answer(psql_client, monkeypatch):
+    _stub_psql(monkeypatch, outcome={"error": "ERROR:  boom"})
+    response = psql_client.post("/api/psql", json=TARGET_BODY)
+    assert response.status_code == 200
+    assert response.json()["error"] == "ERROR:  boom"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"sql": "select 1"},
+        {"sql": "select 1", "container": "odoo17"},
+        {"sql": "select 1", "database": "db"},
+        {"sql": "select 1", "session_id": "s1", "container": "odoo17", "database": "db"},
+        {"sql": "select 1", "session_id": "s1", "database": "db"},
+    ],
+)
+def test_psql_target_must_be_named_one_way(psql_client, monkeypatch, body):
+    calls = _stub_psql(monkeypatch)
+    response = psql_client.post("/api/psql", json=body)
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "invalid_target"
+    assert calls == []
+
+
+def test_psql_takes_a_database_name_that_is_not_ascii(psql_client, monkeypatch):
+    calls = _stub_psql(monkeypatch)
+    body = {"sql": "select 1", "container": "odoo17", "database": "integra_db_19ś"}
+    assert psql_client.post("/api/psql", json=body).status_code == 200
+    assert calls[0]["target"].database == "integra_db_19ś"
+
+
+@pytest.mark.parametrize(
+    ("container", "database"),
+    [("--privileged", "db"), ("a/b", "db"), ("odoo17", "-c x"), ("odoo17", "a b"), ("odoo17", "")],
+)
+def test_psql_names_are_checked(psql_client, monkeypatch, container, database):
+    calls = _stub_psql(monkeypatch)
+    response = psql_client.post(
+        "/api/psql", json={"sql": "select 1", "container": container, "database": database}
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "invalid_container"
+    assert calls == []
+
+
+def test_psql_timeout_over_the_ceiling_is_422(psql_client, monkeypatch):
+    _stub_psql(monkeypatch)
+    assert psql_client.post("/api/psql", json={**TARGET_BODY, "timeout": 36}).status_code == 422
+
+
+def test_psql_sql_over_the_limit_is_422(psql_client, monkeypatch):
+    _stub_psql(monkeypatch)
+    body = {**TARGET_BODY, "sql": "x" * (1024 * 1024 + 1)}
+    assert psql_client.post("/api/psql", json=body).status_code == 422
+
+
+def test_psql_unknown_session_is_404(psql_client, monkeypatch):
+    _stub_psql(monkeypatch)
+    response = psql_client.post("/api/psql", json={"sql": "select 1", "session_id": "nope"})
+    assert response.status_code == 404
+
+
+def test_psql_local_session_names_the_target_while_busy(psql_client, monkeypatch):
+    calls = _stub_psql(monkeypatch)
+    session = FakeSession()
+    session.state = SessionState.BUSY
+    session.target = Target(kind=DOCKER, container="odoo17", database="db")
+    psql_client.registry.sessions["s1"] = session
+    response = psql_client.post("/api/psql", json={"sql": "select 1", "session_id": "s1"})
+    assert response.status_code == 200
+    assert calls[0]["target"].container == "odoo17"
+    assert session.state == SessionState.BUSY
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        Target(kind=ODOOSH, build="12345", host="x.odoo.com"),
+        Target(kind=SSH_KIND, label="odoo17", container="odoo17", database="db"),
+    ],
+)
+def test_psql_remote_session_is_refused(psql_client, monkeypatch, target):
+    calls = _stub_psql(monkeypatch)
+    session = FakeSession()
+    session.target = target
+    psql_client.registry.sessions["s1"] = session
+    response = psql_client.post("/api/psql", json={"sql": "select 1", "session_id": "s1"})
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "psql_not_available"
+    assert calls == []
+
+
+def test_psql_refused_sql_names_the_word(psql_client, monkeypatch):
+    _stub_psql(monkeypatch)
+    response = psql_client.post("/api/psql", json={**TARGET_BODY, "sql": "commit"})
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error"] == "psql_refused"
+    assert detail["word"] == "commit"
+    assert detail["journal"].startswith("/api/journals/psql_")
+
+
+def test_psql_commit_without_the_switch_says_who_can_change_it(psql_client, monkeypatch):
+    _stub_psql(monkeypatch)
+    response = psql_client.post("/api/psql", json={**TARGET_BODY, "commit": True})
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["error"] == "commit_not_allowed"
+    assert "agents may commit" in detail["recovery"]
+
+
+@pytest.mark.parametrize(
+    ("raises", "status", "error"),
+    [
+        (PsqlTargetGone("no such container"), 404, "not_found"),
+        (PsqlUnavailable("psql"), 503, "psql_unavailable"),
+        (PsqlTimedOut(None, "partial"), 504, "psql_timeout"),
+    ],
+)
+def test_psql_driver_failures_map_to_http(psql_client, monkeypatch, raises, status, error):
+    _stub_psql(monkeypatch, raises=raises)
+    response = psql_client.post("/api/psql", json=TARGET_BODY)
+    assert response.status_code == status
+    assert response.json()["detail"]["error"] == error
+
+
+def test_psql_unavailable_names_what_is_missing(psql_client, monkeypatch):
+    _stub_psql(monkeypatch, raises=PsqlUnavailable("psql"))
+    detail = psql_client.post("/api/psql", json=TARGET_BODY).json()["detail"]
+    assert detail["missing"] == "psql"
+
+
+def test_psql_timeout_says_what_is_known_about_the_commit(psql_client, monkeypatch):
+    _stub_psql(monkeypatch, raises=PsqlTimedOut(None, "partial"))
+    detail = psql_client.post("/api/psql", json=TARGET_BODY).json()["detail"]
+    assert detail["committed"] is None
+    assert detail["journal"].startswith("/api/journals/psql_")
+
+
+def test_psql_busy_is_409(psql_client, monkeypatch):
+    _stub_psql(monkeypatch)
+    psql_client.registry._psql_running.add("odoo17")
+    response = psql_client.post("/api/psql", json=TARGET_BODY)
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "psql_busy"
+
+
+def test_the_guard_covers_the_psql_route(psql_client, monkeypatch):
+    calls = _stub_psql(monkeypatch)
+    response = psql_client.post(
+        "/api/psql", json=TARGET_BODY, headers={"Origin": "http://evil.example.com"}
+    )
+    assert response.status_code == 403
+    assert calls == []
+
+
+def test_every_psql_failure_has_an_answer():
+    """The route looks a failure up by its exact type: a new one must be listed."""
+    assert set(PsqlError.__subclasses__()) == set(PSQL_STATUS)

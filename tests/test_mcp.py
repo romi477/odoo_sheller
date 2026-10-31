@@ -14,9 +14,10 @@ import httpx2 as httpx
 import pytest
 
 from odoo_sheller import mcp as server
-from odoo_sheller import rules
+from odoo_sheller import psql, rules
 from odoo_sheller.api import create_app
 from odoo_sheller.guidance import render_for_mcp
+from odoo_sheller.psql import PsqlRefused
 
 MODULE = Path(__file__).resolve().parent.parent / "odoo_sheller" / "mcp.py"
 
@@ -2501,3 +2502,81 @@ def test_the_click_module_tool_says_what_it_cannot_do():
     text = server.CLICK_MODULE_DESCRIPTION
     for says in ("one module", "debug", "os_test_result", "unreached", "hidden"):
         assert says in text, says
+
+
+# --- os_psql ----------------------------------------------------------------
+
+
+def _stub_psql_answer(wired, output="x\n", raises=None):
+    calls = []
+
+    async def run_psql(target, sql, commit, timeout):
+        calls.append((target.container, target.database, sql, commit, timeout))
+        if raises is not None:
+            raise raises
+
+        return {
+            "output": output, "error": None, "committed": commit, "rolled_back": not commit,
+            "truncated": False, "mode": "read_only", "journal": "/api/journals/psql_abc",
+        }  # fmt: skip
+
+    wired.run_psql = run_psql
+
+    return calls
+
+
+async def test_os_psql_posts_the_arguments(wired):
+    calls = _stub_psql_answer(wired)
+    answer = await server.os_psql("select 1", container="odoo17", database="db")
+    assert calls == [("odoo17", "db", "select 1", False, 30.0)]
+    assert answer["output"] == "x\n"
+    assert answer["journal"] == "/api/journals/psql_abc"
+    assert "output_clipped" not in answer
+
+
+async def test_os_psql_clips_output_and_says_so(wired):
+    _stub_psql_answer(wired, output="y" * (server.MAX_STDOUT + 1))
+    answer = await server.os_psql("select 1", container="odoo17", database="db")
+    assert len(answer["output"]) == server.MAX_STDOUT
+    assert answer["output_clipped"] is True
+
+
+async def test_os_psql_refused_word_reaches_the_agent(wired):
+    _stub_psql_answer(wired, raises=PsqlRefused("commit"))
+    refusal = await server.os_psql("commit", container="odoo17", database="db")
+    assert refusal["error"] == "psql_refused"
+    assert refusal["word"] == "commit"
+
+
+async def test_os_psql_lost_answer_says_unknown(monkeypatch):
+    class Slow:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def request(self, *args, **kwargs):
+            raise httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", Slow)
+    answer = await server.os_psql("select 1", container="odoo17", database="db", commit=True)
+    assert answer["error"] == "request_timed_out"
+    assert "unknown" in answer["recovery"]
+    assert "os_history" not in answer["recovery"]
+
+
+def test_os_psql_description_says_exec_first():
+    tool = next(t for t in server.mcp._tool_manager.list_tools() if t.name == "os_psql")
+    assert "os_exec first" in tool.description
+    assert "agents may commit" in tool.description
+    assert not {"host", "build", "card", "target_id"} & set(tool.parameters["properties"])
+
+
+def test_the_worst_psql_deadline_still_answers_inside_the_mcp_wait():
+    """A lost answer to a commit is what the ceiling exists to prevent."""
+    worst = psql.MAX_TIMEOUT + psql._SIGNAL_TIMEOUT + psql._STOP_TIMEOUT
+    assert worst < server.CALL_WAIT

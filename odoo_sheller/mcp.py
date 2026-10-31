@@ -957,6 +957,55 @@ CLICK_MODULE_DESCRIPTION = (
 )
 
 
+PSQL_DESCRIPTION = (
+    "Use os_exec first: env.cr.execute there is the normal way to run SQL. This is "
+    "for a session that will not open or is stuck. One call is one transaction "
+    "through psql, on a local container only, at most 35 seconds. It rolls back "
+    "unless commit=True, and it is read-only unless the human turned on 'agents "
+    "may commit' for the container. Name the target by container and database, or "
+    "by session_id, which needs no key and leaves the session as it is. "
+    "os_help('psql')."
+)
+
+
+@mcp.tool(description=PSQL_DESCRIPTION)
+async def os_psql(
+    sql: str,
+    container: str | None = None,
+    database: str | None = None,
+    session_id: str | None = None,
+    commit: bool = False,
+    timeout: float = 30.0,
+) -> Any:
+    answer = await _call(
+        "POST",
+        "/api/psql",
+        json={
+            "sql": sql,
+            "container": container,
+            "database": database,
+            "session_id": session_id,
+            "commit": commit,
+            "timeout": timeout,
+        },
+    )
+    if answer.get("error") == "request_timed_out":
+        # There may be no session to look in, and the journal's name was in the
+        # answer that just got lost.
+        answer["recovery"] = (
+            "the outcome of this call is unknown. On commit=True check the data "
+            "before anything is tried again; do not simply retry"
+        )
+
+        return answer
+    if "output" in answer:
+        answer["output"], clipped = _clip(answer["output"], MAX_STDOUT)
+        if clipped:
+            answer["output_clipped"] = True
+
+    return answer
+
+
 @mcp.tool(description=CLICK_MODULE_DESCRIPTION)
 async def os_click_module(
     module: str,

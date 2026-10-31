@@ -21,6 +21,7 @@ MARKERS = (
     "history",
     "run_test",
     "click_module",
+    "psql",
     "test_result",
     "list_tests",
     "open_session",
@@ -52,8 +53,7 @@ def render_for_mcp(text: str) -> str:
 
 INSTRUCTIONS = """\
 odoo-sheller runs Python in a live Odoo shell. `env` and `self` are Odoo's
-own, and variables persist between commands: a session is a workspace, not a
-series of scripts.
+own, and variables persist between commands: a session is a workspace.
 
 Hosts cut this at 2048 characters. The rest is behind {{help}}(topic):
 
@@ -68,7 +68,8 @@ Hosts cut this at 2048 characters. The rest is behind {{help}}(topic):
   records        reading a record whole
   modules        installing, upgrading, migrations
   jobs           with_delay, run inline
-  tests          a test, a class or a whole module
+  tests          a test, class or module
+  psql           SQL with no session
   watching       the human watches
   odoo_<major>   Python and XML for that Odoo; {{open_session}} hands it over
 
@@ -251,6 +252,8 @@ Two things differ there, and {{session}} shows both as `kind` and `stage`:
 - Grant yourself commit rights, or call the daemon's admin endpoints.
 - Take a session you were not handed, or use a key you were not given.
 - Read or write ~/.odoo-sheller/ directly. Everything you need is in these tools.
+- Reach for {{psql}} where {{exec}} would do. It is for a session that will not
+  open or is stuck: {{help}}('psql').
 - Count on Odoo 13 or 14. They open, with a warning, but are not fully tested:
   sessions, exec, commit, rollback and interrupt should work; {{run_test}} does
   not on 13 and says so.
@@ -682,6 +685,48 @@ browser ran (`clickbot` in {{session}} says beforehand whether one can — on
 `clickbot_restore_failed`, after which you open a fresh session. Default
 ceiling 900 seconds; a long run answers `status: "running"` like {{run_test}},
 and {{test_result}}(session_id) collects it.
+""",
+    "psql": """\
+## SQL when no session can run it
+
+{{exec}} with `env.cr.execute` is the normal way, and has more time. {{psql}} is for
+a registry that does not load, and for reading `pg_stat_activity` and the locks
+beside a session that is stuck. It works on local containers only; an odoo.sh or
+SSH target answers `psql_not_available`.
+
+    {{psql}}(sql, container=, database=)   or   {{psql}}(sql, session_id=)
+
+One call is one transaction, and no `psql` lives between calls. At most 35 seconds.
+
+- The human's switch decides. With *agents may commit* off for that container the
+  transaction is read-only and rolls back, and `commit=True` is
+  `commit_not_allowed`: stop and ask, because no tool can turn it on.
+- With the switch on, `commit=False` writes and rolls back: a dry run. Run that
+  first and read what it did. `commit=True` then commits, once every statement
+  has passed.
+- `committed: null` means COMMIT was sent and no answer came back. Check the data
+  before trying again. The same goes for `request_timed_out`.
+
+A session's `allow_commit` plays no part here. A commit made here is invisible to
+a live session's ORM cache until that session's next transaction boundary.
+
+Refused before anything runs, as `psql_refused` with the word:
+
+- a backslash outside a string, so every `psql` meta-command;
+- control characters, an unclosed `(`, and `U&"..."` identifiers, whose names
+  cannot be read;
+- `BEGIN`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`, `START`, `PREPARE TRANSACTION`,
+  because the call decides how the transaction ends (`SAVEPOINT` and `ROLLBACK TO`
+  are fine);
+- `SET`, `RESET` and `set_config`, because they would lift the read-only flag;
+- `DO`, whose body cannot be read;
+- `COPY` other than `COPY ... TO STDOUT`;
+- calls that leave the transaction or touch the server, such as `dblink` and
+  `pg_terminate_backend`.
+
+This guards against accidents. It is not permission for whatever it does not
+catch: `DROP TABLE` with `commit=True` works here exactly as it does in {{exec}}.
+Each call has its journal, named in the answer, for {{journal}}.
 """,
     "watching": """\
 ## Being watched

@@ -61,6 +61,7 @@ the same HTTP/WS API — there must never be a second API.
 | `recipe.py` | the grammar of an ssh card's two fields — parsed, whitelisted, never run |
 | `rules/` | what each Odoo major expects of Python and XML, handed to the agent with a session |
 | `guidance.py` | the instructions and help topics, tool names as `{{markers}}`; MCP renders them, `/api/help` serves them raw |
+| `psql.py` | one transaction through `psql` with no session: the SQL guard, the script in the container, the two-step feed |
 | `js_tests.py` | whether a session can run a browser suite, the JS part of a test listing, a skipped suite's reason |
 | `names.py` | what may stand for a build or a host before ssh sees it |
 | `guard.py` | the daemon answers only requests addressed to this machine (Host, Origin) |

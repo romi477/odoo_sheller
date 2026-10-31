@@ -433,6 +433,10 @@ squeezed by an open preview) a row drops the session id, duration and size so
 the rest stays on one line under the same header; the id is still in the title
 of the transcript a row opens.
 
+A call to `os_psql` has no session and no screen of its own, but it leaves a row here,
+with an id starting `psql_`, whose transcript holds the SQL, the output and how the
+transaction ended.
+
 - Click anywhere on a row except a control to open that transcript.
 - **.jsonl** / **.md** export the session; both confirm first, because
   **journals are unmasked** — see [security.md](security.md).

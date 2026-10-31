@@ -137,12 +137,18 @@ def session_meta(records: Iterable[dict], session_id: str | None = None) -> dict
             seen_any = True
         last_ts = record.get("ts")
         kind = record.get("kind")
-        if kind == "session_open" and not opened:
+        if kind in ("session_open", "psql_open") and not opened:
             opened = record
             if record.get("owner"):
                 owners.insert(0, dict(record["owner"]))
         elif kind in ("session_close", "session_died"):
             closed = record
+        elif kind == "psql_result":
+            # One call is a whole journal: it ends with its answer. `committed`
+            # may be None, a COMMIT nobody saw land, and that is not a commit.
+            closed = record
+            commands += 1
+            committed = committed or record.get("committed") is True
         elif kind == "owner_changed" and record.get("to"):
             owners.append(dict(record["to"]))
         elif kind in ("exec", "run_test"):
@@ -308,6 +314,25 @@ def _named(actor: dict) -> str:
     return actor.get("label") or actor.get("kind") or "unknown"
 
 
+def _psql_result_markdown(record: dict) -> list[str]:
+    lines = []
+    if record.get("code"):
+        word = f" ({record['refused']})" if record.get("refused") else ""
+        lines.append(f"Refused or failed: `{record['code']}`{word}\n")
+    if record.get("output"):
+        lines.append(f"```\n{record['output'].rstrip()}\n```\n")
+    if record.get("error"):
+        lines.append(f"Error:\n\n```\n{record['error'].rstrip()}\n```\n")
+    committed = record.get("committed")
+    if committed is None:
+        said = "unknown: COMMIT was sent and no answer came back"
+    else:
+        said = "committed" if committed else "rolled back"
+    lines.append(f"Outcome: {said}\n")
+
+    return lines
+
+
 def to_markdown(records: list[dict], meta: dict | None = None) -> str:
     lines = list(_markdown_header(meta)) if meta else []
     ordinals = {}
@@ -333,6 +358,15 @@ def to_markdown(records: list[dict], meta: dict | None = None) -> str:
                 continue
             lines.append(f"# Session on {record.get('container')} / {record.get('database')}")
             lines.append(f"Odoo {record.get('odoo')} — opened {stamp}\n")
+        elif kind == "psql_open":
+            lines.append(
+                f"## psql on {record.get('container')} / {record.get('database')} — {stamp}\n"
+            )
+            lines.append(f"Mode: {record.get('mode')}\n")
+        elif kind == "psql_sql":
+            lines.append(f"```sql\n{record.get('sql', '').rstrip()}\n```\n")
+        elif kind == "psql_result":
+            lines.extend(_psql_result_markdown(record))
         elif kind == "exec":
             next_ordinal += 1
             ordinals[record.get("id")] = next_ordinal
