@@ -441,3 +441,10 @@ def test_gone_container_is_named(double, monkeypatch):
 def test_output_excludes_the_daemons_own_lines(double):
     done = double.run("FORGE hello\n;")
     assert done["output"] == "hello\n"
+
+
+def test_a_lone_surrogate_in_the_sql_does_not_crash_the_feed(double):
+    # JSON can carry one, and a raised write would strand the call.
+    done = double.run("select '\ud800';")
+    assert double.lines()[-1] == "ROLLBACK;"
+    assert done["error"] is None

@@ -12,6 +12,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from odoo_sheller import psql
 from odoo_sheller.agent_commit import AgentCommitError, AgentCommitStore
 from odoo_sheller.discovery import (
     container_name,
@@ -218,6 +219,8 @@ class Registry:
         # Tasks started from a callback. The loop holds them only weakly, and
         # a task nobody references can be collected before it has finished.
         self._tasks: set[asyncio.Task] = set()
+        # Containers with a `psql` call running, by resolved name.
+        self._psql_running: set[str] = set()
 
     def journal_file_for(self, session_id: str) -> Journal | None:
         """The on-disk journal for an id, whether or not a live session holds it.
@@ -531,6 +534,67 @@ class Registry:
     def get(self, session_id: str) -> Session:
 
         return self.sessions[session_id]
+
+    async def run_psql(self, target: Target, sql: str, commit: bool, timeout: float) -> dict:
+        """One transaction through `psql`, journalled, by the container's switch.
+
+        Only the switch decides. A session's `allow_commit` does not: there may
+        be no session at all. The kind check comes first, so that a remote name
+        reaches no Docker command and leaves no file.
+        """
+        if target.kind != DOCKER:
+            raise psql.PsqlNotAvailable(target.kind)
+        name = await container_name(target.container)
+        switch_on = self._switched_on(name)
+        read_only = not switch_on
+        journal_id = f"psql_{new_session_id()}"
+        path = journal_path(
+            self.journal_root, journal_id, name, target.database, datetime.now(UTC)
+        )
+        record = Journal(path)
+        record.write(
+            "psql_open",
+            container=name,
+            database=target.database,
+            target_kind=target.kind,
+            switch_on=switch_on,
+            commit=commit,
+            mode="read_only" if read_only else "read_write",
+        )
+        record.write("psql_sql", sql=sql)
+        owned = False
+        try:
+            psql.check_sql(sql)
+            if commit and not switch_on:
+                raise psql.PsqlCommitNotAllowed(name)
+            if name in self._psql_running:
+                raise psql.PsqlBusy(name)
+            self._psql_running.add(name)
+            owned = True
+            answer = await psql.run_transaction(
+                target, sql, read_only=read_only, commit=commit, timeout=timeout
+            )
+        except psql.PsqlError as exc:
+            exc.journal_id = journal_id
+            record.write(
+                "psql_result",
+                code=exc.code,
+                refused=getattr(exc, "word", None),
+                output=getattr(exc, "output", None),
+                committed=getattr(exc, "committed", False),
+            )
+            raise
+        except Exception as exc:
+            record.write("psql_result", code="psql_error", error=repr(exc), committed=None)
+            raise
+        else:
+            record.write("psql_result", code=None, refused=None, **answer)
+
+            return {**answer, "journal": f"/api/journals/{journal_id}"}
+        finally:
+            if owned:
+                self._psql_running.discard(name)
+            record.close()
 
     async def close(
         self, session_id: str, force: bool = False, timeout: float = 10.0

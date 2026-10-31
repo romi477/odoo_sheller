@@ -19,13 +19,26 @@ from odoo_sheller.transport import DOCKER, Target, docker_bin, send_signal, spaw
 logger = logging.getLogger(__name__)
 
 
-class PsqlRefused(Exception):
+class PsqlError(Exception):
+    """A call that did not get an answer. `journal_id` is set once there is a file."""
+
+    code = "psql_error"
+    journal_id: str | None = None
+
+
+class PsqlRefused(PsqlError):
     """The text holds something that would defeat the transaction."""
+
+    code = "psql_refused"
 
     def __init__(self, word: str):
         super().__init__(word)
         self.word = word
 
+
+# No rule for this exists to reuse. It travels by environment and never as an
+# argument, so this is about a name that could not be one.
+DATABASE_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}")
 
 # Refused as the first word of a statement. `SET` inside an `UPDATE` and `END`
 # inside a `CASE` are the reason it is only the first word.
@@ -202,8 +215,22 @@ def check_sql(sql: str) -> None:
             raise PsqlRefused(token)
 
 
-class PsqlNotAvailable(Exception):
+class PsqlNotAvailable(PsqlError):
     """This kind of target has no `psql` tool, whatever it is called."""
+
+    code = "psql_not_available"
+
+
+class PsqlCommitNotAllowed(PsqlError):
+    """`commit=True` on a container no human has opened."""
+
+    code = "commit_not_allowed"
+
+
+class PsqlBusy(PsqlError):
+    """A call is running on this container. Rejected, never queued."""
+
+    code = "psql_busy"
 
 
 MISSING_PREFIX = "OSPSQL-MISSING "
@@ -304,20 +331,26 @@ _READ_SIZE = 65536
 _SIGNAL_TIMEOUT = 2.0
 
 
-class PsqlUnavailable(Exception):
+class PsqlUnavailable(PsqlError):
     """Something the call needs is not in the container."""
+
+    code = "psql_unavailable"
 
     def __init__(self, missing: str):
         super().__init__(missing)
         self.missing = missing
 
 
-class PsqlTargetGone(Exception):
+class PsqlTargetGone(PsqlError):
     """The container is not there, or not running."""
 
+    code = "not_found"
 
-class PsqlTimedOut(Exception):
+
+class PsqlTimedOut(PsqlError):
     """`committed` is None when a COMMIT had been sent: nobody can say any more."""
+
+    code = "psql_timeout"
 
     def __init__(self, committed: bool | None, output: str):
         super().__init__("deadline passed")
@@ -415,7 +448,7 @@ class _Call:
             self.errors += chunk[: MAX_ERROR - len(self.errors)]
 
     async def _write(self, text: str) -> None:
-        self.proc.stdin.write(text.encode("utf-8", errors="surrogateescape"))
+        self.proc.stdin.write(text.encode("utf-8", errors="replace"))
         await self.proc.stdin.drain()
 
     async def feed(self) -> None:

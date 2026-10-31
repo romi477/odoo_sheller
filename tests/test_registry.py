@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -5,7 +6,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from odoo_sheller.agent_commit import AgentCommitError, AgentCommitStore
-from odoo_sheller.journal import Journal, journal_path
+from odoo_sheller.journal import Journal, find_journal, journal_path
+from odoo_sheller.psql import (
+    PsqlBusy,
+    PsqlCommitNotAllowed,
+    PsqlNotAvailable,
+    PsqlRefused,
+    PsqlTimedOut,
+)
 from odoo_sheller.registry import AdminKeyUnusable, Registry, load_admin_key, new_session_id
 from odoo_sheller.session import SessionDead, SessionState
 from odoo_sheller.targets import TargetStore
@@ -1204,3 +1212,180 @@ async def test_a_target_read_already_is_not_read_again_by_a_replacing_open(tmp_p
         await registry.open(replace="gone", past_target=past)
 
     assert reads == []
+
+
+# --- psql -------------------------------------------------------------------
+
+
+def _psql_outcome(**fields):
+
+    return {
+        "output": "x\n", "error": None, "committed": False, "rolled_back": True,
+        "truncated": False, "mode": "read_only", **fields,
+    }  # fmt: skip
+
+
+@pytest.fixture
+def transactions(monkeypatch):
+    """What reached the driver. Nothing here starts a process."""
+    calls = []
+
+    async def fake(target, sql, *, read_only, commit, timeout):
+        calls.append({"target": target, "sql": sql, "read_only": read_only, "commit": commit})
+
+        return _psql_outcome(
+            committed=commit, rolled_back=not commit,
+            mode="read_only" if read_only else "read_write",
+        )  # fmt: skip
+
+    monkeypatch.setattr("odoo_sheller.psql.run_transaction", fake)
+
+    return calls
+
+
+PSQL_LOCAL = Target(kind="docker", container="mig18", database="db")
+
+
+def _psql_records(tmp_path, answer):
+    session_id = answer["journal"].rsplit("/", 1)[-1]
+    path = find_journal(tmp_path, session_id)
+
+    return session_id, Journal(path).records()
+
+
+@pytest.mark.asyncio
+async def test_psql_switch_off_is_read_only(tmp_path, transactions):
+    registry = Registry(journal_root=tmp_path)
+    await registry.run_psql(PSQL_LOCAL, "select 1", False, 5.0)
+    assert transactions[0]["read_only"] is True
+    assert transactions[0]["commit"] is False
+
+
+@pytest.mark.asyncio
+async def test_psql_switch_on_writes_and_rolls_back(tmp_path, transactions):
+    registry, _store = _switch_registry(tmp_path, "mig18")
+    await registry.run_psql(PSQL_LOCAL, "update t set a = 1", False, 5.0)
+    assert transactions[0]["read_only"] is False
+    assert transactions[0]["commit"] is False
+
+
+@pytest.mark.asyncio
+async def test_psql_switch_on_with_commit_commits(tmp_path, transactions):
+    registry, _store = _switch_registry(tmp_path, "mig18")
+    answer = await registry.run_psql(PSQL_LOCAL, "update t set a = 1", True, 5.0)
+    assert transactions[0]["commit"] is True
+    assert answer["committed"] is True
+
+
+@pytest.mark.asyncio
+async def test_psql_commit_with_switch_off_runs_nothing(tmp_path, transactions):
+    registry = Registry(journal_root=tmp_path)
+    with pytest.raises(PsqlCommitNotAllowed):
+        await registry.run_psql(PSQL_LOCAL, "update t set a = 1", True, 5.0)
+    assert transactions == []
+
+
+@pytest.mark.asyncio
+async def test_psql_switch_is_matched_by_resolved_name(tmp_path, transactions, monkeypatch):
+    _resolve(monkeypatch, {"3f2a": "mig18"})
+    registry, _store = _switch_registry(tmp_path, "mig18")
+    await registry.run_psql(Target(kind="docker", container="3f2a", database="db"), "x", True, 5.0)
+    assert transactions[0]["commit"] is True
+
+
+@pytest.mark.asyncio
+async def test_psql_refused_sql_runs_nothing_and_is_journalled(tmp_path, transactions):
+    registry = Registry(journal_root=tmp_path)
+    with pytest.raises(PsqlRefused) as refused:
+        await registry.run_psql(PSQL_LOCAL, "\\! ls", False, 5.0)
+    assert transactions == []
+    records = Journal(find_journal(tmp_path, refused.value.journal_id)).records()
+    assert records[-1]["kind"] == "psql_result"
+    assert records[-1]["code"] == "psql_refused"
+    assert records[-1]["refused"] == "\\"
+    assert records[1]["sql"] == "\\! ls"
+
+
+@pytest.mark.asyncio
+async def test_psql_second_call_on_a_container_is_busy(tmp_path, monkeypatch):
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def held(target, sql, *, read_only, commit, timeout):
+        started.set()
+        await release.wait()
+
+        return _psql_outcome()
+
+    monkeypatch.setattr("odoo_sheller.psql.run_transaction", held)
+    registry = Registry(journal_root=tmp_path)
+    first = asyncio.create_task(registry.run_psql(PSQL_LOCAL, "select 1", False, 5.0))
+    await started.wait()
+    with pytest.raises(PsqlBusy):
+        await registry.run_psql(PSQL_LOCAL, "select 2", False, 5.0)
+    other = Target(kind="docker", container="other", database="db")
+    second = asyncio.create_task(registry.run_psql(other, "select 3", False, 5.0))
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(first, second)
+
+
+@pytest.mark.asyncio
+async def test_psql_busy_clears_after_a_failure(tmp_path, monkeypatch):
+    async def fails(target, sql, *, read_only, commit, timeout):
+        raise PsqlTimedOut(False, "partial")
+
+    monkeypatch.setattr("odoo_sheller.psql.run_transaction", fails)
+    registry = Registry(journal_root=tmp_path)
+    for _ in range(2):
+        with pytest.raises(PsqlTimedOut) as timed_out:
+            await registry.run_psql(PSQL_LOCAL, "select 1", False, 5.0)
+    records = Journal(find_journal(tmp_path, timed_out.value.journal_id)).records()
+    assert records[-1]["code"] == "psql_timeout"
+    assert records[-1]["output"] == "partial"
+
+
+@pytest.mark.asyncio
+async def test_psql_journal_records_sql_and_outcome(tmp_path, transactions):
+    registry, _store = _switch_registry(tmp_path, "mig18")
+    answer = await registry.run_psql(PSQL_LOCAL, "update t set a = 1", True, 5.0)
+    session_id, records = _psql_records(tmp_path, answer)
+    assert session_id.startswith("psql_")
+    assert "-" not in session_id
+    assert [r["kind"] for r in records] == ["psql_open", "psql_sql", "psql_result"]
+    assert records[0]["switch_on"] is True
+    assert records[0]["container"] == "mig18"
+    assert records[2]["committed"] is True
+    assert records[2]["output"] == "x\n"
+
+
+@pytest.mark.asyncio
+async def test_psql_journal_holds_no_runner_and_no_config(tmp_path, transactions):
+    registry = Registry(journal_root=tmp_path)
+    answer = await registry.run_psql(PSQL_LOCAL, "select 1", False, 5.0)
+    _session_id, records = _psql_records(tmp_path, answer)
+    text = str(records)
+    assert "db_password" not in text
+    assert "PGPASSWORD" not in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target",
+    [
+        Target(kind="odoosh", build="12345", host="x.odoo.com"),
+        Target(kind="ssh", label="mig18", container="mig18", database="db"),
+    ],
+)
+async def test_psql_remote_is_refused_before_any_docker_command(
+    tmp_path, transactions, monkeypatch, target
+):
+    async def no_docker(container, runner=None):
+        raise AssertionError("a remote name reached docker")
+
+    monkeypatch.setattr("odoo_sheller.registry.container_name", no_docker)
+    registry = Registry(journal_root=tmp_path / "journals")
+    with pytest.raises(PsqlNotAvailable):
+        await registry.run_psql(target, "select 1", False, 5.0)
+    assert transactions == []
+    assert not list(tmp_path.glob("journals/*.jsonl"))

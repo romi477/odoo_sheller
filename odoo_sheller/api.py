@@ -18,8 +18,8 @@ from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from odoo_sheller import discovery, guidance, journal
-from odoo_sheller.agent_commit import AgentCommitError
+from odoo_sheller import discovery, guidance, journal, psql
+from odoo_sheller.agent_commit import AgentCommitError, check_container_name
 from odoo_sheller.guard import LoopbackOnly
 from odoo_sheller.names import check_ssh_name
 from odoo_sheller.paths import web_dir
@@ -36,6 +36,7 @@ from odoo_sheller.session import (
     SessionState,
 )
 from odoo_sheller.targets import DEFAULT_STAGE, TargetsError
+from odoo_sheller.transport import DOCKER, Target
 
 WEB = web_dir()
 NO_STORE = {"Cache-Control": "no-store"}
@@ -63,6 +64,36 @@ def _export_headers(path: Path, suffix: str) -> dict:
 TEST_SPEC_RE = re.compile(r"^(\w+)(?:\.(\w+)(?:\.(\w+))?)?$")
 
 LOGIN_LIMIT = 256
+PSQL_SQL_LIMIT = 1024 * 1024
+
+PSQL_STATUS: dict[type, tuple[int, str]] = {
+    psql.PsqlRefused: (400, "take that out; a transaction here ends the way the call says"),
+    psql.PsqlCommitNotAllowed: (
+        403,
+        "stop and ask the human to turn on 'agents may commit' for this container; "
+        "no tool can do it. Without it this call runs read-only and rolls back",
+    ),
+    psql.PsqlNotAvailable: (403, "psql is for local containers; use exec in the session"),
+    psql.PsqlUnavailable: (503, "this container cannot run it; use exec in a session"),
+    psql.PsqlTargetGone: (404, "list the running containers and name one of them"),
+    psql.PsqlBusy: (409, "a call is running on this container; wait for it"),
+    psql.PsqlTimedOut: (
+        504,
+        "the transaction was stopped; split the work, or use exec, which has more time. "
+        "If committed is null, check the data before trying again",
+    ),
+}
+
+
+class PsqlBody(BaseModel):
+    sql: str = Field(max_length=PSQL_SQL_LIMIT)
+    container: str | None = None
+    database: str | None = None
+    session_id: str | None = None
+    commit: bool = False
+    # Past this the MCP side has stopped waiting, and a lost answer to a commit
+    # is the one thing an agent could not recover from. Long work is `exec`'s.
+    timeout: float = Field(default=30, gt=0, le=35)
 
 
 class ClickModuleBody(BaseModel):
@@ -1188,6 +1219,55 @@ def create_app(registry: Registry | None = None) -> FastAPI:
             return await session.run_test(module, test_class, test_method, **kwargs)
         except Exception as exc:  # noqa: BLE001 - API boundary maps failures to HTTP.
             raise translate(exc, session_id) from None
+
+    def psql_target(body: PsqlBody) -> Target:
+        """Named one way or the other: a session lends only its target, not its state."""
+        by_name = body.container is not None or body.database is not None
+        if body.session_id is not None and not by_name:
+
+            return session_or_404(body.session_id).target
+        if body.session_id is not None or body.container is None or body.database is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_target",
+                    "recovery": "give session_id, or container and database; not both",
+                },
+            )
+        try:
+            check_container_name(body.container)
+        except ValueError:
+            valid = False
+        else:
+            valid = psql.DATABASE_RE.fullmatch(body.database) is not None
+        if not valid:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_container",
+                    "recovery": "give a container name and a database name as they are listed",
+                },
+            )
+
+        return Target(kind=DOCKER, container=body.container, database=body.database)
+
+    @app.post("/api/psql")
+    async def run_psql(body: PsqlBody):
+        target = psql_target(body)
+        try:
+
+            return await app.state.registry.run_psql(
+                target, body.sql, body.commit, body.timeout
+            )
+        except psql.PsqlError as exc:
+            status, recovery = PSQL_STATUS[type(exc)]
+            detail = {"error": exc.code, "recovery": recovery}
+            if exc.journal_id:
+                detail["journal"] = f"/api/journals/{exc.journal_id}"
+            for field in ("word", "missing", "committed"):
+                if hasattr(exc, field):
+                    detail[field] = getattr(exc, field)
+            raise HTTPException(status_code=status, detail=detail) from None
 
     @app.post("/api/sessions/{session_id}/click_module")
     async def click_module(
