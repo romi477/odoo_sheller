@@ -22,7 +22,8 @@ from odoo_sheller.session import (
     SessionState,
 )
 from odoo_sheller.targets import TargetStore
-from odoo_sheller.transport import DOCKER, ODOOSH, SSH, Target
+from odoo_sheller.transport import DOCKER, ODOOSH, Target
+from odoo_sheller.transport import SSH as SSH_KIND
 
 OWNER_KEY = "write-key-s1"
 ADMIN_KEY = "admin-key"
@@ -2598,7 +2599,7 @@ def test_psql_local_session_names_the_target_while_busy(psql_client, monkeypatch
     "target",
     [
         Target(kind=ODOOSH, build="12345", host="x.odoo.com"),
-        Target(kind=SSH, label="odoo17", container="odoo17", database="db"),
+        Target(kind=SSH_KIND, label="odoo17", container="odoo17", database="db"),
     ],
 )
 def test_psql_remote_session_is_refused(psql_client, monkeypatch, target):
