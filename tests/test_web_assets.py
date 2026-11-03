@@ -1826,7 +1826,7 @@ def test_start_button_spins_while_a_session_is_opening(app_js):
     assert "busy" in render.group(0)
     assert "aria-busy" in render.group(0)
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    mark = re.search(r"\.start\.busy::after\s*\{([^}]*)\}", css)
+    mark = re.search(r"\.card \.row button\.busy::after\s*\{([^}]*)\}", css)
     assert mark is not None
     assert "animation:" in mark.group(1)
     assert "↻" in mark.group(1)
@@ -2109,8 +2109,9 @@ def test_a_build_card_is_edited_like_a_server_card(app_js):
     assert "composerEditing('odoosh', null)" in reset.group(0)
 
 
-def test_editing_a_build_offers_probe_save_and_cancel_like_a_server(app_js):
-    """Probe asks the build in the form and writes nothing; Save changes writes."""
+def test_the_build_form_has_save_and_cancel_and_nothing_else(app_js):
+    """Probe is something a card has, not something a form has: a card being
+    written or changed offers Save and Cancel, on this form as on the server form."""
     form = re.search(
         r'<div class="odoosh-form">\s*<div class="odoosh-fields">(.*?)</div>.*?'
         r'<div class="odoosh-actions">(.*?)</div>',
@@ -2118,33 +2119,27 @@ def test_editing_a_build_offers_probe_save_and_cancel_like_a_server(app_js):
     )
     assert form is not None, "the keys are a row of their own, under the fields"
     assert "<button" not in form.group(1)
-    form = form.group(2)
-    buttons = re.findall(r'<button[^>]*class="([^"]+)"[^>]*>([^<]*)</button>', form)
-    assert buttons == [
-        ("odoosh-add", "Probe"),
-        ("odoosh-probe", "Probe"),
-        ("odoosh-save primary", "Save changes"),
-        ("odoosh-cancel", "Cancel"),
-    ]
-    for marker in ("odoosh-probe", "odoosh-save", "odoosh-cancel"):
-        assert re.search(rf'class="{marker}[^"]*" hidden', form), marker
+    buttons = re.findall(r'<button[^>]*class="([^"]+)"[^>]*>([^<]*)</button>', form.group(2))
+    assert buttons == [("odoosh-save primary", "Save"), ("odoosh-cancel", "Cancel")]
+    assert "hidden" not in form.group(2), "both are there to write a new card too"
+    assert "probe-result" not in _page()
     css = (WEB / "style.css").read_text(encoding="utf-8")
     actions = re.search(r"\n\.ssh-actions,\s*\.odoosh-actions\s*\{([^}]*)\}", css)
     assert actions is not None, "laid out as the server form's keys are"
     assert "justify-content: center" in actions.group(1)
-    assert 'class="odoosh-probe-result probe-note"' in _page()
-
     edit = re.search(r"function editBuild\(.*?\n\}", app_js, re.DOTALL).group(0)
     reset = re.search(r"function resetBuildForm\(.*?\n\}", app_js, re.DOTALL).group(0)
-    for marker in ("odoosh-add", "odoosh-probe", "odoosh-save", "odoosh-cancel"):
-        assert f"'.{marker}'" in edit and f"'.{marker}'" in reset, marker
-    probe = re.search(r"async function probeBuildForm\(.*?\n\}", app_js, re.DOTALL)
-    assert probe is not None
-    body = probe.group(0)
-    assert "'/api/targets/probe'" in body
-    assert "withAdminRetry(" in body and "adminHeaders()" in body
-    assert "api.put(" not in body and "'/api/targets'," not in body, "a probe writes nothing"
-    assert "patchBuild(" not in body, "what the form holds is not yet the card"
+    # One word, new card or changed: the key's label is never rewritten.
+    assert "textContent" not in "".join(
+        line for line in (edit + reset).splitlines() if "-save" in line
+    )
+    assert "Save changes" not in _page() and "Save changes" not in app_js
+    for gone in ("probeBuildForm", "showBuildProbe", "buildProbeSerial", "odoosh-add", "odoosh-probe"):
+        assert gone not in app_js, gone
+    cancel = re.search(r"function cancelBuildForm\(.*?\n\}", app_js, re.DOTALL)
+    assert cancel is not None
+    assert "setComposerCollapsed('odoosh', true)" in cancel.group(0), "a new card's Cancel folds the form"
+    assert ".odoosh-cancel').addEventListener('click', cancelBuildForm)" in app_js
 
 
 def test_each_kind_of_card_edits_in_its_own_form(app_js):
@@ -2216,13 +2211,20 @@ def test_starting_a_build_opens_a_build_not_a_container(app_js):
     assert "host" not in body
 
 
-def test_production_is_unmistakable(app_js):
+def test_production_is_red_but_tinted_like_every_other_badge(app_js):
+    """It was the only badge on the page filled solid red, and it shouted over the
+    card's own name. Red text on a faint red tint says the same thing quietly; the
+    word and the weight are what set it apart from `staging`."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    # It is the only badge that fills solid instead of tinting.
-    solid = re.search(r"\.badge\.stage\.production\s*\{([^}]*)\}", css)
-    assert solid is not None
-    assert "background: var(--red)" in solid.group(1)
+    badge = re.search(r"\.badge\.stage\.production\s*\{([^}]*)\}", css)
+    assert badge is not None
+    body = badge.group(1)
+    assert re.search(r"background:\s*color-mix\(in oklab, var\(--red\) \d+%, var\(--panel\)\)", body)
+    assert "background: var(--red)" not in body
+    assert re.search(r"color:\s*color-mix\(in oklab, var\(--red\)", body), "oklab: a polar mix turns it pink"
+    assert "color: var(--background)" not in body, "dark text on a solid fill is what was removed"
     assert "production" in app_js
+    assert not re.search(r"background:\s*var\(--red\)\s*;", css), "no badge, or anything else, fills solid red"
 
 
 def test_both_connect_lists_are_styled_as_lists_of_cards():
@@ -2447,7 +2449,7 @@ def test_a_build_with_a_session_open_cannot_be_forgotten(app_js):
 def test_a_busy_key_blurs_its_label_under_the_spinner():
     """The label went invisible mid-start; the key looked empty, not working."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    for selector in (r"\.start\.busy", r"\.session-key\.new\.busy"):
+    for selector in (r"\.card \.row button\.busy", r"\.session-key\.new\.busy"):
         rule = re.search(selector + r"\s*\{([^}]*)\}", css)
         assert rule is not None, selector
         body = rule.group(1)
@@ -2465,29 +2467,26 @@ def test_a_busy_key_blurs_its_label_under_the_spinner():
         assert 'content: "↻"' in spinner.group(1), selector
     # `.primary` carries no border, so a busy Start had none either and the
     # key stopped looking like a key.
-    start = re.search(r"\.start\.busy\s*\{([^}]*)\}", css)
+    start = re.search(r"\.card \.row button\.busy\s*\{([^}]*)\}", css)
     assert start is not None
     assert re.search(r"border-color:\s*(?!transparent)", start.group(1))
 
 
-def test_both_probe_keys_are_the_same_plain_key():
-    """Probe asks and writes nothing, so it is a plain key — a white label on the
-    ordinary outline — on the odoo.sh form as on the server form. Amber is for
-    the key that does the thing (Save, Open session), and Probe was the one
-    amber label that was not."""
+def test_neither_form_has_a_probe_key_and_the_server_form_cancels_a_new_card_too(app_js):
+    """Probe asks the instance about a card that exists; a form writes one. Both
+    forms end in Save and Cancel, and Cancel of a card not yet written folds the
+    form back."""
     page = (WEB / "index.html").read_text(encoding="utf-8")
-    classes = {}
-    for name, marker in (("build", "odoosh-add"), ("server", "ssh-probe")):
-        found = re.search(rf'<button[^>]*class="([^"]*\b{marker}\b[^"]*)"', page)
-        assert found is not None, name
-        classes[name] = set(found.group(1).split())
-    assert "primary" not in classes["build"]
-    assert "primary" not in classes["server"]
-    css = (WEB / "style.css").read_text(encoding="utf-8")
-    # No rule of its own to make it look different, or to put an outline back
-    # that a plain button already has.
-    assert not re.search(r"\.odoosh-add\s*\{", css)
-    assert not re.search(r"\.ssh-probe\s*\{", css)
+    ssh = re.search(r'<div class="ssh-actions">(.*?)</div>', page, re.DOTALL).group(1)
+    buttons = re.findall(r'<button[^>]*class="([^"]+)"[^>]*>([^<]*)</button>', ssh)
+    assert buttons == [("ssh-save primary", "Save"), ("ssh-cancel", "Cancel")]
+    assert "hidden" not in ssh
+    for gone in ("probeServerForm", "showServerProbe", "describeServerProbe", "ssh-probe"):
+        assert gone not in app_js, gone
+    cancel = re.search(r"function cancelServerForm\(.*?\n\}", app_js, re.DOTALL)
+    assert cancel is not None
+    assert "setComposerCollapsed('ssh', true)" in cancel.group(0)
+    assert ".ssh-cancel').addEventListener('click', cancelServerForm)" in app_js
 
 
 def test_the_mode_keys_read_as_names(markup):
@@ -2516,19 +2515,20 @@ def test_the_three_places_are_a_radio_group_and_not_three_buttons():
     assert "segmented" not in page
 
 
-def test_a_radio_is_a_ring_and_the_chosen_one_is_a_cyan_dot():
+def test_a_radio_is_a_square_and_the_chosen_one_is_filled_cyan():
     css = (WEB / "style.css").read_text(encoding="utf-8")
     assert "segmented" not in css
-    ring = re.search(r"#connect-modes input\s*\{([^}]*)\}", css)
-    assert ring is not None
-    for declaration in ("appearance: none", "border-radius: 50%"):
-        assert declaration in ring.group(1), declaration
+    square = re.search(r"#connect-modes input\s*\{([^}]*)\}", css)
+    assert square is not None
+    for declaration in ("appearance: none", "border-radius: 3px"):
+        assert declaration in square.group(1), declaration
     # The page gives every input a 220px minimum and padding of its own; left
-    # alone they turn a 13px ring into an ellipse across the header.
-    assert "min-width: 0" in ring.group(1)
-    assert "padding: 0" in ring.group(1)
+    # alone they turn a 13px square into a bar across the header.
+    assert "min-width: 0" in square.group(1)
+    assert "padding: 0" in square.group(1)
     chosen = re.search(r"#connect-modes input:checked\s*\{([^}]*)\}", css)
     assert chosen is not None
+    assert "background: var(--cyan)" in chosen.group(1), "filled, as the commit tick is"
     assert "var(--cyan)" in chosen.group(1), "the brand colour, not green"
     assert "green" not in chosen.group(1)
     assert re.search(r"#connect-modes input:focus-visible\s*\{[^}]*var\(--cyan\)", css), (
@@ -2552,7 +2552,7 @@ def test_every_spinner_turns_white():
     glyph it read as another state; white reads as motion and nothing else."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
     spinners = re.findall(r"\{([^}]*content: \"↻\";[^}]*)\}", css)
-    assert len(spinners) == 2, f"expected the two ::after spinners, got {len(spinners)}"
+    assert len(spinners) == 3, f"expected the three ::after spinners, got {len(spinners)}"
     for rule in spinners:
         assert "color: oklch(1 0 0)" in rule, rule
         assert "var(--amber)" not in rule, rule
@@ -3064,7 +3064,7 @@ def test_connect_offers_a_third_place_and_it_is_a_form_and_a_list(markup):
     assert "ssh-card" in markup.ids
     for cls in (
         "ssh-name", "ssh-access", "ssh-launch", "ssh-stage",
-        "ssh-probe", "ssh-save", "ssh-cancel", "ssh-breakdown", "field-error",
+        "ssh-save", "ssh-cancel", "ssh-breakdown", "field-error",
     ):
         assert cls in markup.classes, cls
 
@@ -3104,7 +3104,7 @@ def test_the_recipe_is_decoded_as_it_is_typed_and_a_stale_answer_is_dropped(app_
 
 
 def test_probing_saving_and_forgetting_a_server_go_through_the_admin_key(app_js):
-    for name in ("probeServerForm", "saveServerForm", "forgetServer", "probeServer"):
+    for name in ("saveServerForm", "forgetServer", "probeServer"):
         function = re.search(rf"async function {name}\(.*?\n\}}", app_js, re.DOTALL)
         assert function is not None, name
         assert "withAdminRetry(" in function.group(0), name
@@ -3177,14 +3177,11 @@ def test_the_launch_field_suggests_no_http_and_says_why():
     assert "Address already in use" in field.group(0), "the hover says what the flag is for"
 
 
-def test_what_the_config_will_do_to_the_launch_stays_on_the_card_and_in_the_probe_result(app_js):
+def test_what_the_config_will_do_to_the_launch_stays_on_the_card(app_js):
     cards = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL)
     assert cards is not None
     assert "probe.launch_warning" in cards.group(0)
     assert "'caution'" in cards.group(0), "amber: the probe worked, so it is not an error"
-    described = re.search(r"function describeServerProbe\(.*?\n\}", app_js, re.DOTALL)
-    assert described is not None
-    assert "launch_warning" in described.group(0)
     css = (WEB / "style.css").read_text(encoding="utf-8")
     rule = re.search(r"\.probe-note\.caution\s*\{([^}]*)\}", css)
     assert rule is not None and "--amber" in rule.group(1)
@@ -3281,8 +3278,12 @@ def test_the_composer_is_a_panel_and_the_saved_region_is_headed_by_a_rule():
         "an unfinished card is drawn as a draft, not as another card"
     )
     assert "border-radius" in composer.group(1)
-    assert re.search(r"\n\.composer\.editing\s*\{[^}]*var\(--amber\)", css), (
+    assert re.search(r"\n\.composer\.editing:not\(\.collapsed\)\s*\{[^}]*var\(--amber\)", css), (
         "editing a card has to look different from writing a new one"
+    )
+    assert not re.search(r"\n\.composer\.editing\s*\{", css), (
+        "folded, an edited form is a title and a dashed edge like any other; the "
+        "amber edge belongs to the open form only"
     )
     title = re.search(r"\n\.region-title\s*\{([^}]*)\}", css)
     assert title is not None
@@ -3470,10 +3471,9 @@ def test_nothing_in_the_page_reads_or_sends_a_database_for_a_server(app_js):
     fields = re.search(r"function serverFields\(\) \{.*?\n\}", app_js, re.DOTALL)
     assert fields is not None
     assert "database" not in fields.group(0)
-    for name in ("parseServerForm", "probeServerForm"):
-        body = re.search(rf"async function {name}\(\) \{{.*?\n\}}", app_js, re.DOTALL)
-        assert body is not None, name
-        assert "database" not in body.group(0), name
+    body = re.search(r"async function parseServerForm\(\) \{.*?\n\}", app_js, re.DOTALL)
+    assert body is not None
+    assert "database" not in body.group(0)
     probe = re.search(r"async function probeServer\(entry\) \{.*?\n\}", app_js, re.DOTALL)
     assert probe is not None and "database" not in probe.group(0)
     assert "database_source" not in app_js, "there is one place it can come from"
@@ -3611,9 +3611,10 @@ def test_placeholders_are_faint_enough_not_to_pass_for_typed_text():
     assert float(opacity.group(1)) <= 0.4
 
 
-def test_the_explanation_under_a_form_is_a_centred_filled_note_not_loose_text():
+def test_the_explanation_under_a_form_is_a_full_width_filled_note_not_loose_text():
     """The buttons above it are centred, and text that belongs to them hung off the
-    left edge. It is a note of its own — filled, centred — in both forms."""
+    left edge. It is a note of its own — filled, its words centred, as wide as the
+    form — in both forms."""
     page = _page()
     assert "odoosh-note" not in page
     assert page.count('<p class="composer-note">') == 2
@@ -3625,7 +3626,8 @@ def test_the_explanation_under_a_form_is_a_centred_filled_note_not_loose_text():
     assert rule is not None
     body = rule.group(1)
     assert "text-align: center" in body
-    assert re.search(r"margin:\s*\d+px auto", body), "centred as a block, not only its words"
+    assert "max-width" not in body, "as wide as the form: the fields above it are"
+    assert re.search(r"margin:\s*\d+px 0 0", body), "no side margins, so it spans the form"
     assert "background:" in body and "border-radius" in body
     assert "dashed" not in body, "the card around it already is"
 
@@ -3655,6 +3657,20 @@ def test_the_title_that_opens_a_form_turns_amber_under_the_pointer():
     assert hover is not None
     assert "color: var(--amber)" in hover.group(1)
     assert "cyan" not in hover.group(1)
+
+
+def test_the_title_that_opens_a_form_is_cyan_folded_and_amber_open():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    rest = re.search(r"\nbutton\.region-toggle\s*\{([^}]*)\}", css)
+    assert rest is not None
+    assert "color: var(--cyan)" in rest.group(1), "grey read as a label; cyan is what can be pressed"
+    # The arrow draws itself in the text's colour, so it follows.
+    assert "currentColor" in re.search(r"\.region-toggle \.chevron\s*\{([^}]*)\}", css).group(1)
+    # Open is amber, the colour of writing here — the form's own edge is amber
+    # too — and that covers a card being edited, which is open by definition.
+    opened = re.search(r'\nbutton\.region-toggle\[aria-expanded="true"\]\s*\{([^}]*)\}', css)
+    assert opened is not None and "color: var(--amber)" in opened.group(1)
+    assert ".composer.editing button.region-toggle" not in css, "the open rule says it already"
 
 
 def test_a_card_has_a_1px_cyan_edge_that_doubles_under_the_pointer():
@@ -3876,3 +3892,140 @@ def test_a_build_nobody_states_the_stage_of_is_production_here_as_in_the_daemon(
     body = re.search(r"function odooshStage\(declared, reported\) \{(.*?)\n\}", app_js, re.DOTALL)
     assert body is not None
     assert re.search(r"return reported \|\| declared \|\| 'production';", body.group(1))
+
+
+def test_a_remote_card_is_found_by_the_key_its_startup_log_is_kept_under(app_js):
+    """The log of a session being opened is written into its card by looking the
+    card up under the key the startup is kept by — `card:<id>` for an ssh or an
+    odoo.sh card. A card marked with its name instead was never found, and the
+    well stayed empty until something else drew the page again."""
+    body = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL)
+    assert body is not None
+    assert "card.dataset.container = key;" in body.group(0)
+    assert "dataset.container = entry.name" not in body.group(0)
+    assert body.group(0).index("const key = cardKey(entry.id);") < body.group(0).index("dataset.container")
+
+
+def test_a_click_on_a_card_whose_start_failed_puts_it_away(app_js):
+    """A start that failed leaves its error and its log on the card. Clicking the
+    card folds it back, as a click on a local card folds its picker — no button of
+    its own. Not while the start is still running, and not on a button or in the
+    log, which is for selecting text from."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    remote = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert "card.classList.toggle('start-failed', Boolean(startup?.failed))" in remote
+    click = re.search(r"card\.addEventListener\('click', \(event\) => \{(.*?)\n    \}\);", remote, re.DOTALL)
+    assert click is not None
+    assert "event.target.closest('button, .startup-log')" in click.group(1)
+    assert "state.startups.get(key)?.failed" in click.group(1)
+    assert re.search(r"stopStartup\(key\);\s*renderRemoteCards\(kind\);", click.group(1))
+    built = re.search(r"function buildContainerCard\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert re.search(
+        r"if \(opening\?\.failed && !event\.target\.closest\('\.startup-log'\)\) \{(?:\s*//[^\n]*)*\s*"
+        r"stopStartup\(name\);\s*renderContainers\(\);",
+        built,
+    )
+    assert "card.classList.toggle('start-failed', Boolean(startup?.failed))" in re.search(
+        r"function renderContainers\(.*?\n\}\n", app_js, re.DOTALL
+    ).group(0)
+    assert re.search(r"\.card\.start-failed\s*\{[^}]*cursor:\s*pointer", css)
+
+
+def test_a_card_with_something_in_flight_locks_everything_on_it(app_js):
+    """One rule for every kind of card: while an action on it waits on the
+    instance — opening a session, probing, closing, forgetting, the commit
+    switch — nothing else on that card can be pressed. The lock is `inert` on the
+    button row and the picker rather than `disabled` on each button, so it can
+    never fight the render's own `disabled`, and it cannot be left behind on a
+    card that is reused."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert "busy: new Map()," in app_js
+    busy = re.search(r"async function whileBusy\(.*?\n\}\n", app_js, re.DOTALL)
+    assert busy is not None
+    assert "state.busy.set(key, work)" in busy.group(0)
+    assert re.search(r"finally \{\s*state\.busy\.delete\(key\);", busy.group(0)), "released however it ends"
+    lock = re.search(r"function lockCard\(.*?\n\}\n", app_js, re.DOTALL)
+    assert lock is not None
+    assert "'.row, .picker'" in lock.group(0) and ".inert = busy" in lock.group(0)
+    assert "Boolean(work)" in lock.group(0)
+    remote = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert "lockCard(card, " in remote and "entry.probing" in remote[remote.index("lockCard(card, "):][:200]
+    local = re.search(r"function renderContainers\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert "lockCard(card, " in local and "container.probing" in local[local.index("lockCard(card, "):][:200]
+    for name in ("closeSessionsForTarget", "forgetBuild", "forgetServer", "toggleAgentCommit"):
+        function = re.search(rf"async function {name}\(.*?\n\}}\n", app_js, re.DOTALL)
+        assert function is not None, name
+        assert "whileBusy(" in function.group(0), name
+    # Started sessions are covered by their startup record, not by a second flag.
+    assert "startup && !startup.failed" in re.search(r"function cardWork\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert re.search(r'\.card\[data-busy="true"\][^{]*\{[^}]*opacity', css), "a locked card looks locked"
+
+
+def test_the_control_that_started_the_work_is_the_one_that_turns(app_js):
+    """A locked card says which action locked it: the key that was pressed
+    shows the turning arrow every busy key shows, whatever the kind of card.
+    Open session and Start are drawn by the render that owns them; the rest are
+    found by the name of the work."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    controls = re.search(r"const WORK_CONTROLS = \{(.*?)\};", app_js, re.DOTALL)
+    assert controls is not None
+    for work, selector in (
+        ("probe", ".reprobe"),
+        ("close", ".close-connected"),
+        ("forget", ".forget"),
+        ("commit", ".agent-commit"),
+    ):
+        assert re.search(rf"{work}:\s*'{re.escape(selector)}'", controls.group(1)), work
+    lock = re.search(r"function lockCard\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert "classList.toggle('busy', work === name)" in lock
+    cards = re.search(r"function cardWork\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert "return 'probe'" in cards and "? 'start' : null" in cards
+    for name, work in (
+        ("closeSessionsForTarget", "close"),
+        ("forgetBuild", "forget"),
+        ("forgetServer", "forget"),
+        ("toggleAgentCommit", "commit"),
+    ):
+        function = re.search(rf"async function {name}\(.*?\n\}}\n", app_js, re.DOTALL).group(0)
+        assert re.search(rf"whileBusy\([^,]+, '{work}'", function), name
+    # The commit switch is a label, not a key: its arrow follows the words.
+    assert re.search(r'\.agent-commit\.busy::after\s*\{[^}]*content: "↻"', css)
+    assert re.search(r'\.card\[data-busy="true"\] \.agent-commit:not\(\.busy\)', css)
+
+
+def test_the_card_being_edited_is_dimmed_and_cannot_be_pressed(app_js):
+    """The form says which card it is changing; the card says it too. While it is
+    being edited its buttons are out of reach — it was possible to open or forget
+    a card from under the form that was rewriting it — and it is dimmed, so that
+    it is plain where the work is."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    kinds = re.search(r"const REMOTE_KINDS = \{.*?\n\};", app_js, re.DOTALL).group(0)
+    assert "editing: () => state.buildEditing" in kinds
+    assert "editing: () => state.serverEditing" in kinds
+    remote = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert re.search(r"lockCard\(card,\s*kind\.editing\(\) === entry\.id \? 'edit' : cardWork\(", remote)
+    lock = re.search(r"function lockCard\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert "classList.toggle('being-edited', work === 'edit')" in lock
+    # Entering and leaving the mode redraws the cards, or nothing would change.
+    for name, state_key in (
+        ("editBuild", "buildEditing"), ("editServer", "serverEditing"),
+        ("resetBuildForm", "buildEditing"), ("resetServerForm", "serverEditing"),
+    ):
+        function = re.search(rf"function {name}\(.*?\n\}}\n", app_js, re.DOTALL).group(0)
+        render = "renderBuilds()" if "Build" in name else "renderServers()"
+        assert re.search(rf"state\.{state_key} = [^;]+;\s*{re.escape(render)};", function), name
+    assert re.search(r"\.card\.being-edited\s*\{[^}]*opacity", css)
+    assert re.search(r"#odoosh-builds \.card\.being-edited:hover[^{]*\{[^}]*outline:\s*none", css), (
+        "a card that cannot be opened does not answer the pointer as one"
+    )
+
+
+def test_the_odoosh_note_says_to_press_allow_my_ip_on_odoosh_itself():
+    """A build only answers ssh from an address odoo.sh has been told about; the
+    button for that is on odoo.sh, not here, and nothing on this page can press
+    it. Said where a build is written down — and only there: a plain server has
+    no such button."""
+    note = re.search(r'<p class="composer-note">(.*?)</p>', _composer("odoosh"), re.DOTALL)
+    assert note is not None
+    assert "Allow my IP" in note.group(1)
+    assert "Allow my IP" not in _composer("ssh")

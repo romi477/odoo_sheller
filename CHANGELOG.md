@@ -7,6 +7,45 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- A form folded while a card was being edited kept the amber edge of an open form.
+  Folded, it is a dashed title like any other.
+- The log of an odoo.sh or SSH session being opened now appears while it opens. The
+  card was marked with its name and the log looked it up by its key, so it was never
+  found and the lines showed only when something else redrew the page.
+- A start that failed left its error and log on the card until the next start. A
+  click on the card now puts it away — the local, odoo.sh and SSH cards alike —
+  as a click on a local card folds its picker. A click in the log or on a button
+  does not, and a start still running is not interrupted by one.
+
+### Changed
+
+- A local container's card shows the ports it is published on (`port 8096→8069`)
+  and no longer how long it has been up, and names the Odoo version once, on its
+  second line. `/api/containers` entries gain `ports`.
+- The Connect screen's radios are squares like the agents-may-commit tick, and the
+  titles that fold the server and build forms are cyan while folded and amber while
+  open.
+- One rule for every card, local, odoo.sh and SSH: while something on it waits on
+  the instance — opening a session, probing, closing, forgetting, the commit
+  switch — nothing else on that card can be pressed. Before, Probe, Edit and
+  Forget stayed live beside a session that was opening.
+  The key that was pressed turns the arrow, so a locked card says what locked it.
+- The odoo.sh and server forms end in **Save** and **Cancel**, whether a card is
+  being written or changed; Probe is something a card has, not a form. Cancel of a
+  card not yet written folds the form. Before, the odoo.sh form's key to write a
+  new card was labelled Probe.
+- The note under the odoo.sh form says to press **Allow my IP** on odoo.sh itself
+  before connecting.
+- The note under each form (odoo.sh and server) is as wide as the form, its words
+  still centred under the buttons, instead of a 68-character block with margins.
+- The odoo.sh or SSH card a form is editing is locked and dimmed while the form is
+  open, so it cannot be opened, probed or forgotten from under the form that is
+  rewriting it, and it is plain which card the form belongs to.
+- The `production` badge is tinted red like the other badges instead of filled
+  solid, which shouted over the card's name.
+
 ## [1.13.0] — 2026-10-31
 
 An agent can run SQL through `psql` when the Odoo shell cannot help: a registry

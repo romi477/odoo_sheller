@@ -415,8 +415,9 @@ button.icon:hover:not(:disabled) {
   outline-offset: -1px;
 }
 
-/* Editing is the same form with an edge that says it is not a new card. */
-.composer.editing {
+/* Editing is the same form with an edge that says it is not a new card. Only
+   while it is open: folded, it is a title like any other. */
+.composer.editing:not(.collapsed) {
   border-style: solid;
   border-color: var(--amber);
 }
@@ -449,11 +450,17 @@ button.region-toggle {
   border: 0;
   border-radius: 0;
   background: none;
-  color: inherit;
+  /* Cyan while folded, the colour of what can be opened, where the title's own
+     grey would read as a label; amber while open and under the pointer. */
+  color: var(--cyan);
   font: inherit;
   letter-spacing: inherit;
   text-transform: inherit;
   text-align: left;
+}
+
+button.region-toggle[aria-expanded="true"] {
+  color: var(--amber);
 }
 
 button.region-toggle:hover:not(:disabled) {
@@ -693,26 +700,29 @@ button.region-toggle:active:not(:disabled) {
   color: var(--amber);
 }
 
-/* A build's stage. `staging` is ordinary information; `production` is the one
-   word on this screen worth interrupting for, so it is the only badge that
-   fills solid rather than tinting. */
+/* A build's stage. `staging` is ordinary information; `production` is the word
+   on this screen that matters, so it is red — but tinted, as every badge is. A
+   solid red pill shouted over the card's own name. */
 .badge.stage {
   background: color-mix(in oklch, var(--cyan) 12%, var(--panel));
   color: var(--cyan);
 }
 
 .badge.stage.production {
-  background: var(--red);
-  color: var(--background);
+  /* oklab, not oklch: mixing in a polar space walks the hue from red round to
+     the panel's violet, and the pill turned pink. */
+  background: color-mix(in oklab, var(--red) 14%, var(--panel));
+  color: color-mix(in oklab, var(--red) 70%, var(--text));
   font-weight: 600;
   letter-spacing: 0.04em;
 }
 
 /* --- picking where to connect --- */
 
-/* Where to connect is one of three, so it is a radio group: a ring each, and the
-   chosen one a cyan dot. Real inputs, so the arrows move within the group and a
-   screen reader is told it is one — buttons dressed as radios would not be. */
+/* Where to connect is one of three, so it is a radio group: a square each, and
+   the chosen one filled cyan, shaped like the agents-may-commit tick. Real
+   inputs, so the arrows move within the group and a screen reader is told it is
+   one — buttons dressed as radios would not be. */
 #connect-modes {
   display: flex;
   flex: none;
@@ -759,7 +769,7 @@ button.region-toggle:active:not(:disabled) {
   margin: 0;
   padding: 0;
   border: 1px solid var(--muted-low);
-  border-radius: 50%;
+  border-radius: 3px;
   background: transparent;
   cursor: pointer;
 }
@@ -770,7 +780,8 @@ button.region-toggle:active:not(:disabled) {
 
 #connect-modes input:checked {
   border-color: var(--cyan);
-  background: radial-gradient(circle, var(--cyan) 0 40%, transparent 45%);
+  background: var(--cyan);
+  box-shadow: inset 0 0 0 2px var(--background);
 }
 
 #connect-modes input:focus-visible {
@@ -909,12 +920,12 @@ button.odoosh-save {
   border-color: var(--border);
 }
 
-/* What a form means, in a note of its own: filled, and centred under the
-   buttons it follows. Left-aligned loose text hung off the edge of a card whose
-   buttons are in the middle. A fill, not a dashed edge — the card has one. */
+/* What a form means, in a note of its own: filled, as wide as the form, its words
+   centred under the buttons it follows. Left-aligned loose text hung off the edge
+   of a card whose buttons are in the middle. A fill, not a dashed edge — the card
+   has one. */
 .composer-note {
-  max-width: 68ch;
-  margin: 16px auto 0;
+  margin: 16px 0 0;
   padding: 10px 16px;
   border-radius: 8px;
   background: var(--panel);
@@ -1010,6 +1021,34 @@ button.odoosh-save {
 
 .startup-log:not([hidden]) {
   display: block;
+}
+
+/* A card with something in flight is inert (see lockCard in app.js); the buttons
+   on it look it, as a disabled one does. The one that is working keeps its own
+   look. */
+.card[data-busy="true"] .row button:not(.busy),
+.card[data-busy="true"] .agent-commit:not(.busy) {
+  opacity: 0.45;
+}
+
+/* The card a form is rewriting is dimmed as a whole, and — being out of reach —
+   does not answer the pointer as an openable card does. */
+.card.being-edited {
+  opacity: 0.5;
+}
+
+#odoosh-builds .card.being-edited:hover,
+#ssh-servers .card.being-edited:hover {
+  outline: none;
+}
+
+/* A card whose start failed folds on a click; the pointer says so. */
+.card.start-failed {
+  cursor: pointer;
+}
+
+.card.start-failed .startup-log {
+  cursor: text;
 }
 
 /* Faint, so that a hint is never mistaken for what was typed. Set outright:
@@ -1393,10 +1432,12 @@ input:not([type="radio"], [type="checkbox"]):focus {
   animation: spin 0.8s linear infinite;
 }
 
-/* The label stays as a blurred shape with the spinner sharp on top. The ink
+/* Every key on a card that is working — Open session, Start, Probe, Close
+   session, Forget — is drawn alike. The label stays as a blurred shape with the
+   spinner sharp on top. The ink
    moves into a text-shadow rather than the button taking a `filter`: a filter
    applies to the pseudo-element too, and would blur the spinner with it. */
-.start.busy {
+.card .row button.busy {
   position: relative;
   color: transparent;
   text-shadow: 0 0 1.5px color-mix(in oklch, var(--amber) 80%, transparent);
@@ -1406,7 +1447,7 @@ input:not([type="radio"], [type="checkbox"]):focus {
   opacity: 1;
 }
 
-.start.busy::after {
+.card .row button.busy::after {
   position: absolute;
   left: 50%;
   top: 50%;
@@ -1418,6 +1459,14 @@ input:not([type="radio"], [type="checkbox"]):focus {
   color: oklch(1 0 0);
   content: "↻";
   animation: spin 0.8s linear infinite;
+}
+
+/* The commit switch is a label, not a key: its arrow follows the words. */
+.agent-commit.busy::after {
+  display: inline-block;
+  color: oklch(1 0 0);
+  content: "↻";
+  animation: spin-icon 0.8s linear infinite;
 }
 
 @keyframes spin {

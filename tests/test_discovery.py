@@ -63,6 +63,22 @@ async def test_list_containers_parses_docker_ps_json_lines():
     assert runner.calls[0][0][:3] == ["docker", "ps", "--format"]
 
 
+async def test_list_containers_reports_the_ports_published_to_the_host():
+    payload = (
+        '{"Names":"web","Image":"odoo:19","Status":"Up","ID":"a",'
+        '"Ports":"0.0.0.0:8069->8069/tcp, [::]:8069->8069/tcp, 8072/tcp, 0.0.0.0:9000->8070/tcp"}\n'
+        '{"Names":"pg","Image":"postgres:16","Status":"Up","ID":"b","Ports":"5432/tcp"}\n'
+        '{"Names":"idle","Image":"odoo:19","Status":"Up","ID":"c"}\n'
+    )
+    runner = fake_runner([(0, payload, "")])
+    containers = await discovery.list_containers(runner=runner)
+    # One entry per port however many addresses docker lists it on; what is not
+    # published cannot be reached from here and is left out.
+    assert containers[0]["ports"] == ["8069", "9000→8070"]
+    assert containers[1]["ports"] == []
+    assert containers[2]["ports"] == []
+
+
 async def test_list_containers_reports_docker_failure():
     runner = fake_runner([(1, "", "Cannot connect to the Docker daemon")])
     try:

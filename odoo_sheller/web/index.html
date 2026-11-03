@@ -81,15 +81,12 @@
                 <option value="staging">staging — commit off until granted</option>
               </select>
               <p class="field-error odoosh-error" hidden></p>
-              <div class="odoosh-probe-result probe-note" aria-live="polite" hidden></div>
               <div class="odoosh-actions">
-                <button class="odoosh-add" title="Ask the build what it is: database, Odoo version, and whether it is staging or production. Nothing is opened yet.">Probe</button>
-                <button type="button" class="odoosh-probe" hidden title="Ask the build in the form what it is: database, Odoo version, and whether it is staging or production. Nothing is saved or opened.">Probe</button>
-                <button type="button" class="odoosh-save primary" hidden title="Save the changes over this card.">Save changes</button>
-                <button type="button" class="odoosh-cancel" hidden>Cancel</button>
+                <button type="button" class="odoosh-save primary" title="Write this build down. The build is asked what it is once it is saved; Probe on the card asks again.">Save</button>
+                <button type="button" class="odoosh-cancel" title="Leave the form without writing anything.">Cancel</button>
               </div>
             </div>
-            <p class="composer-note">A build is entered, not discovered — there is no listing for odoo.sh. Probing only reads what the instance says about itself.</p>
+            <p class="composer-note">A build is entered, not discovered — there is no listing for odoo.sh. Before connecting, press <b>Allow my IP</b> on odoo.sh itself, on the build: it lets this machine in over SSH. Once saved, the card's Probe reads what the instance says about itself.</p>
           </div>
         </section>
         <section class="saved" aria-labelledby="odoosh-saved-title">
@@ -131,11 +128,9 @@
                 </select>
               </label>
               <div class="ssh-breakdown" aria-live="polite"></div>
-              <div class="ssh-probe-result probe-note" aria-live="polite" hidden></div>
               <div class="ssh-actions">
-                <button type="button" class="ssh-probe" title="Run the recipe once to see who it lands as, where, and which Odoo. Nothing is started and no database is touched.">Probe</button>
-                <button type="button" class="ssh-save primary" title="Write this card down.">Save</button>
-                <button type="button" class="ssh-cancel" hidden>Cancel</button>
+                <button type="button" class="ssh-save primary" title="Write this card down. Probe on the card then runs the recipe once to see who it lands as, where, and which Odoo.">Save</button>
+                <button type="button" class="ssh-cancel" title="Leave the form without writing anything.">Cancel</button>
               </div>
             </form>
             <p class="composer-note">A server is written down by whoever can log in: <b>Access</b> is how to arrive as the right user, <b>Launch</b> is what to run once there. Access is a prefix — it ends where a command may follow, which is why steps become one line. Both are read as data and never run on this machine; an unknown host key is refused until you trust it once from a terminal.</p>

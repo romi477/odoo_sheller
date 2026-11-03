@@ -538,6 +538,32 @@ async def _docker(
     return proc.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
 
+_PUBLISHED = re.compile(r":(\d+(?:-\d+)?)->(\d+(?:-\d+)?)/(\w+)$")
+
+
+def published_ports(raw: str | None) -> list[str]:
+    """The ports a container answers on from this machine, as a human reads them.
+
+    docker ps lists each published port once per address — `0.0.0.0:8069->8069/tcp,
+    [::]:8069->8069/tcp` — and, beside them, the ports the image merely exposes,
+    which nothing outside can reach. Only the published ones are kept, once each:
+    `8069` when the host and container ports are the same, `9000→8070` when not.
+    """
+    ports: list[str] = []
+    for part in (raw or "").split(","):
+        found = _PUBLISHED.search(part.strip())
+        if not found:
+            continue
+        host, inside, proto = found.groups()
+        label = host if host == inside else f"{host}→{inside}"
+        if proto != "tcp":
+            label += f"/{proto}"
+        if label not in ports:
+            ports.append(label)
+
+    return ports
+
+
 async def list_containers(runner=None) -> list[dict]:
     runner = runner or _docker
     code, out, err = await runner([docker_bin(), "ps", "--format", "json"], None)
@@ -553,6 +579,7 @@ async def list_containers(runner=None) -> list[dict]:
             "name": raw.get("Names"),
             "image": raw.get("Image"),
             "status": raw.get("Status"),
+            "ports": published_ports(raw.get("Ports")),
         })
 
     return containers

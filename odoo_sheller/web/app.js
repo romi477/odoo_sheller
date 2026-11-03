@@ -22,6 +22,9 @@ const state = {
   journals: [],
   expandedJournalGroups: new Set(),
   startups: new Map(),
+  // Cards with an action in flight that is not a start or a probe — closing,
+  // forgetting, the commit switch — and what that action is. See whileBusy.
+  busy: new Map(),
   connectMode: 'local',
   builds: [],
   buildsError: null,
@@ -508,6 +511,80 @@ function sessionsForTarget(key) {
   return [...state.sessions.values()].filter((record) => targetKey(record.info) === key);
 }
 
+// One rule for every card, whatever it is a card of: while an action on it
+// waits on the instance — opening a session, probing, closing, forgetting, the
+// commit switch — nothing else on it can be pressed. Opening a session with Probe
+// and Forget still live beside it is how two requests end up racing for one card.
+function renderCards() {
+  renderContainers();
+  renderBuilds();
+  renderServers();
+}
+
+async function whileBusy(key, work, action) {
+  state.busy.set(key, work);
+  renderCards();
+  try {
+
+    return await action();
+  } finally {
+    state.busy.delete(key);
+    renderCards();
+  }
+}
+
+// The key that was pressed is the one that turns, so that a locked card says
+// which action locked it. Open session and Start are drawn by the render that
+// owns them; every other action finds its control here.
+const WORK_CONTROLS = {
+  probe: '.reprobe',
+  close: '.close-connected',
+  forget: '.forget',
+  commit: '.agent-commit',
+};
+
+// What a card is waiting on, by name, or null. A start is work for as long as its
+// record is not a failure; a probe says so on the card's own entry; everything
+// else went through whileBusy.
+function cardWork(key, probing) {
+  const startup = state.startups.get(key);
+  if (probing) {
+
+    return 'probe';
+  }
+  if (state.busy.has(key)) {
+
+    return state.busy.get(key);
+  }
+
+  return startup && !startup.failed ? 'start' : null;
+}
+
+// `inert`, not `disabled` on each button: the render sets `disabled` for its own
+// reasons on every pass, and a card is reused, so a second writer would have to
+// remember what to put back. Inert takes the row and the picker out of reach of
+// the pointer and the keyboard and is undone by one assignment.
+function lockCard(card, work) {
+  const busy = Boolean(work);
+  card.querySelectorAll('.row, .picker').forEach((part) => {
+    part.inert = busy;
+  });
+  Object.entries(WORK_CONTROLS).forEach(([name, selector]) => {
+    const control = card.querySelector(selector);
+    if (control) {
+      control.classList.toggle('busy', work === name);
+    }
+  });
+  // The card a form is rewriting: locked like any busy one, and dimmed as a
+  // whole, so it is plain where the work is.
+  card.classList.toggle('being-edited', work === 'edit');
+  if (busy) {
+    card.dataset.busy = 'true';
+  } else {
+    delete card.dataset.busy;
+  }
+}
+
 // A card on Connect stands for a target, not for one session, and a target can
 // hold several — another database locally, a second shell on the same build.
 // Closing them one click at a time made the card lie about what it was showing.
@@ -530,9 +607,9 @@ async function closeSessionsForTarget(key) {
   }
   // One question for the batch: the answer is carried into each close rather
   // than asked again per session.
-  await Promise.allSettled(
+  await whileBusy(key, 'close', () => Promise.allSettled(
     records.map((record) => closeSession(record.info.id, false, {confirmed: true})),
-  );
+  ));
 }
 
 function connectedLabel(records) {
@@ -609,52 +686,6 @@ function showBuildError(message) {
   element.textContent = message || '';
 }
 
-function showBuildProbe(text, {error = false} = {}) {
-  const result = document.querySelector('.odoosh-probe-result');
-  result.hidden = !text;
-  result.textContent = text || '';
-  result.classList.toggle('error', error);
-}
-
-// A probe answered for the form as it was: a reset or another probe since then
-// makes the answer about something no longer there.
-let buildProbeSerial = 0;
-
-// What the build in the form says it is — while a card is being changed, before
-// anything is saved. The card keeps what its own last probe said: the form is
-// not the card yet.
-async function probeBuildForm() {
-  const form = buildFormElement();
-  const build = form.querySelector('.odoosh-build').value.trim();
-  const host = form.querySelector('.odoosh-host').value.trim();
-  if (!build || !host) {
-    showBuildError('A build needs its id and its hostname.');
-
-    return;
-  }
-  const serial = ++buildProbeSerial;
-  showBuildProbe('probing build…');
-  let text;
-  let error = false;
-  try {
-    const probe = await withAdminRetry(() => api.post(
-      '/api/targets/probe', {kind: 'odoosh', build, host}, adminHeaders(),
-    ));
-    if (probe.ok && probe.supported) {
-      text = [probe.stage, `Odoo ${probe.odoo_version}`, probe.db_name].filter(Boolean).join(' · ');
-    } else {
-      text = probe.error || 'The probe failed.';
-      error = true;
-    }
-  } catch (failure) {
-    text = failure.message;
-    error = true;
-  }
-  if (serial === buildProbeSerial) {
-    showBuildProbe(text, {error});
-  }
-}
-
 async function saveBuildForm() {
   const form = buildFormElement();
   const name = form.querySelector('.odoosh-name').value.trim();
@@ -691,19 +722,24 @@ async function saveBuildForm() {
 function resetBuildForm() {
   const form = buildFormElement();
   state.buildEditing = null;
+  renderBuilds();
   composerEditing('odoosh', null);
   setComposerCollapsed('odoosh', composerWasCollapsed('odoosh'), false);
   form.querySelector('.odoosh-name').value = '';
   form.querySelector('.odoosh-build').value = '';
   form.querySelector('.odoosh-host').value = '';
   form.querySelector('.odoosh-stage').value = 'production';
-  form.querySelector('.odoosh-add').hidden = false;
-  form.querySelector('.odoosh-probe').hidden = true;
-  form.querySelector('.odoosh-save').hidden = true;
-  form.querySelector('.odoosh-cancel').hidden = true;
-  buildProbeSerial += 1;
   showBuildError('');
-  showBuildProbe('');
+}
+
+// Cancel of a card being changed gives the form back as it was. Cancel of one
+// not yet written has nothing to give back: the form folds, as it was opened.
+function cancelBuildForm() {
+  const editing = state.buildEditing;
+  resetBuildForm();
+  if (!editing) {
+    setComposerCollapsed('odoosh', true);
+  }
 }
 
 // The stage a build is opened as: its card's or its own, the stricter — the
@@ -735,6 +771,7 @@ function editBuild(entry) {
   const form = buildFormElement();
   resetBuildForm();
   state.buildEditing = entry.id;
+  renderBuilds();
   composerEditing('odoosh', entry.name);
   // A change made in a folded form would be one nobody can see.
   setComposerCollapsed('odoosh', false, false);
@@ -744,19 +781,15 @@ function editBuild(entry) {
   form.querySelector('.odoosh-build').value = entry.build;
   form.querySelector('.odoosh-host').value = entry.host;
   form.querySelector('.odoosh-stage').value = buildFormStage(entry);
-  // As a server card is changed: Probe asks and writes nothing, Save changes
-  // writes. The add form's one key does both, which is right for a new card.
-  form.querySelector('.odoosh-add').hidden = true;
-  form.querySelector('.odoosh-probe').hidden = false;
-  form.querySelector('.odoosh-save').hidden = false;
-  form.querySelector('.odoosh-cancel').hidden = false;
   form.scrollIntoView({block: 'nearest'});
   form.querySelector('.odoosh-name').focus();
 }
 
 async function forgetBuild(entry) {
   try {
-    await withAdminRetry(() => api.del(`/api/targets/${entry.id}`, adminHeaders()));
+    await whileBusy(cardKey(entry.id), 'forget', () => withAdminRetry(
+      () => api.del(`/api/targets/${entry.id}`, adminHeaders()),
+    ));
   } catch (error) {
     noticeDialog(`Could not remove the build: ${error.message}`);
 
@@ -923,58 +956,6 @@ async function parseServerForm() {
   }
 }
 
-function showServerProbe(text, {error = false} = {}) {
-  const result = serverFormElement().querySelector('.ssh-probe-result');
-  result.hidden = !text;
-  result.textContent = text || '';
-  result.classList.toggle('error', error);
-}
-
-function describeServerProbe(probe) {
-  const parts = [
-    `Logs in as ${probe.login_user || '?'}, runs as ${probe.effective_user} on ${probe.host}`,
-    probe.python ? `Python ${probe.python}` : null,
-    probe.odoo_version ? `Odoo ${probe.odoo_version}` : 'Odoo version not readable here — checked when a session starts',
-    probe.config_readable ? 'config readable' : null,
-  ];
-  if (probe.warning) {
-    parts.push(probe.warning);
-  }
-  if (probe.launch_warning) {
-    parts.push(`Careful: ${probe.launch_warning}`);
-  }
-
-  return parts.filter(Boolean).join(' · ');
-}
-
-async function probeServerForm() {
-  const {access, launch} = serverFields();
-  if (!access || !launch) {
-    showFieldErrors({access: access ? '' : 'Write how to arrive first.', launch: launch ? '' : 'Write what to run first.'});
-
-    return;
-  }
-  showServerProbe('probing server…');
-  try {
-    const probe = await withAdminRetry(() => api.post(
-      '/api/targets/probe', {kind: 'ssh', access, launch}, adminHeaders(),
-    ));
-    if (probe.ok && probe.supported) {
-      showServerProbe(describeServerProbe(probe));
-    } else {
-      showServerProbe(probe.error || 'The probe failed.', {error: true});
-    }
-  } catch (error) {
-    const detail = error.detail;
-    if (error.status === 422 && detail?.error === 'invalid_recipe') {
-      showServerProbe('');
-      showFieldErrors({[detail.field || 'access']: detail.message});
-    } else {
-      showServerProbe(error.message, {error: true});
-    }
-  }
-}
-
 async function saveServerForm() {
   const fields = serverFields();
   if (!fields.name) {
@@ -1058,24 +1039,31 @@ function setComposerCollapsed(mode, collapsed, remember = true) {
 function resetServerForm() {
   const form = serverFormElement();
   state.serverEditing = null;
+  renderServers();
   composerEditing('ssh', null);
   setComposerCollapsed('ssh', composerWasCollapsed('ssh'), false);
   form.querySelector('.ssh-name').value = '';
   form.querySelector('.ssh-access').value = '';
   form.querySelector('.ssh-launch').value = '';
   form.querySelector('.ssh-stage').value = 'production';
-  form.querySelector('.ssh-save').textContent = 'Save';
-  form.querySelector('.ssh-cancel').hidden = true;
   serverParseSerial += 1;
   showFieldErrors({});
-  showServerProbe('');
   form.querySelector('.ssh-breakdown').replaceChildren();
+}
+
+function cancelServerForm() {
+  const editing = state.serverEditing;
+  resetServerForm();
+  if (!editing) {
+    setComposerCollapsed('ssh', true);
+  }
 }
 
 function editServer(entry) {
   const form = serverFormElement();
   resetServerForm();
   state.serverEditing = entry.id;
+  renderServers();
   composerEditing('ssh', entry.name);
   // A change made in a folded form would be one nobody can see.
   setComposerCollapsed('ssh', false, false);
@@ -1083,15 +1071,15 @@ function editServer(entry) {
   form.querySelector('.ssh-access').value = entry.access;
   form.querySelector('.ssh-launch').value = entry.launch;
   form.querySelector('.ssh-stage').value = entry.stage;
-  form.querySelector('.ssh-save').textContent = 'Save changes';
-  form.querySelector('.ssh-cancel').hidden = false;
   form.scrollIntoView({block: 'nearest'});
   parseServerForm();
 }
 
 async function forgetServer(entry) {
   try {
-    await withAdminRetry(() => api.del(`/api/targets/${entry.id}`, adminHeaders()));
+    await whileBusy(cardKey(entry.id), 'forget', () => withAdminRetry(
+      () => api.del(`/api/targets/${entry.id}`, adminHeaders()),
+    ));
   } catch (error) {
     noticeDialog(`Could not remove the server: ${error.message}`);
 
@@ -1311,6 +1299,7 @@ const REMOTE_KINDS = {
     count: '#odoosh-count',
     noun: 'build',
     entries: () => state.builds,
+    editing: () => state.buildEditing,
     error: () => state.buildsError,
     empty: 'No builds yet. Open Add a build above and enter one.',
     probing: 'probing build…',
@@ -1335,6 +1324,7 @@ const REMOTE_KINDS = {
     count: '#ssh-count',
     noun: 'server',
     entries: () => state.servers,
+    editing: () => state.serverEditing,
     error: () => state.serversError,
     empty: 'No servers yet. Open New server above and write one.',
     probing: 'probing server…',
@@ -1389,7 +1379,9 @@ function renderRemoteCards(kind) {
     const fragment = document.querySelector(kind.template).content.cloneNode(true);
     const card = fragment.querySelector('.card');
     const probe = entry.probe || {};
-    card.dataset.container = entry.name;
+    // The key the startup log is kept under, so appendStartupLine finds the card.
+    const key = cardKey(entry.id);
+    card.dataset.container = key;
     card.querySelector('.name').textContent = entry.name;
 
     const stage = card.querySelector('.stage');
@@ -1436,7 +1428,6 @@ function renderRemoteCards(kind) {
     card.querySelector('.forget').addEventListener('click', () => kind.forget(entry));
     card.querySelector('.edit').addEventListener('click', () => kind.edit(entry));
 
-    const key = cardKey(entry.id);
     const open = sessionsForTarget(key);
     const connected = card.querySelector('.connected');
     const close = card.querySelector('.close-connected');
@@ -1461,6 +1452,19 @@ function renderRemoteCards(kind) {
 
     const startup = state.startups.get(key);
     const start = card.querySelector('.start');
+    lockCard(card, kind.editing() === entry.id ? 'edit' : cardWork(key, entry.probing));
+    // A start that failed is put away by a click on the card, as a local card
+    // folds its picker. One still running is not: it ends by itself. A button
+    // and the log are left alone — the log is for selecting text from.
+    card.classList.toggle('start-failed', Boolean(startup?.failed));
+    card.addEventListener('click', (event) => {
+      if (!state.startups.get(key)?.failed || event.target.closest('button, .startup-log')) {
+
+        return;
+      }
+      stopStartup(key);
+      renderRemoteCards(kind);
+    });
     if (startup) {
       const well = card.querySelector('.startup-log');
       start.disabled = !startup.failed;
@@ -1541,6 +1545,11 @@ function buildContainerCard(name) {
 
       return;
     }
+    if (opening?.failed && !event.target.closest('.startup-log')) {
+      // The same click that folds the picker puts the failed start away.
+      stopStartup(name);
+      renderContainers();
+    }
     closeAllPickers();
   });
   // Bound here, not per render: the card outlives the render now, so binding
@@ -1565,6 +1574,18 @@ function notATarget(container) {
   return NOT_A_TARGET.includes(container.probe?.error_code);
 }
 
+/// The card's meta line: image, the ports it answers on from here — what to type
+/// after localhost — and, when the line under it is an error and so does not say
+/// it, the Odoo version. Not how long it has been up: every container listed is
+/// running, and the age is not something to act on.
+function containerFacts(container, version) {
+  const count = container.ports?.length || 0;
+  const ports = count ? `${count > 1 ? 'ports' : 'port'} ${container.ports.join(', ')}` : '';
+  const facts = [container.image || 'unknown image', ports, version];
+
+  return facts.filter(Boolean).join(' · ');
+}
+
 function renderContainers() {
   const list = document.querySelector('#containers');
   const cards = state.containerCards;
@@ -1582,7 +1603,7 @@ function renderContainers() {
     // template starts hidden or enabled has to be put back explicitly. The
     // picker is the exception: it is the user's to open and close.
     card.classList.toggle('probing', Boolean(container.probing));
-    setText(card.querySelector('.meta'), `${container.image || 'unknown image'} · ${container.status || ''}`);
+    setText(card.querySelector('.meta'), containerFacts(container));
     card.querySelector('.open').disabled = !container.probe?.ok || !container.probe?.supported;
     // The switch's tooltip follows it: the warning only while it is on.
     showAgentCommit(card, Boolean(container.agent_commit));
@@ -1607,13 +1628,11 @@ function renderContainers() {
     } else if (container.probe.error) {
       setText(note, container.probe.error || DATABASE_LIST_FALLBACK);
       note.classList.add('error');
-      setText(card.querySelector('.meta'),
-        `${container.image || 'unknown image'} · ${container.status || ''} · Odoo ${container.probe.odoo_version}`);
+      setText(card.querySelector('.meta'), containerFacts(container, `Odoo ${container.probe.odoo_version}`));
     } else {
       const config = container.probe.config ? ` · ${container.probe.config}` : '';
       setText(note, `Odoo ${container.probe.odoo_version} · Python ${container.probe.python}${config}`);
-      setText(card.querySelector('.meta'),
-        `${container.image || 'unknown image'} · ${container.status || ''} · Odoo ${container.probe.odoo_version}`);
+      setText(card.querySelector('.meta'), containerFacts(container));
     }
 
     const badge = card.querySelector('.connected');
@@ -1632,6 +1651,8 @@ function renderContainers() {
     const start = card.querySelector('.start');
     const well = card.querySelector('.startup-log');
     const startup = state.startups.get(container.name);
+    card.classList.toggle('start-failed', Boolean(startup?.failed));
+    lockCard(card, cardWork(container.name, container.probing));
     if (startup) {
       // The picker needs a database list; the log well does not. A refresh
       // mid-start leaves probe null, and reading it here once took the whole
@@ -1861,20 +1882,20 @@ async function toggleAgentCommit(name) {
 
     return;
   }
-  const box = card.querySelector('.agent-commit input');
   const path = `/api/agent-commit/${encodeURIComponent(name)}`;
-  box.disabled = true;
-  try {
-    const answer = await withAdminRetry(() => (container.agent_commit
-      ? api.del(path, adminHeaders())
-      : api.put(path, {}, adminHeaders())));
-    container.agent_commit = answer.on;
-  } catch (error) {
-    noticeDialog(`Could not change "agents may commit" on ${name}: ${error.message}`);
-  } finally {
-    box.disabled = false;
-    showAgentCommit(card, Boolean(container.agent_commit));
-  }
+  await whileBusy(name, 'commit', async () => {
+    try {
+      const answer = await withAdminRetry(() => (container.agent_commit
+        ? api.del(path, adminHeaders())
+        : api.put(path, {}, adminHeaders())));
+      container.agent_commit = answer.on;
+    } catch (error) {
+      noticeDialog(`Could not change "agents may commit" on ${name}: ${error.message}`);
+    }
+  });
+  // The render the lock ends with has already drawn the answer; this is for a
+  // card the render did not reach.
+  showAgentCommit(card, Boolean(container.agent_commit));
 }
 
 /// The target as an agent needs to be told it: which container, which
@@ -4362,9 +4383,8 @@ document.querySelectorAll('#connect-modes [data-connect-mode]').forEach((radio) 
     form.querySelector(selector).addEventListener('input', scheduleServerParse);
   });
   form.querySelector('.ssh-name').addEventListener('input', () => showFieldErrors({}));
-  form.querySelector('.ssh-probe').addEventListener('click', probeServerForm);
   form.querySelector('.ssh-save').addEventListener('click', saveServerForm);
-  form.querySelector('.ssh-cancel').addEventListener('click', resetServerForm);
+  form.querySelector('.ssh-cancel').addEventListener('click', cancelServerForm);
 }
 Object.keys(COMPOSERS).forEach((mode) => {
   const root = document.querySelector(COMPOSERS[mode].root);
@@ -4375,17 +4395,10 @@ Object.keys(COMPOSERS).forEach((mode) => {
 });
 {
   const form = buildFormElement();
-  form.querySelector('.odoosh-add').addEventListener('click', saveBuildForm);
-  form.querySelector('.odoosh-probe').addEventListener('click', probeBuildForm);
   form.querySelector('.odoosh-save').addEventListener('click', saveBuildForm);
-  form.querySelector('.odoosh-cancel').addEventListener('click', resetBuildForm);
+  form.querySelector('.odoosh-cancel').addEventListener('click', cancelBuildForm);
   form.querySelectorAll('input').forEach((input) => {
-    input.addEventListener('input', () => {
-      // What was probed is no longer what the form says.
-      buildProbeSerial += 1;
-      showBuildError('');
-      showBuildProbe('');
-    });
+    input.addEventListener('input', () => showBuildError(''));
   });
 }
 

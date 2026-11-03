@@ -32,6 +32,24 @@ containers are **discovered** (cards you did not ask for), an odoo.sh build and
 a server are **entered**. The mode you used last comes back on a reload, the way
 the screen does.
 
+A local card's meta line reads image, then the ports the container answers on from
+this machine: `port 8096→8069` is host port to container port, `port 8069` when
+they are the same. Only published ports are shown; one an image merely exposes
+cannot be reached from here. How long it has been up is left out — every listed
+container is running. The Odoo version is on the line under it, with Python and
+the config path; it joins the meta line only when that line is an error.
+
+A card with something in flight is locked: while a session opens, a probe runs, or
+sessions are closed, a card is forgotten, or the commit switch is changed, every
+button on that card, and the switch, is out of reach and drawn dimmed. It is the
+same on all three kinds of card; the lock ends with the action, however it ends.
+The control that was pressed — Open session, Probe, Close session, Forget, the
+switch — turns the arrow every busy key turns, so the card says what locked it.
+A start that failed does not lock it: a click on the card puts the failure away.
+The card a form is editing is locked the same way and dimmed as a whole for as
+long as the form is open — Save, Cancel, or choosing another card to edit gives
+it back.
+
 The cards of the two entered kinds are kept by the daemon, not by the page
 (`~/.odoo-sheller/targets.json`): a desktop-app frame does not keep
 `localStorage`. Writing, changing, deleting and probing one needs the admin key,
@@ -42,7 +60,8 @@ first opened.
 On each of the two entered screens there are two regions, and nothing else. The
 **form** is a dashed panel under its own title (*New server*, *Add a build*): it
 is where a card is written, and it is drawn as a draft so that it does not read as
-one more card; its title turns amber under the pointer. Open — for a new card,
+one more card; its title and arrow are cyan, the colour of what can be opened,
+and turn amber under the pointer. Open — for a new card,
 or for one being changed, when it says *Editing ‹name›* — its edge is solid
 amber, the colour of writing here. Under it, headed by a rule, are the **saved
 cards** — a title with a count (*Saved servers · 2*) and the cards themselves.
@@ -153,9 +172,14 @@ restart or a config change.
 
 Three fields — a name, the build id and its hostname — and under them the
 **stage**, the same choice a server card has, `production` until changed. Then
-**Probe**, which only reads what the instance says about itself: its database,
-its Odoo version, and whether it is `staging` or `production`. Nothing is
-opened by probing.
+**Save** and **Cancel** — the form has no Probe: probing is something a card has.
+A build only answers SSH from an address odoo.sh has been told about, and the
+button for that is on odoo.sh, not here: press **Allow my IP** on the build there
+first (the form's note says so; the allowance lasts an hour and can take up to five
+minutes to apply). Saving writes the card and then asks the build once what it is, and the card's
+**Probe** asks again: its database, its Odoo version, and whether it is `staging`
+or `production`. Nothing is opened by probing. **Cancel** of a card not yet
+written folds the form.
 
 The build reports a stage of its own, and the card and the session go by the
 stricter of the two: `production` if either says so. A card can put a build
@@ -166,18 +190,18 @@ builds had a stage goes by what its build reports; editing it offers
 The name is optional, and a card without one is called by its build id. It is
 worth giving: odoo.sh makes a new build, with a new hostname, on every push,
 and **Edit** puts the card back in the form to follow it — name, build,
-hostname and stage. Changing a card offers what changing a server card does: **Probe**
-asks the build in the form and writes nothing, the card keeping what its own
-last probe said; **Save changes** writes over the card; **Cancel** drops the
-change. The name is what stays. A card with a name of
+hostname and stage. Changing a card offers what changing a server card does:
+**Save** writes over the card and **Cancel** drops the change. The name
+is what stays. A card with a name of
 its own also says which build it is, under its title. Two cards are never
 called the same, and a name the daemon refuses is said under the form.
 
-A probed build becomes a card and stays in the list, so a 40-character
+A saved build becomes a card and stays in the list, so a 40-character
 hostname is typed once rather than once per session. Each card carries what
 its last probe said, its stage badge the stricter of its own and the build's,
 and `production` is the one badge on this screen that
-fills solid rather than tinting — it is the word worth interrupting for. The
+is red — tinted like the rest, not filled; the word and its weight say what the
+colour does not shout. The
 **×** removes a card and changes nothing on the instance; it is disabled
 while the build has a session open, and says so, because this card is the
 only record of that hostname on this machine and the session would be left
@@ -217,7 +241,7 @@ whoever can log in writes it down, in two fields and a few more:
   written. Add `--no-http` (or `--workers=0`): a server whose config has `workers`
   above 0 makes the shell bind its HTTP port first, and fails beside the running
   service with "Address already in use". The form warns when neither is there, and
-  Probe says what the config will do.
+  the card's Probe says what the config will do.
 - **Stage** — `production` (the default: only you commit, one commit at a time,
   after typing its name; an agent never writes there) or `staging` (commit off
   until you grant it). Nothing on a plain server says what it is, so you do.
@@ -235,8 +259,9 @@ machine", "launch starts with an absolute path…"). Nothing typed is ever run o
 this machine; the form shows the admin key's absence as one line with a button,
 never a dialog in the middle of typing.
 
-**Probe** runs the recipe once and says who it landed as, where, which Python and
-Odoo, and whether the config is readable by that user; **Save** writes the card.
+**Save** writes the card and **Cancel** leaves the form; neither form has a Probe.
+A card's **Probe** runs the recipe once and says who it landed as, where, which Python and
+Odoo, and whether the config is readable by that user.
 A card shows `user@host:port`, who it runs as, the stage, and an *untested* badge
 for Odoo 13 and 14. **edit** puts it back in the form; **×** removes it, disabled
 while a session is open on it. Opening one waits the same way an odoo.sh build
