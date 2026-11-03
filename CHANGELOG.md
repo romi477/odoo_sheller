@@ -61,6 +61,9 @@ surface; `/api/containers` entries gain one field, `ports`.
   without pressing Probe left the card silent about its version.
 - **Edit** is disabled on an odoo.sh or a server card while a session is open on it,
   as **×** is.
+- In the odoo.sh form the stage is as wide as the name and the build id together, and
+  the hostname has the rest, a little more than half; on a narrow window the fields
+  go one to a row.
 - A cell's result is lilac instead of green, which sat badly beside the cyan frame.
   Green stays on string literals in the editor and on the copied tick.
 - The amber *untested* badge, shown for Odoo 13 and 14, is a red line under the card's

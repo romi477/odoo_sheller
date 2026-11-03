@@ -803,26 +803,16 @@ button.region-toggle:active:not(:disabled) {
 }
 
 .odoosh-fields {
-  display: flex;
+  display: grid;
+  /* Name and build id are one block, the hostname the other, a little the wider:
+     it is the long one. The stage under them is the first block's width. */
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 3.6fr);
   gap: 8px;
-  flex-wrap: wrap;
 }
 
-/* The keys are a row of their own, so the fields have the whole width. The
-   build id is short and fixed; the name has room to be read; the hostname, the
-   long one, grows twice as fast as the name. */
-.odoosh-name {
-  flex: 1 1 12rem;
-  min-width: 0;
-}
-
-.odoosh-build {
-  flex: 0 0 10rem;
-  min-width: 0;
-}
-
+.odoosh-name,
+.odoosh-build,
 .odoosh-host {
-  flex: 2 1 16rem;
   min-width: 0;
 }
 
@@ -865,10 +855,21 @@ button.region-toggle:active:not(:disabled) {
 
 .odoosh-stage {
   display: block;
+  grid-column: 1 / 3;
   width: 100%;
-  max-width: 56ch;
   min-width: 0;
-  margin-top: 8px;
+}
+
+/* No room for two blocks: one to a row. After the stage's own rule — a span of two
+   columns in a one-column grid would make a second one. */
+@media (max-width: 720px) {
+  .odoosh-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .odoosh-stage {
+    grid-column: 1;
+  }
 }
 
 .odoosh-error {

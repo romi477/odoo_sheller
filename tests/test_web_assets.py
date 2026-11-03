@@ -1731,7 +1731,7 @@ def test_session_keyboard_is_a_fixed_two_row_grid(markup, app_js):
     editor = re.search(r"\.editor-pane\s*\{([^}]*)\}", css)
     assert editor is not None
     assert "16px" not in editor.group(1)
-    assert "grid-column:" not in css
+    assert "grid-column:" not in keys_rule.group(1), "no key spans a cell of the keyboard"
     head_rule = [
         match.group(1)
         for match in re.finditer(r"\.session-head\s*\{([^}]*)\}", css)
@@ -2064,25 +2064,42 @@ def test_the_build_form_asks_for_a_name_first_and_does_not_insist(markup):
     assert "optional" in name
 
 
-def test_the_row_of_fields_gives_the_name_room_and_the_hostname_more():
-    """The keys went to a row of their own, and the room they left is the
-    name's. The build id stays fixed; the hostname, the long one, still grows
-    the faster."""
+def test_the_stage_is_as_wide_as_the_name_and_the_build_id_together():
+    """Name and build id are one column's worth, the hostname the other's, and the
+    stage under them is as wide as the first: the form reads as two blocks, and the
+    hostname — the long one — has a little more than half."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
-
-    def flex(selector):
-        rule = re.search(rf"\n\.{selector}\s*\{{([^}}]*)\}}", css)
-        assert rule is not None, selector
-        assert "min-width: 0" in rule.group(1), "an input's own width would win otherwise"
-        grow, _shrink, basis = re.search(r"flex:\s*(\S+) (\S+) (\S+);", rule.group(1)).groups()
-
-        return float(grow), float(basis.removesuffix("rem"))
-
-    name, build, host = flex("odoosh-name"), flex("odoosh-build"), flex("odoosh-host")
-    assert build[0] == 0, "the build id is short and stays so"
-    assert name[1] > build[1], "the name is wider than the build id"
-    assert 0 < name[0] < host[0], "both grow, the hostname faster"
-    assert host[1] > name[1]
+    fields = re.search(r"\n\.odoosh-fields\s*\{([^}]*)\}", css)
+    assert fields is not None
+    assert "display: grid" in fields.group(1)
+    tracks = re.search(r"grid-template-columns:([^;]*);", fields.group(1))
+    assert tracks is not None
+    name, build, host = (float(value) for value in re.findall(r"([\d.]+)fr", tracks.group(1)))
+    assert name > build, "the name has room to be read; the build id is short"
+    assert name + build < host < 2 * (name + build), "the hostname gets a little more than half"
+    inputs = re.search(
+        r"\n\.odoosh-name,\s*\.odoosh-build,\s*\.odoosh-host\s*\{([^}]*)\}", css
+    )
+    assert inputs is not None and "min-width: 0" in inputs.group(1), (
+        "an input's own width would win otherwise"
+    )
+    stage = re.search(r"\n\.odoosh-stage\s*\{([^}]*)\}", css)
+    assert stage is not None
+    assert "grid-column: 1 / 3" in stage.group(1), "under the name and the build id, no wider"
+    assert "max-width" not in stage.group(1)
+    narrow = re.search(
+        r"@media \(max-width: \d+px\)\s*\{\s*\.odoosh-fields\s*\{[^}]*grid-template-columns:\s*1fr;[^}]*\}"
+        r"\s*\.odoosh-stage\s*\{[^}]*grid-column:\s*1;",
+        css,
+    )
+    assert narrow is not None, "one to a row where there is no room for two blocks"
+    assert narrow.start() > stage.start(), (
+        "after the stage's own rule: a span of two columns in a one-column grid makes a second one"
+    )
+    form = re.search(r'<div class="odoosh-fields">(.*?)</div>', _page(), re.DOTALL).group(1)
+    assert form.index('class="odoosh-host') < form.index('<select class="odoosh-stage"'), (
+        "the stage is the fourth child of the grid, on the row under the three"
+    )
 
 
 def test_a_build_card_is_edited_like_a_server_card(app_js):
