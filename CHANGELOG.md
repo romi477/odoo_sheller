@@ -53,6 +53,8 @@ surface; `/api/containers` entries gain one field, `ports`.
   rewriting it, and it is plain which card the form belongs to.
 - The `production` badge is tinted red like the other badges instead of filled
   solid, which shouted over the card's name.
+- The × that forgets an odoo.sh or a server card turns amber under the pointer, not
+  cyan like the keys that only look.
 
 ## [1.13.0] — 2026-10-31
 

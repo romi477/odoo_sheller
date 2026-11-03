@@ -4066,3 +4066,14 @@ def test_the_odoosh_note_says_to_press_allow_my_ip_on_odoosh_itself():
     assert note is not None
     assert "Allow my IP" in note.group(1)
     assert "Allow my IP" not in _composer("ssh")
+
+
+def test_the_cross_that_forgets_a_card_turns_amber_under_the_pointer():
+    """The other icon keys turn cyan; this one removes a card, so it takes the
+    colour of an act that writes — on the odoo.sh and the server cards alike, since
+    both carry the same key."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert re.search(
+        r"button\.icon\.forget:hover:not\(:disabled\)\s*\{[^}]*color:\s*var\(--amber\)", css
+    )
+    assert _page().count('class="forget icon"') == 2

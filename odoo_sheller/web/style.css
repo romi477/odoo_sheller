@@ -339,6 +339,12 @@ button.icon:hover:not(:disabled) {
   border-color: var(--chrome-edge);
 }
 
+/* The cross on a build or server card removes it: amber, as writing is, not the
+   cyan of the keys that only look. */
+button.icon.forget:hover:not(:disabled) {
+  color: var(--amber);
+}
+
 #refresh.spinning {
   color: oklch(1 0 0);
   pointer-events: none;
