@@ -55,6 +55,8 @@ surface; `/api/containers` entries gain one field, `ports`.
   solid, which shouted over the card's name.
 - The × that forgets an odoo.sh or a server card turns amber under the pointer, not
   cyan like the keys that only look.
+- The amber *untested* badge, shown for Odoo 13 and 14, reads *Odoo 13 · not verified*:
+  it was taken for a verdict on a probe that had just passed.
 
 ## [1.13.0] — 2026-10-31
 

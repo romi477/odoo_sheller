@@ -262,8 +262,9 @@ never a dialog in the middle of typing.
 **Save** writes the card and **Cancel** leaves the form; neither form has a Probe.
 A card's **Probe** runs the recipe once and says who it landed as, where, which Python and
 Odoo, and whether the config is readable by that user.
-A card shows `user@host:port`, who it runs as, the stage, and an *untested* badge
-for Odoo 13 and 14. **edit** puts it back in the form; **×** removes it, disabled
+A card shows `user@host:port`, who it runs as, the stage, and an amber
+*Odoo 13 · not verified* badge for Odoo 13 and 14 — the version is the one this tool was
+not run against, not a verdict on the probe, which has passed. **edit** puts it back in the form; **×** removes it, disabled
 while a session is open on it. Opening one waits the same way an odoo.sh build
 does, with the server's own stderr as progress. An unknown host key is refused
 with what to do: connect once from a terminal and accept it.

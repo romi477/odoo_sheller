@@ -1410,6 +1410,7 @@ function renderRemoteCards(kind) {
 
     const untested = card.querySelector('.untested');
     untested.hidden = !probe.untested;
+    untested.textContent = untestedLabel(probe);
     untested.title = probe.warning || '';
 
     const note = card.querySelector('.probe-note');
@@ -1590,6 +1591,14 @@ function notATarget(container) {
   return NOT_A_TARGET.includes(container.probe?.error_code);
 }
 
+// What the amber badge says: which Odoo is the one not verified, so that it is not
+// read as a verdict on the probe, which has passed by the time it is shown.
+function untestedLabel(probe) {
+  const major = probe?.odoo_major ?? Number.parseInt(probe?.odoo_version, 10);
+
+  return Number.isFinite(major) ? `Odoo ${major} · not verified` : 'not verified';
+}
+
 /// The card's meta line: image, the ports it answers on from here — what to type
 /// after localhost — and, when the line under it is an error and so does not say
 /// it, the Odoo version. Not how long it has been up: every container listed is
@@ -1627,6 +1636,7 @@ function renderContainers() {
     // a badge, and the whole sentence on hover.
     const untested = card.querySelector('.untested');
     untested.hidden = !container.probe?.untested;
+    untested.textContent = untestedLabel(container.probe);
     untested.title = container.probe?.warning || '';
 
     const note = card.querySelector('.probe-note');

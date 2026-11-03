@@ -3041,6 +3041,23 @@ def test_the_untested_badge_says_why_on_hover_and_is_not_an_error(app_js):
     ).group(0)
 
 
+def test_the_untested_badge_names_the_version_that_is_not_verified(app_js):
+    """"untested" read as "the probe was not run" on a card whose probe had just
+    passed. The badge says what it is about — the Odoo version — and that it is
+    not verified, on every kind of card."""
+    label = re.search(r"function untestedLabel\(.*?\n\}\n", app_js, re.DOTALL)
+    assert label is not None
+    assert "`Odoo ${" in label.group(0) and "not verified" in label.group(0)
+    for render in (
+        re.search(r"function renderContainers\(.*?\n\}\n", app_js, re.DOTALL),
+        re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL),
+    ):
+        assert re.search(r"untested\.textContent = untestedLabel\(", render.group(0))
+    page = _page()
+    assert ">untested<" not in page
+    assert page.count('<span class="badge untested" hidden>not verified</span>') == 3
+
+
 def test_the_untested_badge_is_amber_like_a_warning_not_red_like_a_failure():
     css = (WEB / "style.css").read_text(encoding="utf-8")
     rule = re.search(r"\.badge\.untested\s*\{([^}]*)\}", css)
