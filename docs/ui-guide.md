@@ -212,6 +212,14 @@ database and the instance names it. There is no listing here and no **↻** —
 there is no `docker ps` for odoo.sh, so the only list that can exist is the one
 you built.
 
+A card nobody has probed — every card after a reload, since a probe is never
+stored — is probed first when **Open session** is pressed, and the session opens
+only if the answer is an Odoo this tool can run; otherwise the probe's own words
+are on the card and nothing is opened. A card that runs a session therefore always
+knows which Odoo it is, *not verified* for 13 and 14 included. The same holds for a
+server. While a session is open on a card its **Edit** is disabled, as **×** is: a
+session runs on what the card says, and the card is not to change under it.
+
 Opening one is the longest wait on this screen — an SSH connection, then the
 same registry load a container pays — so it shows the same things a container
 start shows: the key goes inert with a spinning arrow, the note says what is
@@ -265,7 +273,7 @@ Odoo, and whether the config is readable by that user.
 A card shows `user@host:port`, who it runs as, the stage, and, for Odoo 13
 and 14, a red *Odoo 13 · not verified* line under the facts — the version is the one this
 tool was not run against, not a verdict on the probe, which has passed. A line, not a
-badge: a badge this wide left the others no room. **edit** puts it back in the form; **×** removes it, disabled
+badge: a badge this wide left the others no room. **edit** puts it back in the form; **×** removes it. Both are disabled
 while a session is open on it. Opening one waits the same way an odoo.sh build
 does, with the server's own stderr as progress. An unknown host key is refused
 with what to do: connect once from a terminal and accept it.

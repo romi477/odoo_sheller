@@ -4101,3 +4101,30 @@ def test_the_cross_that_forgets_a_card_turns_amber_under_the_pointer():
         r"button\.icon\.forget:hover:not\(:disabled\)\s*\{[^}]*color:\s*var\(--amber\)", css
     )
     assert _page().count('class="forget icon"') == 2
+
+
+def test_a_card_nobody_has_probed_is_probed_before_a_session_opens_on_it(app_js):
+    """The card says which Odoo it is — and says *not verified* for 13 and 14 —
+    from its probe. Opening a session without one left a card that was running a
+    session and did not know what it was running. So Open session on a card with no
+    probe asks the instance first, opens only if the answer is one this tool can
+    run, and otherwise leaves the probe's own words on the card."""
+    opener = re.search(r"async function openRemote\(.*?\n\}\n", app_js, re.DOTALL)
+    assert opener is not None
+    body = opener.group(0)
+    assert "if (!entry.probe)" in body
+    assert body.index("kind.reprobe(entry)") < body.index("kind.start(entry)")
+    assert "probed?.ok" in body and "probed.supported" in body, "a probe that failed opens nothing"
+    remote = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert ".start').addEventListener('click', () => openRemote(kind, entry))" in remote
+    assert "kind.start(entry))" not in remote.replace("openRemote(kind, entry))", "")
+
+
+def test_a_card_cannot_be_edited_while_a_session_is_open_on_it(app_js):
+    """The session was opened with what the card said then; a form rewriting the
+    build or the recipe under it would leave a card that says one thing and a
+    session that did another. Edit waits for the session to be closed, as Forget
+    does — on the odoo.sh and the server cards alike."""
+    remote = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert "edit.disabled = open.length > 0;" in remote
+    assert re.search(r"edit\.title = open\.length\s*\?", remote)

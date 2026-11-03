@@ -55,6 +55,12 @@ surface; `/api/containers` entries gain one field, `ports`.
   solid, which shouted over the card's name.
 - The × that forgets an odoo.sh or a server card turns amber under the pointer, not
   cyan like the keys that only look.
+- **Open session** on an odoo.sh or a server card nobody has probed probes it first,
+  and opens only on an Odoo this tool can run, so a card that runs a session always
+  knows which one — *Odoo 13 · not verified* included. Before, opening a session
+  without pressing Probe left the card silent about its version.
+- **Edit** is disabled on an odoo.sh or a server card while a session is open on it,
+  as **×** is.
 - The amber *untested* badge, shown for Odoo 13 and 14, is a red line under the card's
   facts that reads *Odoo 13 · not verified*: the badge was taken for a verdict on a
   probe that had just passed, and left the other badges no room.

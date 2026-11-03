@@ -1294,6 +1294,22 @@ async function startRemoteSession(targetId, render) {
   }
 }
 
+// Open session on a card, whatever it is a card of. A card nobody has probed does
+// not yet know which Odoo it is, and the session would run on without the card
+// ever saying — so it is asked first, and a session opens only on an answer this
+// tool can run; otherwise the probe's own words are on the card.
+async function openRemote(kind, entry) {
+  if (!entry.probe) {
+    await kind.reprobe(entry);
+    const probed = kind.entries().find((item) => item.id === entry.id)?.probe;
+    if (!probed?.ok || !probed.supported) {
+
+      return;
+    }
+  }
+  await kind.start(entry);
+}
+
 function startOdooshSession(build) {
 
   return startRemoteSession(`odoosh-${build}`, renderBuilds);
@@ -1434,15 +1450,16 @@ function renderRemoteCards(kind) {
       note.classList.toggle('error', Boolean(probe.error));
     }
 
-    // A card nobody has probed this load is not a bad card: the daemon asks the
-    // instance on the way in, and refuses there if it must.
+    // A card nobody has probed this load is not a bad card: Open session probes it
+    // first (openRemote), so the card knows which Odoo its session is.
     card.querySelector('.start').disabled = Boolean(entry.probing) || Boolean(broken)
       || (Boolean(entry.probe) && !(probe.ok && probe.supported));
-    card.querySelector('.start').addEventListener('click', () => kind.start(entry));
+    card.querySelector('.start').addEventListener('click', () => openRemote(kind, entry));
     card.querySelector('.reprobe').addEventListener('click', () => kind.reprobe(entry));
     card.querySelector('.reprobe').disabled = Boolean(broken);
     card.querySelector('.forget').addEventListener('click', () => kind.forget(entry));
-    card.querySelector('.edit').addEventListener('click', () => kind.edit(entry));
+    const edit = card.querySelector('.edit');
+    edit.addEventListener('click', () => kind.edit(entry));
 
     const open = sessionsForTarget(key);
     const connected = card.querySelector('.connected');
@@ -1457,6 +1474,13 @@ function renderRemoteCards(kind) {
         : `Close the session on this ${kind.noun}. Uncommitted work is discarded.`;
       close.addEventListener('click', () => closeSessionsForTarget(key));
     }
+
+    // A session was opened with what the card says now; changing it under the
+    // session would leave the card saying one thing and the session doing another.
+    edit.disabled = open.length > 0;
+    edit.title = open.length
+      ? `Close ${open.length > 1 ? 'the sessions' : 'the session'} on this ${kind.noun} first — a session runs on what the card says now.`
+      : edit.title;
 
     // Forgetting the card removes the only record of where this is on this
     // machine, and a live session would be left with nothing pointing at it.
