@@ -3023,7 +3023,13 @@ def test_an_untested_version_has_a_badge_on_both_kinds_of_card(markup):
     for template in ("container-card", "odoosh-card"):
         block = re.search(rf'<template id="{template}">.*?</template>', page, re.DOTALL)
         assert block is not None, template
-        assert 'class="badge untested"' in block.group(0), template
+        facts = re.search(r'<div class="card-facts">(.*?)</div>', block.group(0), re.DOTALL)
+        assert facts is not None, template
+        assert '<p class="untested" hidden>' in facts.group(1), (
+            f"{template}: a line under the facts, not a badge beside the name — a badge "
+            "this wide left the others no room"
+        )
+        assert 'badge untested' not in block.group(0), template
 
 
 def test_the_untested_badge_says_why_on_hover_and_is_not_an_error(app_js):
@@ -3055,14 +3061,15 @@ def test_the_untested_badge_names_the_version_that_is_not_verified(app_js):
         assert re.search(r"untested\.textContent = untestedLabel\(", render.group(0))
     page = _page()
     assert ">untested<" not in page
-    assert page.count('<span class="badge untested" hidden>not verified</span>') == 3
+    assert page.count('<p class="untested" hidden>not verified</p>') == 3
 
 
-def test_the_untested_badge_is_amber_like_a_warning_not_red_like_a_failure():
+def test_the_untested_line_is_red_under_the_facts():
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    rule = re.search(r"\.badge\.untested\s*\{([^}]*)\}", css)
+    rule = re.search(r"\.card-facts \.untested\s*\{([^}]*)\}", css)
     assert rule is not None
-    assert "--amber" in rule.group(1)
+    assert "color: var(--red)" in rule.group(1)
+    assert ".badge.untested" not in css
 
 
 # --- servers reached by ssh ----------------------------------------------------

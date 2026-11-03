@@ -628,6 +628,15 @@ button.region-toggle:active:not(:disabled) {
   margin: 0;
 }
 
+/* A version nothing has run on here (13, 14): let through, and said so in red on a
+   line of its own — a badge this wide beside the name left the others no room.
+   The whole sentence is the line's title. */
+.card-facts .untested {
+  margin: 2px 0 0;
+  color: var(--red);
+  font-size: 12px;
+}
+
 .name,
 .target {
   font-weight: 650;
@@ -697,13 +706,6 @@ button.region-toggle:active:not(:disabled) {
 .badge.closed {
   background: var(--red-dark);
   color: var(--red);
-}
-
-/* A version nothing has run on here (13, 14): let through, so not red — and
-   not nothing either. The whole sentence is the badge's title. */
-.badge.untested {
-  background: var(--amber-dark);
-  color: var(--amber);
 }
 
 /* A build's stage. `staging` is ordinary information; `production` is the word
