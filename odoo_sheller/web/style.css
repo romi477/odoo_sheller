@@ -18,6 +18,7 @@
   --session-stack: 10px;
   --green: oklch(0.64 0.11 155);
   --green-dark: oklch(0.25 0.06 155);
+  --result: oklch(0.80 0.09 305);
   --red: oklch(0.67 0.15 25);
   --red-dark: oklch(0.25 0.07 25);
   --warning: oklch(0.76 0.12 82);
@@ -1979,7 +1980,7 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket {
 }
 
 .result {
-  color: var(--green);
+  color: var(--result);
 }
 
 .stdout {

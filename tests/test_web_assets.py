@@ -4128,3 +4128,15 @@ def test_a_card_cannot_be_edited_while_a_session_is_open_on_it(app_js):
     remote = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL).group(0)
     assert "edit.disabled = open.length > 0;" in remote
     assert re.search(r"edit\.title = open\.length\s*\?", remote)
+
+
+def test_the_result_of_a_cell_is_lilac_not_the_green_of_the_editor_strings():
+    """Green beside the cyan frame was oil on oil. A cell's result takes a lilac
+    kin to the page's violet; green stays what it is elsewhere — string literals,
+    the copied tick."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert re.search(r"--result:\s*oklch\(0\.80 0\.09 305\);", css)
+    rule = re.search(r"\n\.result\s*\{([^}]*)\}", css)
+    assert rule is not None
+    assert "color: var(--result)" in rule.group(1)
+    assert "--green" not in rule.group(1)

@@ -506,7 +506,8 @@ transaction ended.
 
 Dark, low-chroma palette; cyan marks the active tab, primary actions, and a
 `ready`/`connected` state; amber marks the wordmark and a few destructive-ish
-or "needs attention" states; green marks string literals in the editor. No
+or "needs attention" states; green marks string literals in the editor; lilac
+marks a cell's result, which green beside the cyan frame made oil on oil. No
 CDN, no web fonts, no remote images anywhere under `/web` — the whole page is
 served by the daemon and works with the network off. The one exception in
 this repository is `/docs` (Swagger UI), which is not under `/web` and needs

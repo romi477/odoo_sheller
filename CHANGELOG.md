@@ -61,6 +61,8 @@ surface; `/api/containers` entries gain one field, `ports`.
   without pressing Probe left the card silent about its version.
 - **Edit** is disabled on an odoo.sh or a server card while a session is open on it,
   as **×** is.
+- A cell's result is lilac instead of green, which sat badly beside the cyan frame.
+  Green stays on string literals in the editor and on the copied tick.
 - The amber *untested* badge, shown for Odoo 13 and 14, is a red line under the card's
   facts that reads *Odoo 13 · not verified*: the badge was taken for a verdict on a
   probe that had just passed, and left the other badges no room.
