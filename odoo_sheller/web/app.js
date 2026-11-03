@@ -23,7 +23,8 @@ const state = {
   expandedJournalGroups: new Set(),
   startups: new Map(),
   // Cards with an action in flight that is not a start or a probe — closing,
-  // forgetting, the commit switch — and what that action is. See whileBusy.
+  // forgetting, the commit switch — what it is, and how many are holding it.
+  // See whileBusy.
   busy: new Map(),
   connectMode: 'local',
   builds: [],
@@ -515,21 +516,34 @@ function sessionsForTarget(key) {
 // waits on the instance — opening a session, probing, closing, forgetting, the
 // commit switch — nothing else on it can be pressed. Opening a session with Probe
 // and Forget still live beside it is how two requests end up racing for one card.
-function renderCards() {
-  renderContainers();
-  renderBuilds();
-  renderServers();
+// The list the card is in is the only one drawn: a remote card is rebuilt on
+// every render, and a log being read in another list would lose its selection.
+function renderCard(key) {
+  if (key.startsWith(cardKey('odoosh-'))) {
+    renderBuilds();
+  } else if (key.startsWith(cardKey('ssh-'))) {
+    renderServers();
+  } else {
+    renderContainers();
+  }
 }
 
+// Counted: two actions on one card hold it until the last of them ends, not
+// until the first does.
 async function whileBusy(key, work, action) {
-  state.busy.set(key, work);
-  renderCards();
+  state.busy.set(key, {work, depth: (state.busy.get(key)?.depth || 0) + 1});
+  renderCard(key);
   try {
 
     return await action();
   } finally {
-    state.busy.delete(key);
-    renderCards();
+    const held = state.busy.get(key);
+    if (held.depth > 1) {
+      state.busy.set(key, {...held, depth: held.depth - 1});
+    } else {
+      state.busy.delete(key);
+    }
+    renderCard(key);
   }
 }
 
@@ -554,7 +568,7 @@ function cardWork(key, probing) {
   }
   if (state.busy.has(key)) {
 
-    return state.busy.get(key);
+    return state.busy.get(key).work;
   }
 
   return startup && !startup.failed ? 'start' : null;
@@ -563,10 +577,11 @@ function cardWork(key, probing) {
 // `inert`, not `disabled` on each button: the render sets `disabled` for its own
 // reasons on every pass, and a card is reused, so a second writer would have to
 // remember what to put back. Inert takes the row and the picker out of reach of
-// the pointer and the keyboard and is undone by one assignment.
+// the pointer and the keyboard and is undone by one assignment. The controls, not
+// the whole row: the card's name and host stay selectable while it works.
 function lockCard(card, work) {
   const busy = Boolean(work);
-  card.querySelectorAll('.row, .picker').forEach((part) => {
+  card.querySelectorAll('.row button, .row .agent-commit, .picker').forEach((part) => {
     part.inert = busy;
   });
   Object.entries(WORK_CONTROLS).forEach(([name, selector]) => {
@@ -722,7 +737,6 @@ async function saveBuildForm() {
 function resetBuildForm() {
   const form = buildFormElement();
   state.buildEditing = null;
-  renderBuilds();
   composerEditing('odoosh', null);
   setComposerCollapsed('odoosh', composerWasCollapsed('odoosh'), false);
   form.querySelector('.odoosh-name').value = '';
@@ -737,6 +751,7 @@ function resetBuildForm() {
 function cancelBuildForm() {
   const editing = state.buildEditing;
   resetBuildForm();
+  renderBuilds();
   if (!editing) {
     setComposerCollapsed('odoosh', true);
   }
@@ -1039,7 +1054,6 @@ function setComposerCollapsed(mode, collapsed, remember = true) {
 function resetServerForm() {
   const form = serverFormElement();
   state.serverEditing = null;
-  renderServers();
   composerEditing('ssh', null);
   setComposerCollapsed('ssh', composerWasCollapsed('ssh'), false);
   form.querySelector('.ssh-name').value = '';
@@ -1054,6 +1068,7 @@ function resetServerForm() {
 function cancelServerForm() {
   const editing = state.serverEditing;
   resetServerForm();
+  renderServers();
   if (!editing) {
     setComposerCollapsed('ssh', true);
   }
@@ -1545,8 +1560,9 @@ function buildContainerCard(name) {
 
       return;
     }
-    if (opening?.failed && !event.target.closest('.startup-log')) {
-      // The same click that folds the picker puts the failed start away.
+    if (opening?.failed && !event.target.closest('button, .startup-log')) {
+      // The same click that folds the picker puts the failed start away — unless
+      // it is a button's: Probe or Close session is pressed to look into it.
       stopStartup(name);
       renderContainers();
     }
@@ -1632,7 +1648,6 @@ function renderContainers() {
     } else {
       const config = container.probe.config ? ` · ${container.probe.config}` : '';
       setText(note, `Odoo ${container.probe.odoo_version} · Python ${container.probe.python}${config}`);
-      setText(card.querySelector('.meta'), containerFacts(container));
     }
 
     const badge = card.querySelector('.connected');

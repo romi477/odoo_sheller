@@ -175,9 +175,9 @@ Three fields — a name, the build id and its hostname — and under them the
 **Save** and **Cancel** — the form has no Probe: probing is something a card has.
 A build only answers SSH from an address odoo.sh has been told about, and the
 button for that is on odoo.sh, not here: press **Allow my IP** on the build there
-first (the form's note says so; the allowance lasts an hour and can take up to five
-minutes to apply). Saving writes the card and then asks the build once what it is, and the card's
-**Probe** asks again: its database, its Odoo version, and whether it is `staging`
+first (the form's note says so). Saving writes the card; a new build, or one with
+another build id or hostname, is then asked once what it is — a new name or stage
+says nothing new about the instance — and the card's **Probe** asks again: its database, its Odoo version, and whether it is `staging`
 or `production`. Nothing is opened by probing. **Cancel** of a card not yet
 written folds the form.
 

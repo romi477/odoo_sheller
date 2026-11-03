@@ -3921,7 +3921,7 @@ def test_a_click_on_a_card_whose_start_failed_puts_it_away(app_js):
     assert re.search(r"stopStartup\(key\);\s*renderRemoteCards\(kind\);", click.group(1))
     built = re.search(r"function buildContainerCard\(.*?\n\}\n", app_js, re.DOTALL).group(0)
     assert re.search(
-        r"if \(opening\?\.failed && !event\.target\.closest\('\.startup-log'\)\) \{(?:\s*//[^\n]*)*\s*"
+        r"if \(opening\?\.failed && !event\.target\.closest\('button, \.startup-log'\)\) \{(?:\s*//[^\n]*)*\s*"
         r"stopStartup\(name\);\s*renderContainers\(\);",
         built,
     )
@@ -3942,11 +3942,22 @@ def test_a_card_with_something_in_flight_locks_everything_on_it(app_js):
     assert "busy: new Map()," in app_js
     busy = re.search(r"async function whileBusy\(.*?\n\}\n", app_js, re.DOTALL)
     assert busy is not None
-    assert "state.busy.set(key, work)" in busy.group(0)
-    assert re.search(r"finally \{\s*state\.busy\.delete\(key\);", busy.group(0)), "released however it ends"
+    assert "state.busy.set(key, {work, depth: " in busy.group(0)
+    assert re.search(r"finally \{.*?state\.busy\.delete\(key\);", busy.group(0), re.DOTALL), (
+        "released however it ends"
+    )
+    assert "depth > 1" in busy.group(0), "two actions on one card hold it until the last one ends"
+    assert "renderCards" not in app_js, "an action redraws its own card's list, not all three"
+    card = re.search(r"function renderCard\(.*?\n\}\n", app_js, re.DOTALL)
+    assert card is not None
+    for render in ("renderBuilds()", "renderServers()", "renderContainers()"):
+        assert render in card.group(0), render
+    assert busy.group(0).count("renderCard(key)") == 2, "drawn locked, and drawn released"
     lock = re.search(r"function lockCard\(.*?\n\}\n", app_js, re.DOTALL)
     assert lock is not None
-    assert "'.row, .picker'" in lock.group(0) and ".inert = busy" in lock.group(0)
+    assert "'.row button, .row .agent-commit, .picker'" in lock.group(0)
+    assert ".inert = busy" in lock.group(0)
+    assert "'.row, .picker'" not in lock.group(0), "the card's words stay selectable while it works"
     assert "Boolean(work)" in lock.group(0)
     remote = re.search(r"function renderRemoteCards\(.*?\n\}\n", app_js, re.DOTALL).group(0)
     assert "lockCard(card, " in remote and "entry.probing" in remote[remote.index("lockCard(card, "):][:200]
@@ -3959,6 +3970,24 @@ def test_a_card_with_something_in_flight_locks_everything_on_it(app_js):
     # Started sessions are covered by their startup record, not by a second flag.
     assert "startup && !startup.failed" in re.search(r"function cardWork\(.*?\n\}\n", app_js, re.DOTALL).group(0)
     assert re.search(r'\.card\[data-busy="true"\][^{]*\{[^}]*opacity', css), "a locked card looks locked"
+
+
+def test_a_local_card_sets_its_meta_line_once_and_the_version_only_on_an_error(app_js):
+    local = re.search(r"function renderContainers\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert local.count("containerFacts(container)") == 1
+    assert "containerFacts(container, `Odoo ${container.probe.odoo_version}`)" in local
+
+
+def test_a_build_says_when_saving_asks_it_what_it_is():
+    """Saving probes a build that is new or has a new build id or hostname; a new
+    name or stage says nothing new about the instance. The key and the guide say
+    so, rather than promising a probe every time — and say nothing about how long
+    odoo.sh keeps an address allowed, which nothing here knows."""
+    save = re.search(r'<button[^>]*class="odoosh-save primary"[^>]*title="([^"]*)"', _page())
+    assert save is not None
+    assert "new build, or one with another build id or hostname" in save.group(1)
+    guide = (WEB.parent.parent / "docs" / "ui-guide.md").read_text(encoding="utf-8")
+    assert "lasts an hour" not in guide and "five minutes to apply" not in guide
 
 
 def test_the_control_that_started_the_work_is_the_one_that_turns(app_js):
@@ -4006,14 +4035,22 @@ def test_the_card_being_edited_is_dimmed_and_cannot_be_pressed(app_js):
     assert re.search(r"lockCard\(card,\s*kind\.editing\(\) === entry\.id \? 'edit' : cardWork\(", remote)
     lock = re.search(r"function lockCard\(.*?\n\}\n", app_js, re.DOTALL).group(0)
     assert "classList.toggle('being-edited', work === 'edit')" in lock
-    # Entering and leaving the mode redraws the cards, or nothing would change.
-    for name, state_key in (
-        ("editBuild", "buildEditing"), ("editServer", "serverEditing"),
-        ("resetBuildForm", "buildEditing"), ("resetServerForm", "serverEditing"),
-    ):
+    # Entering and leaving the mode redraws the cards, or nothing would change —
+    # once each: a reset that drew too would make Edit draw the list twice.
+    for name, state_key in (("editBuild", "buildEditing"), ("editServer", "serverEditing")):
         function = re.search(rf"function {name}\(.*?\n\}}\n", app_js, re.DOTALL).group(0)
         render = "renderBuilds()" if "Build" in name else "renderServers()"
         assert re.search(rf"state\.{state_key} = [^;]+;\s*{re.escape(render)};", function), name
+        assert function.count(render) == 1, name
+    for name in ("resetBuildForm", "resetServerForm"):
+        function = re.search(rf"function {name}\(.*?\n\}}\n", app_js, re.DOTALL).group(0)
+        assert "render" not in function, f"{name} leaves the drawing to its caller"
+    for name, render in (("cancelBuildForm", "renderBuilds()"), ("cancelServerForm", "renderServers()")):
+        function = re.search(rf"function {name}\(.*?\n\}}\n", app_js, re.DOTALL).group(0)
+        assert render in function, name
+    for name in ("saveBuildForm", "saveServerForm"):
+        function = re.search(rf"async function {name}\(.*?\n\}}\n", app_js, re.DOTALL).group(0)
+        assert "await loadTargets();" in function, f"{name} draws through the reload"
     assert re.search(r"\.card\.being-edited\s*\{[^}]*opacity", css)
     assert re.search(r"#odoosh-builds \.card\.being-edited:hover[^{]*\{[^}]*outline:\s*none", css), (
         "a card that cannot be opened does not answer the pointer as one"
