@@ -7,6 +7,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.13.1] — 2026-11-03
+
+The Connect screen, tidied. A local container's card shows the ports it is published
+on, every card locks the same way while something on it waits, and the odoo.sh and
+server forms end in Save and Cancel. Nothing is removed from the API or the MCP
+surface; `/api/containers` entries gain one field, `ports`.
+
 ### Fixed
 
 - A form folded while a card was being edited kept the amber edge of an open form.
@@ -31,7 +38,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the instance — opening a session, probing, closing, forgetting, the commit
   switch — nothing else on that card can be pressed. Before, Probe, Edit and
   Forget stayed live beside a session that was opening.
-  The key that was pressed turns the arrow, so a locked card says what locked it.
+  The key that was pressed turns the arrow, so a locked card says what locked it,
+  and the card's name and host stay selectable while it works.
 - The odoo.sh and server forms end in **Save** and **Cancel**, whether a card is
   being written or changed; Probe is something a card has, not a form. Cancel of a
   card not yet written folds the form. Before, the odoo.sh form's key to write a
@@ -1949,6 +1957,7 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
+[1.13.1]: https://github.com/romi477/odoo_sheller/compare/v1.13.0...v1.13.1
 [1.13.0]: https://github.com/romi477/odoo_sheller/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/romi477/odoo_sheller/compare/v1.11.1...v1.12.0
 [1.11.1]: https://github.com/romi477/odoo_sheller/compare/v1.11.0...v1.11.1
