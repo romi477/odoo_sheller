@@ -2143,7 +2143,7 @@ def test_the_build_form_has_save_and_cancel_and_nothing_else(app_js):
     css = (WEB / "style.css").read_text(encoding="utf-8")
     actions = re.search(r"\n\.ssh-actions,\s*\.odoosh-actions\s*\{([^}]*)\}", css)
     assert actions is not None, "laid out as the server form's keys are"
-    assert "justify-content: center" in actions.group(1)
+    assert "justify-content: flex-end" in actions.group(1)
     edit = re.search(r"function editBuild\(.*?\n\}", app_js, re.DOTALL).group(0)
     reset = re.search(r"function resetBuildForm\(.*?\n\}", app_js, re.DOTALL).group(0)
     # One word, new card or changed: the key's label is never rewritten.
@@ -3626,18 +3626,20 @@ def test_the_name_placeholder_is_an_example_of_a_name_not_of_somebodys_company()
     assert "acme" not in found.group(1).lower()
 
 
-def test_the_buttons_under_the_server_form_sit_apart_from_the_fields_and_in_the_middle():
-    """Probe and Save are acts, not another field: with the fields' own gap between
-    them they read as the next one, left-aligned like it."""
+def test_the_buttons_under_the_forms_sit_apart_from_the_fields_in_the_right_corner():
+    """Save and Cancel are acts, not another field: with the fields' own gap between
+    them they read as the next one. In the middle of a wide form they hung under
+    nothing; in the right corner they sit where the eye ends the row."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
     rule = re.search(r"\n\.ssh-actions,\s*\.odoosh-actions\s*\{([^}]*)\}", css)
     assert rule is not None
-    assert "justify-content: center" in rule.group(1)
+    assert "justify-content: flex-end" in rule.group(1)
+    assert "justify-content: center" not in rule.group(1)
     margin = re.search(r"margin-top:\s*(\d+)px", rule.group(1))
     assert margin is not None and int(margin.group(1)) >= 12
-    # The middle of the card is the middle of the form only if the form is as wide
-    # as the card: capped, the buttons sat under the left half of a wide one. A
-    # long Launch line is the better for the room too.
+    # The right corner is the form's only if the form is as wide as the card:
+    # capped, the buttons sat under the middle of a wide one. A long Launch line is
+    # the better for the room too.
     form = re.search(r"\n\.ssh-form\s*\{([^}]*)\}", css)
     assert form is not None
     assert "max-width" not in form.group(1)

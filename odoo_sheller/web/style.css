@@ -914,12 +914,12 @@ button.region-toggle:active:not(:disabled) {
   font-size: 11px;
 }
 
-/* Probe and Save are acts, not another field: set apart from the fields above
-   and in the middle of the card, or they read as the next row. */
+/* Save and Cancel are acts, not another field: set apart from the fields above
+   and in the right corner, where the row ends, or they read as the next row. */
 .ssh-actions,
 .odoosh-actions {
   display: flex;
-  justify-content: center;
+  justify-content: flex-end;
   gap: 8px;
   align-items: center;
   margin-top: 14px;

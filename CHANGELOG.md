@@ -61,6 +61,8 @@ surface; `/api/containers` entries gain one field, `ports`.
   without pressing Probe left the card silent about its version.
 - **Edit** is disabled on an odoo.sh or a server card while a session is open on it,
   as **×** is.
+- Save and Cancel under the odoo.sh and server forms sit in the right corner instead of
+  the middle.
 - In the odoo.sh form the stage is as wide as the name and the build id together, and
   the hostname has the rest, a little more than half; on a narrow window the fields
   go one to a row.
