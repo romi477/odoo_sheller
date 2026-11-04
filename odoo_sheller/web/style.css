@@ -930,19 +930,15 @@ button.odoosh-save {
   border-color: var(--border);
 }
 
-/* What a form means, in a note of its own: filled, as wide as the form, its words
-   centred under the buttons it follows. Left-aligned loose text hung off the edge
-   of a card whose buttons are in the middle. A fill, not a dashed edge — the card
-   has one. */
+/* What a form means: a line, then the words, as a local card sets off its
+   database picker. Not a filled box — the card around it is the box. */
 .composer-note {
-  margin: 16px 0 0;
-  padding: 10px 16px;
-  border-radius: 8px;
-  background: var(--panel);
+  margin: 14px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: 12px;
   line-height: 1.55;
-  text-align: center;
 }
 
 .probe-note {

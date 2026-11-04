@@ -3658,10 +3658,10 @@ def test_placeholders_are_faint_enough_not_to_pass_for_typed_text():
     assert float(opacity.group(1)) <= 0.4
 
 
-def test_the_explanation_under_a_form_is_a_full_width_filled_note_not_loose_text():
-    """The buttons above it are centred, and text that belongs to them hung off the
-    left edge. It is a note of its own — filled, its words centred, as wide as the
-    form — in both forms."""
+def test_the_explanation_under_a_form_is_set_off_by_a_line_as_a_card_sets_off_its_picker():
+    """The local card draws a line and puts what belongs to the target under it. The
+    note under a form does the same, so the two kinds of card read as one: a rule,
+    then the words — not a filled box of its own."""
     page = _page()
     assert "odoosh-note" not in page
     assert page.count('<p class="composer-note">') == 2
@@ -3672,11 +3672,14 @@ def test_the_explanation_under_a_form_is_a_full_width_filled_note_not_loose_text
     rule = re.search(r"\n\.composer-note\s*\{([^}]*)\}", css)
     assert rule is not None
     body = rule.group(1)
-    assert "text-align: center" in body
+    picker = re.search(r"\n\.picker\s*\{([^}]*)\}", css).group(1)
+    line = "border-top: 1px solid var(--border)"
+    assert line in body and line in picker, "the same line as the picker's"
+    assert "padding-top: 10px" in body and "padding-top: 10px" in picker
+    assert "text-align" not in body, "left, as the card's own lines are"
+    assert "background" not in body and "border-radius" not in body, "a rule, not a box"
     assert "max-width" not in body, "as wide as the form: the fields above it are"
     assert re.search(r"margin:\s*\d+px 0 0", body), "no side margins, so it spans the form"
-    assert "background:" in body and "border-radius" in body
-    assert "dashed" not in body, "the card around it already is"
 
 
 def test_an_open_form_is_amber_and_answers_the_pointer_as_a_card_does():
