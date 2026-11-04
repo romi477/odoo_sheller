@@ -425,9 +425,8 @@ Every control below, with what it guarantees: [docs/ui-guide.md](docs/ui-guide.m
 |---|---|
 | **↻** (beside the title) | Re-runs `docker ps` and probes every container again. Turns while it works, until the last probe answers |
 | **re-probe** | Probes this container only — after a restart or a config change |
-| **Open session** | Expands the card's database picker and becomes **Start** in its own place, so the second click lands where the first did. Disabled when the probe found no Odoo 19. A click on the card outside the picker collapses it again |
-| **copy** (in the picker) | A two-sheet glyph at the picker's far edge. Puts the target on the clipboard as one line of JSON — container, database, Odoo version — to paste to an agent. Turns into a green check for a moment |
-| **Start** | Opens the session on the chosen database. While Odoo loads its registry the button spins, same as **New**, and the card shows the container's stderr as it arrives. Scroll back in the well and it holds position; a **Refresh** mid-start keeps the well |
+| **Open session** | Opens the session on the database chosen in the picker below it, in one click. While Odoo loads its registry the button spins, same as **New**, and the card shows the container's stderr as it arrives. Scroll back in the well and it holds position; a **Refresh** mid-start keeps the well. Disabled when the probe found no supported Odoo |
+| **copy** (in the picker, always on the card) | A two-sheet glyph at the picker's far edge. Puts the target on the clipboard as one line of JSON — container, database, Odoo version — to paste to an agent. Turns into a green check for a moment |
 | **Close session** | Shown on a container that already has a session; closes it without leaving the screen. With several sessions on that container it reads **Close N sessions** and closes all of them — the card stands for the target, not for one session |
 
 A container may hold more than one session — a second one on another database is

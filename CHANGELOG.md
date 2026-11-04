@@ -9,6 +9,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- A local container's card has one key, **Open session**, and the database picker
+  with its copy button stays on the card whenever the probe found an Odoo. Opening
+  a session was a click to unfold the picker, a copy of the database's name, and a
+  second click on **Start**. A render keeps the database you picked.
 - The agent's instructions no longer read as a ban on Odoo's own commits. Agents
   kept declining `button_immediate_upgrade` and `button_immediate_install` because
   the call ends in a commit and the session had none granted. The server

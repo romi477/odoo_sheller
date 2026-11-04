@@ -1101,15 +1101,6 @@ input:not([type="radio"], [type="checkbox"]):focus {
   color: var(--amber);
 }
 
-.open {
-  color: var(--amber);
-}
-
-.open:hover:not(:disabled) {
-  border-color: var(--cyan);
-  color: var(--amber);
-}
-
 .subtle {
   color: var(--muted-low);
 }

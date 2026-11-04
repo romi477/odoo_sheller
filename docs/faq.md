@@ -78,7 +78,7 @@ Two kinds of short-lived process, both inside your existing container:
   where the config file is, which database the config points at, and which
   databases actually exist in Postgres. Then it exits.
 - **A session** — lives until you close it. Starts on one event: you picked
-  a database and pressed **Start**. The daemon runs `odoo-bin shell` inside
+  a database and pressed **Open session**. The daemon runs `odoo-bin shell` inside
   the container, it loads the registry, says hello, and waits for commands.
   While the registry loads, the container's stderr streams into the Connect
   card so "loading" isn't a silent wait.

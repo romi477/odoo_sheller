@@ -107,15 +107,18 @@ restart or a config change.
   here stands for a target, not for one session, so it closes all of them.
   Uncommitted work is discarded, and the question is asked once for the
   batch rather than once per session.
-- **Open session** expands the card into a database picker, and becomes
-  **Start** in the same place. The two are one control at two moments, so the
-  second click of opening a session lands where the first one did rather than
-  across the card. What the picker holds is the target and nothing else: which
+- **Open session** is the one key that starts a session, and the database
+  picker is on the card the whole time the probe found an Odoo — it is not
+  something a first click unfolds. Before, opening a session was a click to
+  reach the picker, a copy of the database's name, then a second click on
+  **Start**; now the choice, the copy and the start are one look and one click.
+  A render keeps the database you chose and does not rebuild a list under an
+  open dropdown. What the picker holds is the target and nothing else: which
   database, and a faint two-sheet copy glyph at its far edge that puts
   container, database and Odoo version on the clipboard as one line of JSON —
   what an agent has to be told before it can work. It turns into a green check
   for a moment, because a clipboard leaves no other mark; a word there would
-  have read as a third key beside **Start** and **probe**, and that row holds
+  have read as a third key beside **Open session** and **probe**, and that row holds
   no actions. The default database comes from `db_name` in the
   container's `odoo.conf`, which in a dev container is almost always the right
   answer. If the database list couldn't be read at all, a free-text field takes
@@ -154,7 +157,7 @@ restart or a config change.
   is visible without opening it; the figures are tabular, so a column of
   folded cells can be compared at a glance.
 - Opening a session takes a few seconds while Odoo loads its registry.
-  **Start** goes inert with a spinning arrow over its own label, which stays
+  **Open session** goes inert with a spinning arrow over its own label, which stays
   legible as a blurred shape rather than vanishing — a key that empties reads
   as broken, not as busy. A log well at the bottom of
   the card streams the container's stderr as it arrives — so "loading" isn't

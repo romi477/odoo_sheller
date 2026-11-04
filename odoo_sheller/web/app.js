@@ -1551,11 +1551,10 @@ function buildContainerCard(name) {
   const card = fragment.querySelector('.card');
   card.dataset.container = name;
   card.querySelector('.name').textContent = name;
-  card.querySelector('.open').addEventListener('click', () => openPicker(name));
   card.querySelector('.reprobe').addEventListener('click', () => probeContainer(name));
   card.querySelector('.start').addEventListener('click', () => startSession(name));
   card.querySelector('.copy-meta').addEventListener('click', (event) => {
-    // The picker closes on a card click, and this button lives inside it.
+    // The card's click puts a failed start away; this one is a copy, not that.
     event.stopPropagation();
     copyTarget(name);
   });
@@ -1569,29 +1568,18 @@ function buildContainerCard(name) {
     'click', () => closeSessionsForTarget(name),
   );
   card.addEventListener('click', (event) => {
-    // Start sits in the action column now, outside the picker, so this
-    // handler sees its click. Collapsing there would put Open session back in
-    // the same frame the busy Start was about to appear in.
-    if (
-      event.target.closest('.picker')
-      || event.target.closest('.open')
-      || event.target.closest('.start')
-    ) {
+    // Choosing a database or copying it is not dismissing anything.
+    if (event.target.closest('.picker')) {
 
       return;
     }
     const opening = state.startups.get(name);
-    if (opening && !opening.failed) {
-
-      return;
-    }
     if (opening?.failed && !event.target.closest('button, .startup-log')) {
-      // The same click that folds the picker puts the failed start away — unless
-      // it is a button's: Probe or Close session is pressed to look into it.
+      // A click on the card puts a failed start away — unless it is a button's:
+      // Probe or Close session is pressed to look into it.
       stopStartup(name);
       renderContainers();
     }
-    closeAllPickers();
   });
   // Bound here, not per render: the card outlives the render now, so binding
   // it there would stack a handler per probe.
@@ -1653,7 +1641,8 @@ function renderContainers() {
     // picker is the exception: it is the user's to open and close.
     card.classList.toggle('probing', Boolean(container.probing));
     setText(card.querySelector('.meta'), containerFacts(container));
-    card.querySelector('.open').disabled = !container.probe?.ok || !container.probe?.supported;
+    // A database to pick exists only where the probe found an Odoo to start.
+    const targeted = Boolean(container.probe?.ok && container.probe?.supported);
     // The switch's tooltip follows it: the warning only while it is on.
     showAgentCommit(card, Boolean(container.agent_commit));
     // A version nothing has run on here is let through, so it is not an error:
@@ -1703,12 +1692,6 @@ function renderContainers() {
     card.classList.toggle('start-failed', Boolean(startup?.failed));
     lockCard(card, cardWork(container.name, container.probing));
     if (startup) {
-      // The picker needs a database list; the log well does not. A refresh
-      // mid-start leaves probe null, and reading it here once took the whole
-      // container list down with a TypeError.
-      if (container.probe) {
-        fillPicker(card, container);
-      }
       start.disabled = !startup.failed;
       start.classList.toggle('busy', !startup.failed);
       start.setAttribute('aria-busy', startup.failed ? 'false' : 'true');
@@ -1726,7 +1709,7 @@ function renderContainers() {
       }
       scrolls.push([card, startup]);
     } else {
-      start.disabled = false;
+      start.disabled = !targeted;
       start.classList.remove('busy');
       start.setAttribute('aria-busy', 'false');
       start.title = 'Open the session. Odoo loads its registry once; then commands are cheap.';
@@ -1737,7 +1720,14 @@ function renderContainers() {
         well.replaceChildren();
       }
     }
-    syncPickerActions(card);
+    // Always on the card while there is something to start: the database, and
+    // the copy that hands it to an agent, are one look away, not one click.
+    // Filled by every render — fillPicker keeps what the user chose — and
+    // hidden, not filled, while a refresh has blanked the probe.
+    card.querySelector('.picker').hidden = !targeted;
+    if (targeted) {
+      fillPicker(card, container);
+    }
   });
 
   cards.forEach((card, name) => {
@@ -1863,47 +1853,44 @@ async function probeContainer(name) {
   renderContainers();
 }
 
-/// Open session and Start are the same control at two moments, so only one
-/// of them is ever on the card. Driven by the picker rather than by whoever
-/// opened it: a render rebuilds nothing but reuses the card, and the card
-/// would otherwise keep whichever answer the last render left behind.
-function syncPickerActions(card) {
-  const picking = !card.querySelector('.picker').hidden;
-  card.querySelector('.open').hidden = picking;
-  card.querySelector('.start').hidden = !picking;
-}
-
-function closeAllPickers() {
-  document.querySelectorAll('#containers .card').forEach((card) => {
-    card.querySelector('.picker').hidden = true;
-    syncPickerActions(card);
-  });
-}
-
+/// Filled by every render, so it starts from what is chosen now: a render that
+/// put the default back would undo a choice made a second ago, and rebuilding
+/// the list under an open dropdown would close it.
 function fillPicker(card, container) {
   const picker = card.querySelector('.picker');
   const select = picker.querySelector('.databases');
   const manual = picker.querySelector('.database-manual');
   const startup = state.startups.get(container.name);
-  picker.hidden = false;
-  select.replaceChildren();
   // Optional throughout: a Refresh blanks every probe until the re-probe lands,
   // and a card mid-start is still rendered in that window.
   const databases = container.probe?.databases || [];
+  const chosen = select.hidden ? manual.value.trim() : select.value;
+  const kept = databases.length ? databases.includes(chosen) : Boolean(chosen);
   const preferred = startup?.database
+    || (kept ? chosen : null)
     || container.probe?.db_name
     || localStorage.getItem('osDatabase')
     || databases[0];
   if (databases.length) {
-    databases.forEach((database) => {
-      select.add(new Option(database, database, false, database === preferred));
-    });
+    const sameList = !select.hidden
+      && select.options.length === databases.length
+      && databases.every((database, index) => select.options[index].value === database);
+    if (!sameList) {
+      select.replaceChildren();
+      databases.forEach((database) => {
+        select.add(new Option(database, database, false, database === preferred));
+      });
+    } else if (select.value !== preferred && databases.includes(preferred)) {
+      select.value = preferred;
+    }
     select.hidden = false;
     manual.hidden = true;
   } else {
     select.hidden = true;
     manual.hidden = false;
-    manual.value = preferred || '';
+    if (manual.value !== preferred) {
+      manual.value = preferred || '';
+    }
   }
 }
 
@@ -1981,22 +1968,6 @@ function copyTarget(name) {
     }
     button.dataset.flash = '';
   }, 900);
-}
-
-function openPicker(name) {
-  const container = state.containers.find((item) => item.name === name);
-  const card = document.querySelector(`.card[data-container="${CSS.escape(name)}"]`);
-  if (!container?.probe || !card) {
-
-    return;
-  }
-  closeAllPickers();
-  fillPicker(card, container);
-  syncPickerActions(card);
-  const manual = card.querySelector('.database-manual');
-  if (!manual.hidden) {
-    manual.focus();
-  }
 }
 
 // Opaque and per-attempt: the id the POST will return is unknowable until it

@@ -170,27 +170,43 @@ def test_editor_is_refreshed_after_being_reattached(app_js):
     assert "record.editor?.refresh()" in app_js
 
 
-def test_abandoning_the_database_picker_collapses_the_card(app_js):
-    """Open session expands the picker; a click on the card outside it puts the card back."""
-    assert "function closeAllPickers(" in app_js
-    closer = re.search(r"function closeAllPickers\(.*?\n\}", app_js, re.DOTALL)
-    assert closer is not None
-    assert ".hidden = true" in closer.group(0)
-    opener = re.search(r"function openPicker\(.*?\n\}", app_js, re.DOTALL)
-    assert opener is not None
-    assert "closeAllPickers(" in opener.group(0)
-    # The handler is bound once, where the card is built, not on every render.
+def test_the_database_picker_is_never_folded_away(app_js):
+    """It used to open with Open session and fold on a click elsewhere: a click
+    to reach the database, another to copy its name, a third to Start. The
+    picker is on the card whenever there is a database to pick."""
+    for gone in ("closeAllPickers", "openPicker", "syncPickerActions"):
+        assert gone not in app_js, gone
     build = re.search(r"function buildContainerCard\(.*?\n\}", app_js, re.DOTALL)
     assert build is not None
     body = build.group(0)
+    assert "'.open'" not in body, "there is no second button to open the picker with"
+    # A click on the picker is the user choosing or copying, never a dismissal.
     assert "closest('.picker')" in body
-    assert "closest('.open')" in body
-    # Start left the picker for the action column, so the card's own click
-    # handler now sees it. Without this the click that opens a session also
-    # collapses the picker, and the busy Start it was about to show is
-    # swapped back to Open session in the same frame.
-    assert "closest('.start')" in body
-    assert "closeAllPickers(" in body
+    # What the click on a card still does: put a failed start away.
+    assert "stopStartup(name)" in body
+
+
+def test_the_picker_is_shown_while_the_probe_found_an_odoo(app_js):
+    render = re.search(r"function renderContainers\(.*?\n\}", app_js, re.DOTALL)
+    assert render is not None
+    body = render.group(0)
+    assert "const targeted = " in body
+    shown = re.search(r"'\.picker'\)\.hidden = !targeted", body)
+    assert shown is not None, "hidden exactly when there is nothing to start"
+    assert "fillPicker(card, container)" in body
+    # and Open session is gated by the same answer
+    assert "start.disabled = !targeted" in body
+
+
+def test_a_render_keeps_the_database_the_user_chose(app_js):
+    """The picker is filled by every render now. A render that put the default
+    back would throw away a choice made a second ago, and rebuilding the list
+    under an open dropdown would close it."""
+    fill = re.search(r"function fillPicker\(.*?\n\}", app_js, re.DOTALL)
+    assert fill is not None
+    text = fill.group(0)
+    assert "select.value" in text and "manual.value" in text, "what is chosen now is read first"
+    assert "sameList" in text, "an unchanged list is not rebuilt"
 
 
 def test_run_is_disabled_unless_the_session_is_ready(app_js):
@@ -720,13 +736,15 @@ def test_start_button_is_amber_label_with_cyan_hover_ring():
 
 
 def test_open_session_is_amber_label_with_cyan_hover_ring():
-    """Rest: no extra ring. Hover: cyan outline, label stays amber."""
+    """Rest: no extra ring. Hover: cyan outline, label stays amber. One button
+    now, so it is `.primary` and the second `.open` look is gone."""
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    open_btn = re.search(r"(?<![.#\w-])\.open\s*\{([^}]*)\}", css)
-    assert open_btn is not None
-    assert "var(--amber)" in open_btn.group(1)
-    assert "var(--cyan)" not in open_btn.group(1)
-    hover = re.search(r"\.open:hover:not\(:disabled\)\s*\{([^}]*)\}", css)
+    assert re.search(r"(?<![.#\w-])\.open\s*\{", css) is None
+    primary = re.search(r"\.primary\s*\{([^}]*)\}", css)
+    assert primary is not None
+    assert "var(--amber)" in primary.group(1)
+    assert "var(--cyan)" not in primary.group(1)
+    hover = re.search(r"\.primary:hover:not\(:disabled\)\s*\{([^}]*)\}", css)
     assert hover is not None
     assert "var(--cyan)" in hover.group(1)
     assert "var(--amber)" in hover.group(1)
@@ -1899,7 +1917,8 @@ def test_the_startup_card_survives_a_refresh_mid_start(app_js):
     render = re.search(r"function renderContainers\(.*?\n\}", app_js, re.DOTALL)
     assert render is not None
     branch = render.group(0).split("state.startups.get(container.name)", 1)[1]
-    guarded = re.search(r"if \(container\.probe\) \{\s*\n\s*fillPicker", branch)
+    # Filled only where the probe found an Odoo, whether or not a start is on.
+    guarded = re.search(r"if \(targeted\) \{\s*\n\s*fillPicker", render.group(0))
     assert guarded is not None, "the picker needs a probe; the log well does not"
     assert "well.hidden = false" in branch, "the well still shows while the probe is away"
 
@@ -2713,43 +2732,28 @@ def test_the_copy_sits_at_the_far_edge_of_the_picker():
     assert "margin-left: auto" in block.group(0)
 
 
-# --- the two clicks that open a session land in one place ------------------
+# --- one click opens a session ---------------------------------------------
 
 
-def test_start_stands_where_open_session_stood(markup, app_js):
-    """Open session sat in the card's action column and Start at the far end
-    of the row below it, so opening a session was a trip across the card.
-    They are one control now: the second click lands where the first did."""
+def test_a_container_card_has_one_button_that_opens_the_session(markup, app_js):
+    """Open session used to expand the picker and become Start: one click to see
+    the databases, copy a name, then another to start. The picker stays on the
+    card and Open session is the only button."""
     html = (WEB / "index.html").read_text(encoding="utf-8")
     card = re.search(r'<template id="container-card">(.*?)</template>', html, re.DOTALL)
     assert card is not None
-    # Up to the next sibling block: the row holds nested divs, so the first
-    # closing tag is the identity's, not the row's.
     row = re.search(
         r'<div class="row">(.*?)<div class="card-facts">', card.group(1), re.DOTALL
     ).group(1)
-    assert 'class="open"' in row
-    assert 'class="start primary"' in row, "Start belongs in the action column"
+    assert 'class="open"' not in row
+    start = re.search(r'<button class="start primary"[^>]*>(.*?)</button>', row, re.DOTALL)
+    assert start is not None, "the one button in the action column"
+    assert start.group(1) == "Open session"
+    assert "hidden" not in re.search(r'<button class="start primary"[^>]*>', row).group(0)
     picker = re.search(r'<div class="picker"(.*?)</div>', card.group(1), re.DOTALL).group(1)
-    assert "start" not in picker, "and no longer at the end of the picker"
-    # What stays below is the target, not an action: which database, and the
-    # copy that hands that target to an agent.
+    assert "start" not in picker
     assert "databases" in picker
     assert "copy-meta" in picker
-
-
-def test_exactly_one_of_the_two_is_shown(app_js):
-    body = re.search(r"function syncPickerActions\(.*?\n\}", app_js, re.DOTALL)
-    assert body is not None
-    text = body.group(0)
-    assert "picker" in text
-    assert "'.open').hidden" in text
-    assert "'.start').hidden" in text
-    # Called wherever the picker's state changes, including a re-render: the
-    # card outlives the render and would otherwise keep the last one's answer.
-    for caller in ("function openPicker", "function closeAllPickers", "function renderContainers"):
-        block = re.search(rf"{caller}\(.*?\n\}}", app_js, re.DOTALL).group(0)
-        assert "syncPickerActions" in block, caller
 
 
 def test_a_card_only_stacks_when_it_really_has_to():
@@ -3060,7 +3064,7 @@ def test_the_untested_badge_says_why_on_hover_and_is_not_an_error(app_js):
         assert "warning" in body, "the title carries the whole sentence"
     # Not an error: the card opens, so the start button is not gated on it.
     assert "untested" not in re.search(
-        r"card\.querySelector\('\.open'\)\.disabled = [^\n]*", app_js
+        r"start\.disabled = !targeted[^\n]*", app_js
     ).group(0)
 
 

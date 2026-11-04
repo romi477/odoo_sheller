@@ -204,11 +204,7 @@
                 <span class="badge connected" hidden></span>
               </span>
             </div>
-            <button class="open" title="Pick a database and start a session on this container.">Open session</button>
-            <!-- Takes Open session's place rather than sitting at the end of
-                 the picker: the second click of opening a session should land
-                 where the first one did. -->
-            <button class="start primary" hidden title="Open the session. Odoo loads its registry once; then commands are cheap.">Start</button>
+            <button class="start primary" title="Open the session on the database chosen below. Odoo loads its registry once; then commands are cheap.">Open session</button>
             <button class="close-connected" hidden title="Close the session on this container. Uncommitted work is discarded.">Close session</button>
             <button class="reprobe" title="Looks for odoo-bin on PATH or at a few common locations (/opt/odoo/odoo-bin, /usr/bin/odoo, /odoo/odoo-bin, /mnt/odoo/odoo-bin, /usr/lib/python3/dist-packages/odoo-bin) — first one found wins, exact layout doesn't matter. A config file is optional, only used for the default database and Postgres credentials; checked at $ODOO_RC, /etc/odoo/odoo.conf, /etc/odoo.conf, /opt/odoo.conf, next to odoo-bin, or ~/.odoorc. Re-run this after a restart or a config change.">Probe</button>
           </div>
