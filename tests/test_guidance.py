@@ -17,17 +17,17 @@ from odoo_sheller import mcp as server
 # a commit that changes that text's wording on purpose, never to make a
 # refactor pass.
 MCP_GOLDEN = {
-    "instructions": "5f4d3fd9613b2eb9e428f65e60505981431c0c615cf1babe0a24eba51a085780",
+    "instructions": "056c8e93f85e1c321433146970e9cd89283cadb25e6c4909e98bba67a7531ed0",
     "sessions": "f279071f06d2a72b141caac228164e467205feedd8a355a352d5ca1dc2156bb5",
     "ownership": "a7dfdbc2da4f62f93ac40110271f76e3e3607b2b53ded4432ae37609bde313c6",
-    "commit": "706b40b5cfc3ce94917e5a51b80f5b64fd72ca27ef3a969d6509ee7f8d70fc0c",
+    "commit": "32deb0ef18fb9334d7539f9be4e5bdf27018ebe38c7346f49e3026dc3fd02b39",
     "remote_server": "809bb8517bf1789aecb3d8ae60a5bcd3234b98e6441cce3d1a64d577ed3a316e",
     "limits": "20dd27192499f9f42ce507560287d6b25dedb174d5076bbb0b247df65b4e040b",
     "orm": "29ce479be88e26e3c260c056cc2e71c2001be5069a1de0e8c6ef308a4aefd031",
     "code": "9695582a4342042586018028a87e617a9adffe8333083f67a3b4326914a14638",
     "log": "25be6d6b541c96978a501be05720c193444cdda9b29671724676c2673184b1a3",
     "records": "5b2c65b96dd3ba9f796619631e74644d1be58469e92cb2db1c8085c56db054a5",
-    "modules": "0955570535534c2d4e6279884172dab9a8452c3fcab5dfcdd753f10856eecbca",
+    "modules": "c855096249b0705073d329afabd81b5015656eb446144976c43e3ceb30f84877",
     "jobs": "c853c98be14913bfc4e739cbcaae82491f034aa509f136a30954ed6d5580f37f",
     "tests": "2a89a69148efcb67fc336da04c927dc2cf5ced4aaec9b0d176aa5f4e2014fbde",
     "psql": "5390eed27f59269f505a3894dcb0282298e7d30fd9e6b11a1d1ae39e65c11e76",
@@ -110,3 +110,38 @@ def test_the_tests_topic_says_where_to_see_a_browser_suite_cannot_run():
     tests = " ".join(server.HELP["tests"].split())
     for says in ("os_session", "js_tests", "chrome_not_found", "js_tests_skipped", "not a pass"):
         assert says in tests, says
+
+
+# --- Odoo's own commits are welcome -----------------------------------------
+#
+# An agent kept declining `button_immediate_upgrade` because the call ends in a
+# commit and its session had none granted. The gate is on the commit tool; it
+# is not a veto on Odoo's own standard actions. The one place an agent is told
+# to read and not write is someone else's instance.
+
+
+def test_the_instructions_welcome_odoos_own_install_and_upgrade():
+    text = server.INSTRUCTIONS
+    assert "install" in text and "upgrade" in text
+    assert "ask" in text.lower(), "the agent is told not to ask first"
+    # the old line said nothing persists until a commit, which is what made an
+    # agent read Odoo's own commit as a breach
+    assert "Nothing persists until a commit" not in text
+
+
+async def test_the_commit_topic_says_the_gate_is_not_a_veto_on_odoo():
+    text = " ".join((await server.os_help("commit"))["text"].split())
+    assert "button_immediate_upgrade" in text
+    assert "commit_not_allowed" in text
+    assert "not a way around" in text and "welcome" in text
+    assert "someone else's instance" in text
+
+
+async def test_the_modules_topic_calls_the_commit_odoos_own_and_welcome():
+    # hard-wrapped prose: compare on the words, not on the wrapping
+    text = " ".join((await server.os_help("modules"))["text"].split())
+    assert "Odoo's own" in text and "welcome" in text
+    assert "not a trick around the commit gate" in text
+    assert "someone else's instance" in text
+    # no refusal or hedge because a commit comes at the end
+    assert "no reason to refuse or hedge" in text

@@ -53,12 +53,12 @@ def render_for_mcp(text: str) -> str:
 
 INSTRUCTIONS = """\
 odoo-sheller runs Python in a live Odoo shell. `env` and `self` are Odoo's
-own, and variables persist between commands: a session is a workspace.
+own; variables persist between commands.
 
-Hosts cut this at 2048 characters. The rest is behind {{help}}(topic):
+The rest is behind {{help}}(topic):
 
-  sessions       opening, closing, death, one at a time
-  ownership      handover, whose session it is
+  sessions       opening, closing, death
+  ownership      handover
   commit         the grant ritual
   remote_server  a remote Odoo, and production
   limits         what never to attempt
@@ -66,7 +66,7 @@ Hosts cut this at 2048 characters. The rest is behind {{help}}(topic):
   code           which override actually runs
   log            what Odoo logged
   records        reading a record whole
-  modules        installing, upgrading, migrations
+  modules        install, upgrade: run them, never ask
   jobs           with_delay, run inline
   tests          a test, class or module
   psql           SQL with no session
@@ -80,8 +80,9 @@ Read the topic before working around something. Not negotiable:
 - One session at a time: {{close_session}} the one you hold before opening
   another. After editing project Python open a fresh one — the running one
   imported the old code.
-- Rollback is the default. Nothing persists until a commit; close, kill or
-  death discard it. End experiments with {{rollback}}.
+- Rollback is the default. Your writes persist only through {{commit}}; close,
+  kill or death discard them. End experiments with {{rollback}}. Odoo's own
+  `button_immediate_install`/`_upgrade` commit by themselves: run them.
 - Commit is a right the human grants. On `commit_not_allowed`: stop, say
   what you want to write and why, then poll {{session}} until allow_commit
   is true, not {{commit}}. `commit_forbidden` is never granted to you (an
@@ -168,6 +169,14 @@ with {{rollback}}.
 Writing to the database is a separate, granted right, and it gates {{commit}}
 only — running code is never gated by it. {{exec}} always works once you own a
 ready session; the only question is whether persisting it is allowed yet.
+
+The gate is on {{commit}}, not on Odoo. Odoo's own standard actions that commit
+by design — `button_immediate_install` and `button_immediate_upgrade` on
+`ir.module.module` — are not a way around it, and no risk to weigh: they are how
+Odoo is meant to be driven, and using them is welcome. A session with no grant
+runs them as it runs anything else; do not stop at `commit_not_allowed`, or
+ask the human, because the call ends in a commit. {{help}}('modules'). The one
+limit is someone else's instance, where you read and never install or upgrade.
 
 Your sessions usually open with the right off, and {{commit}} answers
 `commit_not_allowed` until it is granted. The first time that happens:
@@ -464,13 +473,16 @@ Install pulls in the module's dependencies, and an empty recordset means the
 loader has never seen that module: call `Module.update_list()` first — it
 scans the addons paths for manifests — then search again.
 
-Either one commits on its own — it has to, to rebuild the registry — so it is
-a write the commit gate does not cover. That is not a reason to ask
-permission. You changed the code; the database has to catch up. An upgrade is
-the consequence of your own edit, not a decision the human has to weigh, and
-so is installing a module your work needs or running a migration script. Do
-not ask, and do not wait for an answer: say what you are upgrading and run
-it.
+Either one commits on its own — it has to, to rebuild the registry. That
+commit is Odoo's own, the standard way it does this: not a trick around the
+commit gate, and nothing to be wary of. The gate covers {{commit}}; it is not
+a veto on Odoo's own actions, and install and upgrade are the methods Odoo
+offers for exactly this. Using them is welcome whenever the work calls for it,
+and a commit at the end is no reason to refuse or hedge. You changed the code;
+the database has to catch up. An upgrade is the consequence of your own edit,
+not a decision the human has to weigh, and so is installing a module your work
+needs or running a migration script. Do not ask, and do not wait for an
+answer: say what you are upgrading and run it.
 
 The one place this does not apply is a session running on someone else's
 instance — {{session}} reports it as `kind` — where you were lent access, not

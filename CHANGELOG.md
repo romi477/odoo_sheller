@@ -7,6 +7,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- The agent's instructions no longer read as a ban on Odoo's own commits. Agents
+  kept declining `button_immediate_upgrade` and `button_immediate_install` because
+  the call ends in a commit and the session had none granted. The server
+  instructions now say writes persist *only through `os_commit`* — not "nothing
+  persists until a commit" — and name the two calls as welcome; the `commit` topic
+  says the gate is on the tool and not a veto on Odoo's standard actions; the
+  `modules` topic says the same. Someone else's instance is still read-only.
+
 ## [1.13.1] — 2026-11-03
 
 The Connect screen, tidied. A local container's card shows the ports it is published

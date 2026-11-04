@@ -394,10 +394,14 @@ In short, what the instructions and the topics between them say:
   and `button_immediate_install()` for a module that is not installed yet
   (dependencies come with it; an empty recordset means `update_list()` has
   not been run since the module appeared on disk).
-  Either commits by itself — a write the commit gate does not cover — and
-  that is deliberately *not* a reason to ask permission: the agent changed
-  the code, so the database has to catch up, and an upgrade is the
-  consequence of its own edit rather than a decision to put to the human.
+  Either commits by itself — Odoo's own commit, a write the commit gate does
+  not cover — and that is deliberately *not* a reason to ask permission or to
+  hold back: the gate is on `os_commit`, not a veto on Odoo's standard actions.
+  The agent changed the code, so the database has to catch up, and an upgrade
+  is the consequence of its own edit rather than a decision to put to the
+  human. The server instructions and the `commit` topic say so too, because an
+  agent that never opens `modules` read "nothing persists until a commit" as a
+  ban. A session on someone else's instance is the one exception.
   Agents were asking, every time, and the answer was always yes. The one
   exception is a session running on someone else's instance, where access
   was lent and the database was not: never there. It is also how the
