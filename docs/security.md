@@ -104,7 +104,12 @@ in the same way that the session keys are:
 
 - It refuses meta-commands, transaction control, `SET`, `DO`, `COPY` to anywhere
   but stdout, control characters, `U&"..."` identifiers, an `E''` string continued
-  on another line, and calls such as `set_config`, `dblink` and `pg_read_file`. It
+  on another line, and calls such as `set_config`, `dblink` and `pg_read_file`, and
+  `UPDATE pg_settings`, which a rule turns into `set_config`. Without that last one, a
+  call with the switch on could lift `statement_timeout`, or turn off
+  `standard_conforming_strings` so that `psql` reads the following lines with backslash
+  escapes while the guard read them without, and a `COMMIT` hidden in what the guard
+  took for a string would end a dry run. It
   reads text as `psql`'s own lexer does, and a live test holds the two together. It does
   not read the bodies of functions. A function already in the database that uses
   `dblink` can commit on another connection, from a read-only call.

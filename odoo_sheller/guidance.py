@@ -740,7 +740,9 @@ Refused before anything runs, as `psql_refused` with the word:
 - `BEGIN`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`, `START`, `PREPARE TRANSACTION`,
   because the call decides how the transaction ends (`SAVEPOINT` and `ROLLBACK TO`
   are fine);
-- `SET`, `RESET` and `set_config`, because they would lift the read-only flag;
+- `SET`, `RESET`, `set_config` and `UPDATE pg_settings`, which is `set_config`
+  by another name, because they would lift the read-only flag or the deadline;
+  reading `pg_settings` is fine;
 - `DO`, whose body cannot be read;
 - `COPY` other than `COPY ... TO STDOUT`;
 - calls that leave the transaction or touch the server, such as `dblink` and

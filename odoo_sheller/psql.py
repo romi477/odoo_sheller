@@ -265,6 +265,22 @@ def _check_keywords(statement: list[str]) -> None:
             raise PsqlRefused(first)
 
 
+def _check_settings_write(tokens: list[str]) -> None:
+    """`UPDATE pg_settings` is `set_config` by another name: a rule rewrites it into one.
+
+    With the switch on it would lift the server's own deadline, so a statement
+    goes on running after the daemon has stopped `psql`, or turn off
+    `standard_conforming_strings`, after which `psql` reads the lines that follow
+    differently from the reading above. Reading the view is untouched.
+    """
+    for at, token in enumerate(tokens):
+        if token != "update":
+            continue
+        target = [word for word in tokens[at + 1 : at + 4] if word not in ("only", "pg_catalog")]
+        if target[:1] == ["pg_settings"]:
+            raise PsqlRefused("pg_settings")
+
+
 def check_sql(sql: str) -> None:
     """Raises `PsqlRefused` unless this text may be handed to `psql`."""
     tokens = _tokens(sql)
@@ -274,6 +290,7 @@ def check_sql(sql: str) -> None:
     _check_parentheses(tokens)
     for statement in statements:
         _check_keywords(statement)
+    _check_settings_write(tokens)
     for token, following in itertools.pairwise(tokens):
         if following == _OPEN and (token in _FUNCTIONS or token.startswith(_FUNCTION_PREFIXES)):
             raise PsqlRefused(token)

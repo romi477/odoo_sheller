@@ -48,6 +48,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   The instructions, the `commit` topic and the `modules` topic now say to call
   `os_rollback` first, and to grant and commit anything that has to stay before the
   upgrade.
+- `os_psql` refuses `UPDATE pg_settings`, which Postgres turns into `set_config`. With
+  *agents may commit* on it passed the guard, and could lift `statement_timeout`, so a
+  statement went on after the call was stopped, or turn off
+  `standard_conforming_strings`, after which `psql` read later lines differently from
+  the guard and a `COMMIT` could end a dry run. Reading `pg_settings` is still allowed.
 
 ## [1.13.1] — 2026-11-03
 

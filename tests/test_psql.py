@@ -47,6 +47,23 @@ from odoo_sheller.transport import DOCKER, ODOOSH, SSH, Target, docker_bin
         ("set local x = 1", "set"),
         ("reset all", "reset"),
         ("select set_config('a','b',false)", "set_config"),
+        # `set_config` by another name: Postgres rewrites the update into a call.
+        ("update pg_settings set setting = '0' where name = 'statement_timeout'", "pg_settings"),
+        (
+            (
+                "UPDATE pg_catalog.pg_settings SET setting = 'off'"
+                " WHERE name = 'standard_conforming_strings'"
+            ),
+            "pg_settings",
+        ),
+        ('update only "pg_settings" set setting = 1', "pg_settings"),
+        (
+            (
+                "with x as (update pg_settings set setting = '0' where name = 'lock_timeout'"
+                " returning 1) select * from x"
+            ),
+            "pg_settings",
+        ),
         ("select PUBLIC.dblink_exec('x','y')", "dblink_exec"),
         ('select "dblink"(\'x\')', "dblink"),
         ("select pg_read_file ('/etc/passwd')", "pg_read_file"),
@@ -123,6 +140,11 @@ def test_refused(sql, word):
         "explain analyze select 1",
         "select pg_stat_get_activity(1)",
         "select dblink from t",
+        # Reading the settings is what a stuck session calls for; only writing is out.
+        "select name, setting from pg_settings",
+        "select * from pg_catalog.pg_settings where name = 'statement_timeout'",
+        "update t set a = (select setting from pg_settings where name = 'x')",
+        "select 1 for update",
         # Postgres's and the switch's business, not the guard's: the spec says so.
         "drop table t",
         "with a as (select 1) select * from a",
