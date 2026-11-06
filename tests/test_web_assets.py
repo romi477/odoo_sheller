@@ -515,6 +515,119 @@ def test_edit_hands_the_code_back_to_the_editor(app_js):
     assert "editInEditor(id, cell.code)" in app_js
 
 
+def _js_function(app_js: str, name: str) -> str:
+    found = re.search(rf"(?:async )?function {name}\(.*?\n\}}", app_js, re.DOTALL)
+    assert found is not None, name
+
+    return found.group(0)
+
+
+def test_a_finished_command_clears_only_the_code_it_sent(app_js):
+    """The editor stays usable while a command runs (ui-guide), so what is in it
+    when the result lands may be the next command. Clearing it unconditionally
+    threw that away."""
+    run = _js_function(app_js, "runCommand")
+    assert "record.editor?.setValue('');" not in run
+    assert re.search(
+        r"if \(explicitCode === undefined && record\.editor\?\.getValue\(\) === typed\) \{\s*"
+        r"record\.editor\.setValue\(''\);",
+        run,
+    )
+
+
+def test_history_keeps_the_draft_it_leaves(app_js):
+    """Up from an unsent draft used to replace it for good, and Down at the end of
+    the buffer replaced it with nothing."""
+    assert "draft: ''," in _js_function(app_js, "newSessionRecord")
+    move = _js_function(app_js, "historyMove")
+    # Leaving the draft keeps it; coming back down finds it.
+    assert "record.draft = editor.getValue();" in move
+    assert "next === record.history.length ? record.draft" in move
+    # Below the newest there is nothing: Down there is not a command to clear.
+    assert re.search(
+        r"if \(direction > 0 && record\.historyIndex === record\.history\.length\) \{\s*return;",
+        move,
+    )
+    # Above the oldest there is nothing either; the entry and its edits stay.
+    assert re.search(r"if \(next === record\.historyIndex\) \{\s*return;", move)
+
+
+def test_tab_indents_with_spaces(app_js):
+    """CodeMirror's own Tab types a real tab, while the indent after a colon is
+    four spaces, and Python refuses the mix with a TabError."""
+    editor = _js_function(app_js, "createEditor")
+    assert "indentWithTabs: false," in editor
+    assert re.search(
+        r"Tab: \(instance\) => \(instance\.somethingSelected\(\)\s*"
+        r"\? instance\.indentSelection\('add'\)\s*"
+        r": instance\.execCommand\('insertSoftTab'\)\)",
+        editor,
+    )
+    assert "'Shift-Tab': 'indentLess'," in editor
+
+
+def test_a_late_result_is_fetched_when_it_lands(app_js):
+    """Past its ceiling a command keeps running and the session stays busy. Its
+    result came back only after a reload: the socket fetches history on `ready`
+    for a page that is waiting for one, and nothing said this one was."""
+    run = _js_function(app_js, "runCommand")
+    timeout = re.search(r"error\.status === 504\) \{(.*?)\} else", run, re.DOTALL)
+    assert timeout is not None
+    assert "record.awaitingInFlight = true;" in timeout.group(1)
+    # Ready may arrive before the 504 itself does.
+    assert re.search(
+        r"if \(record\.awaitingInFlight && record\.info\.state === 'ready'\) \{\s*"
+        r"loadSessionHistory\(id\);",
+        run,
+    )
+
+
+def test_a_refused_run_says_so(app_js):
+    """ui-guide: running while busy is refused visibly, before you even try,
+    never a silent no-op. The hint says what the key does now, and a press that is
+    refused shows."""
+    hint = _js_function(app_js, "editorHint")
+    assert "'⌘+Enter to run · ↑↓ history'" in hint
+    assert "record.info.state" in hint
+    bind = _js_function(app_js, "bindSessionPanel")
+    assert "panel.querySelector('.editor-label .hint'), editorHint(record, accepting)" in bind
+    run = _js_function(app_js, "runCommand")
+    busy = re.search(
+        r"if \(record\.info\.state === 'busy' \|\| record\.info\.state === 'starting'\) \{(.*?)\n  \}",
+        run,
+        re.DOTALL,
+    )
+    assert busy is not None
+    assert "refuseRun(record);" in busy.group(1)
+    refuse = _js_function(app_js, "refuseRun")
+    assert "classList.add('refused')" in refuse
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert re.search(r"\.editor-pane\.refused \.hint\s*\{[^}]*color: var\(--amber\);", css)
+
+
+def test_a_finished_command_leaves_focus_where_the_user_put_it(app_js):
+    """A command can run for minutes. Typing into the log filter meanwhile ended up
+    in the code buffer when it finished."""
+    run = _js_function(app_js, "runCommand")
+    assert "const focused = document.activeElement;" in run
+    assert "record.editor?.focus();\n  }" not in run
+    assert re.search(
+        r"if \(\[focused, document\.body, null\]\.includes\(document\.activeElement\)\) \{\s*"
+        r"record\.editor\?\.focus\(\);",
+        run,
+    )
+
+
+def test_indented_code_is_dedented_before_it_is_sent(app_js):
+    """Lines pasted out of a method body arrive indented, and Python reads that as
+    an IndentationError."""
+    dedent = _js_function(app_js, "dedentCode")
+    assert "line.match(/^[ \\t]*/)[0]" in dedent
+    run = _js_function(app_js, "runCommand")
+    assert "const code = dedentCode(typed);" in run
+    assert re.search(r"api\.post\(`/api/sessions/\$\{id\}/exec`, \{code\}", run)
+
+
 def test_command_w_closes_the_session_in_view(app_js):
     """The same path the button takes, confirmation and all."""
     blocks = [

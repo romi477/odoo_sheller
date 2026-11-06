@@ -23,6 +23,25 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   persists until a commit" — and name the two calls as welcome; the `commit` topic
   says the gate is on the tool and not a veto on Odoo's standard actions; the
   `modules` topic says the same. Someone else's instance is still read-only.
+- Code pasted with a shared indent — lines out of a method body — is sent with that
+  indent taken off, instead of failing with `IndentationError`.
+
+### Fixed
+
+- A command that finished cleared the editor, and with it whatever had been typed
+  while the command ran. It now clears only the code that was sent.
+- ↑ from an unsent draft replaced it for good, and ↓ with the caret at the end of the
+  buffer replaced it with nothing. The draft is kept, and ↓ past the newest command
+  brings it back.
+- Tab typed a real tab while the indent after a colon is four spaces, and Python
+  refused the mix with `TabError`. Tab indents with spaces; Shift+Tab takes them back.
+- ⌘+Enter on a busy session did nothing at all. The hint says `busy — ⌘+Enter waits
+  for ready` while it is, and turns amber when the key is pressed anyway.
+- A command past its ceiling kept its timeout cell until the page was reloaded,
+  though the session waited for its result. The late result now replaces the cell
+  when it lands.
+- A finished command took the focus back to the editor even from the log filter.
+  It does so only if the focus was not moved meanwhile.
 
 ## [1.13.1] — 2026-11-03
 

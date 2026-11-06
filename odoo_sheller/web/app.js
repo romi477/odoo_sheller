@@ -75,6 +75,8 @@ function newSessionRecord(info) {
     editor: null,
     history: [],
     historyIndex: 0,
+    // What was in the editor when ↑ left it for the history, given back by ↓.
+    draft: '',
     reattached: false,
     socketOffline: false,
     panel: null,
@@ -2681,6 +2683,7 @@ function bindSessionPanel(panel, id, record) {
     ? 'Opening a session — Odoo is loading its registry.'
     : 'New — Open another session on the same container and database. Stay on this tab.';
   panel.querySelector('.editor-pane').classList.toggle('locked', !accepting);
+  setText(panel.querySelector('.editor-label .hint'), editorHint(record, accepting));
   panel.classList.toggle('editor-tall', record.editorTall);
   const height = panel.querySelector('.editor-height');
   height.textContent = record.editorTall ? 'shorter' : 'taller';
@@ -2798,10 +2801,17 @@ function createEditor(panel, id, record) {
     lineNumbers: true,
     indentUnit: 4,
     tabSize: 4,
+    indentWithTabs: false,
     lineWrapping: true,
     extraKeys: {
       'Cmd-Enter': () => runCommand(id),
       'Ctrl-Enter': () => runCommand(id),
+      // Spaces, as the indent after a colon is. CodeMirror's own Tab types a real
+      // tab, and Python refuses the mix of the two with a TabError.
+      Tab: (instance) => (instance.somethingSelected()
+        ? instance.indentSelection('add')
+        : instance.execCommand('insertSoftTab')),
+      'Shift-Tab': 'indentLess',
       Up: (instance) => historyMove(record, instance, -1),
       Down: (instance) => historyMove(record, instance, 1),
     },
@@ -2809,6 +2819,9 @@ function createEditor(panel, id, record) {
   record.editor = editor;
 }
 
+// ↑ and ↓ at the edges of the buffer walk the commands sent, the newest last.
+// One past the newest is the draft: what was being written when ↑ left it, kept
+// so that ↓ brings it back rather than an empty editor.
 function historyMove(record, editor, direction) {
   const cursor = editor.getCursor();
   const atStart = direction < 0 && cursor.line === 0 && cursor.ch === 0;
@@ -2820,11 +2833,25 @@ function historyMove(record, editor, direction) {
 
     return;
   }
-  record.historyIndex = Math.max(0, Math.min(
+  // Below the newest there is nothing: ↓ out of habit must not clear the draft.
+  if (direction > 0 && record.historyIndex === record.history.length) {
+
+    return;
+  }
+  const next = Math.max(0, Math.min(
     record.history.length,
     record.historyIndex + direction,
   ));
-  editor.setValue(record.history[record.historyIndex] || '');
+  // Above the oldest there is nothing either; the entry, and any edit to it, stay.
+  if (next === record.historyIndex) {
+
+    return;
+  }
+  if (record.historyIndex === record.history.length) {
+    record.draft = editor.getValue();
+  }
+  record.historyIndex = next;
+  editor.setValue(next === record.history.length ? record.draft : record.history[next]);
   editor.setCursor(direction < 0 ? {line: 0, ch: 0} : {
     line: editor.lineCount() - 1,
     ch: editor.getLine(editor.lineCount() - 1).length,
@@ -2851,17 +2878,85 @@ function editInEditor(id, code) {
   record.editor.refresh();
 }
 
+// The common indentation of the lines that have something on them, taken off
+// every line, as Python's textwrap.dedent does. Lines pasted out of a method body
+// arrive indented, and Python reads that as an IndentationError.
+function dedentCode(code) {
+  const lines = code.split('\n');
+  let margin = null;
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+    const indent = line.match(/^[ \t]*/)[0];
+    if (margin === null) {
+      margin = indent;
+    } else {
+      let same = 0;
+      while (same < margin.length && margin[same] === indent[same]) {
+        same += 1;
+      }
+      margin = margin.slice(0, same);
+    }
+    if (!margin) {
+
+      return code;
+    }
+  }
+  if (!margin) {
+
+    return code;
+  }
+
+  return lines.map((line) => (line.startsWith(margin) ? line.slice(margin.length) : '')).join('\n');
+}
+
+// What ⌘+Enter does right now, said before it is pressed: ui-guide promises a
+// refusal that shows before you try, never a silent no-op.
+function editorHint(record, accepting) {
+  if (accepting) {
+
+    return '⌘+Enter to run · ↑↓ history';
+  }
+  const state = record.info.state;
+  if (state === 'busy' || state === 'starting') {
+
+    return `${state} — ⌘+Enter waits for ready · ↑↓ history`;
+  }
+
+  return `${state} — nothing runs here · ↑↓ history`;
+}
+
+// And when it is pressed anyway, the hint is what answers.
+function refuseRun(record) {
+  const pane = record.panel?.querySelector('.editor-pane');
+  if (!pane) {
+
+    return;
+  }
+  pane.classList.remove('refused');
+  // Read in between, or removing and adding in one frame restarts nothing.
+  void pane.offsetWidth;
+  pane.classList.add('refused');
+  window.setTimeout(() => pane.classList.remove('refused'), 900);
+}
+
 async function runCommand(id, explicitCode) {
   const record = state.sessions.get(id);
-  const code = explicitCode === undefined ? record?.editor?.getValue() : explicitCode;
-  if (!record || !code?.trim()) {
+  const typed = explicitCode === undefined ? record?.editor?.getValue() : explicitCode;
+  if (!record || !typed?.trim()) {
 
     return;
   }
   if (record.info.state === 'busy' || record.info.state === 'starting') {
+    refuseRun(record);
 
     return;
   }
+  const code = dedentCode(typed);
+  // Taken back at the end only if nobody has put it anywhere since: a command can
+  // run for minutes, and what is typed into the log filter meanwhile is not code.
+  const focused = document.activeElement;
   const cell = {
     uid: `cell-${(state.cellCounter += 1)}`,
     ordinal: record.nextOrdinal,
@@ -2895,8 +2990,10 @@ async function runCommand(id, explicitCode) {
     );
     cell.status = cell.result.error ? 'error' : 'done';
     record.info.pending_commands = (record.info.pending_commands || 0) + 1;
-    if (explicitCode === undefined) {
-      record.editor?.setValue('');
+    // The editor stays open for typing while a command runs, so by now it may
+    // hold the next one. Only the code that was sent is cleared away.
+    if (explicitCode === undefined && record.editor?.getValue() === typed) {
+      record.editor.setValue('');
     }
   } catch (error) {
     cell.status = 'error';
@@ -2907,10 +3004,15 @@ async function runCommand(id, explicitCode) {
       maybeLoadDeadCause(id, record);
       cell.result = {error: {type: 'SessionDead', message: error.message, traceback: ''}};
     } else if (error.status === 504) {
+      // SIGINT is a request: the command may still finish, and the session is
+      // busy until it does. The socket fetches the history on `ready` for a page
+      // that waits on a result, and this page now does.
+      record.awaitingInFlight = true;
       cell.result = {
         error: {
           type: 'TimeoutError',
-          message: 'Command exceeded its ceiling and was interrupted.',
+          message: 'Command exceeded its ceiling; an interrupt was sent. '
+            + 'If it still finishes, its result replaces this.',
           traceback: '',
         },
       };
@@ -2923,8 +3025,14 @@ async function runCommand(id, explicitCode) {
     // Ask the daemon rather than guessing: after a timeout the command is
     // still running in the container and the session stays busy.
     await refreshSessionInfo(id);
+    // The late result can beat the 504 here, and then no `ready` follows it.
+    if (record.awaitingInFlight && record.info.state === 'ready') {
+      loadSessionHistory(id);
+    }
     renderSessions();
-    record.editor?.focus();
+    if ([focused, document.body, null].includes(document.activeElement)) {
+      record.editor?.focus();
+    }
   }
 }
 

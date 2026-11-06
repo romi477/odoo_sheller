@@ -1561,6 +1561,12 @@ a.brand:active,
   text-transform: none;
 }
 
+/* ⌘+Enter pressed while the session cannot take it: the hint that already said
+   so is what answers, for a moment, in the colour of a refusal. */
+.editor-pane.refused .hint {
+  color: var(--amber);
+}
+
 .editor-height {
   padding: 2px 8px;
   border: 0;

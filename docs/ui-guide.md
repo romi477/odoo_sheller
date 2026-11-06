@@ -372,12 +372,26 @@ a fresh one is opened with **New**.
 
 Python syntax highlighting, `⌘+Enter to run · ↑↓ history` stated right in the
 corner. Up/down arrows walk previous commands when the caret is at the edge
-of the buffer. **taller** / **shorter** doubles the editor's height for the
+of the buffer. What was being written when ↑ left it is kept, and ↓ past the
+newest command brings it back; ↓ at the end of a draft does nothing. Tab
+indents with four spaces, as the indent after a colon does — a real tab beside
+them is a `TabError` in Python — and Shift+Tab takes four back. Code whose
+lines all share an indent, pasted out of a method body, is sent with that
+indent taken off. **taller** / **shorter** doubles the editor's height for the
 session (not remembered across a reload).
 
 While a command runs, the editor stays usable for typing the next one, but
 running it is refused until the session is `ready` again — visibly, before
-you even try, never a silent no-op.
+you even try, never a silent no-op: the hint in the corner reads `busy —
+⌘+Enter waits for ready`, and a ⌘+Enter pressed anyway turns it amber for a
+moment. When the command ends, the editor is cleared only if it still holds
+the code that was sent; anything typed meanwhile stays. Focus goes back to the
+editor only if it was not moved elsewhere — into the log filter, say — while
+the command ran.
+
+A command that passes its ceiling is sent `SIGINT`, and its cell says so. If
+the command still finishes, its result replaces that cell as soon as it
+lands, marked as a late result — no reload needed.
 
 ### Cell feed
 
