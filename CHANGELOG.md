@@ -7,6 +7,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.13.2] — 2026-11-06
+
+The editor in a human's session, and the agent's instructions, put right. Text typed
+while a command runs is kept, Tab indents with spaces, a draft survives the history,
+and a refused run says so. The instructions tell an agent to roll back before Odoo's
+own install or upgrade, which commit the whole transaction; `os_psql` refuses
+`UPDATE pg_settings`; the Connect screen keeps the focus, a typed database and the
+commit box where the user left them. Nothing is removed from the API or the MCP
+surface.
+
 ### Changed
 
 - A local container's card has one key, **Open session**, and the database picker
@@ -2033,6 +2043,7 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
+[1.13.2]: https://github.com/romi477/odoo_sheller/compare/v1.13.1...v1.13.2
 [1.13.1]: https://github.com/romi477/odoo_sheller/compare/v1.13.0...v1.13.1
 [1.13.0]: https://github.com/romi477/odoo_sheller/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/romi477/odoo_sheller/compare/v1.11.1...v1.12.0
