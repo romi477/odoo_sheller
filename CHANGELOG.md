@@ -42,6 +42,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   when it lands.
 - A finished command took the focus back to the editor even from the log filter.
   It does so only if the focus was not moved meanwhile.
+- The agent's instructions welcomed `button_immediate_install` and `_upgrade` without
+  saying that Odoo commits the session's whole transaction before it rebuilds the
+  registry, so uncommitted writes went in with the module — past the commit gate.
+  The instructions, the `commit` topic and the `modules` topic now say to call
+  `os_rollback` first, and to grant and commit anything that has to stay before the
+  upgrade.
 
 ## [1.13.1] — 2026-11-03
 

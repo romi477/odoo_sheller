@@ -71,7 +71,7 @@ The rest is behind {{help}}(topic):
   tests          a test, class or module
   psql           SQL with no session
   watching       the human watches
-  odoo_<major>   Python and XML for that Odoo; {{open_session}} hands it over
+  odoo_<major>   Python and XML for that Odoo, given at open
 
 Read the topic before working around something. Not negotiable:
 
@@ -81,8 +81,9 @@ Read the topic before working around something. Not negotiable:
   another. After editing project Python open a fresh one — the running one
   imported the old code.
 - Rollback is the default. Your writes persist only through {{commit}}; close,
-  kill or death discard them. End experiments with {{rollback}}. Odoo's own
-  `button_immediate_install`/`_upgrade` commit by themselves: run them.
+  kill or death discard them. End experiments with {{rollback}}, and run it
+  before Odoo's own `button_immediate_install`/`_upgrade`, which commit the
+  whole transaction.
 - Commit is a right the human grants. On `commit_not_allowed`: stop, say
   what you want to write and why, then poll {{session}} until allow_commit
   is true, not {{commit}}. `commit_forbidden` is never granted to you (an
@@ -90,7 +91,7 @@ Read the topic before working around something. Not negotiable:
   Never env.cr.commit() or env.cr.rollback() in code: each has a tool.
 - Work only in a session you opened or were handed. `not_owner` means ask
   for a handover, not a second session; never use a key you were not given.
-- Never touch ~/.odoo-sheller/ and never call the daemon's admin endpoints.
+- Never touch ~/.odoo-sheller/ or call the daemon's admin endpoints.
 - Read Odoo source with {{source}}, never with docker exec: {{help}}('code').
 """
 
@@ -175,8 +176,11 @@ by design — `button_immediate_install` and `button_immediate_upgrade` on
 `ir.module.module` — are not a way around it, and no risk to weigh: they are how
 Odoo is meant to be driven, and using them is welcome. A session with no grant
 runs them as it runs anything else; do not stop at `commit_not_allowed`, or
-ask the human, because the call ends in a commit. {{help}}('modules'). The one
-limit is someone else's instance, where you read and never install or upgrade.
+ask the human, because the call ends in a commit. That commit takes the
+session's whole transaction, though, so call {{rollback}} first: anything you
+left uncommitted would go in with the module, a write the gate never saw.
+{{help}}('modules'). The one limit is someone else's instance, where you read
+and never install or upgrade.
 
 Your sessions usually open with the right off, and {{commit}} answers
 `commit_not_allowed` until it is granted. The first time that happens:
@@ -483,6 +487,12 @@ the database has to catch up. An upgrade is the consequence of your own edit,
 not a decision the human has to weigh, and so is installing a module your work
 needs or running a migration script. Do not ask, and do not wait for an
 answer: say what you are upgrading and run it.
+
+That commit is not only the module's. Odoo commits the session's whole
+transaction before it rebuilds the registry, so anything you wrote and left
+uncommitted goes in with it — a write no grant covered. Call {{rollback}}
+first, every time. If something you wrote has to stay, ask for the grant and
+{{commit}} it before the upgrade, not through it.
 
 The one place this does not apply is a session running on someone else's
 instance — {{session}} reports it as `kind` — where you were lent access, not

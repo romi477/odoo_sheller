@@ -402,6 +402,12 @@ In short, what the instructions and the topics between them say:
   human. The server instructions and the `commit` topic say so too, because an
   agent that never opens `modules` read "nothing persists until a commit" as a
   ban. A session on someone else's instance is the one exception.
+  What all three also say: `os_rollback` first. Odoo's
+  `_button_immediate_function` commits the session's own cursor before it
+  rebuilds the registry (`ir_module.py:638` in 19), so anything the agent wrote
+  and left uncommitted would go in with the module — a write no grant covered.
+  Something that has to stay is granted and committed before the upgrade, not
+  carried through it.
   Agents were asking, every time, and the answer was always yes. The one
   exception is a session running on someone else's instance, where access
   was lent and the database was not: never there. It is also how the

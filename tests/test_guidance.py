@@ -17,17 +17,17 @@ from odoo_sheller import mcp as server
 # a commit that changes that text's wording on purpose, never to make a
 # refactor pass.
 MCP_GOLDEN = {
-    "instructions": "056c8e93f85e1c321433146970e9cd89283cadb25e6c4909e98bba67a7531ed0",
+    "instructions": "beacbc366d5f084e6c2576d58e865c2d2f924912ac81862e02141975a3d56df3",
     "sessions": "f279071f06d2a72b141caac228164e467205feedd8a355a352d5ca1dc2156bb5",
     "ownership": "a7dfdbc2da4f62f93ac40110271f76e3e3607b2b53ded4432ae37609bde313c6",
-    "commit": "32deb0ef18fb9334d7539f9be4e5bdf27018ebe38c7346f49e3026dc3fd02b39",
+    "commit": "1a3ce3b23e6b0113939ce8713ab3d3acdd797fbc1ae013047ff394741b460155",
     "remote_server": "809bb8517bf1789aecb3d8ae60a5bcd3234b98e6441cce3d1a64d577ed3a316e",
     "limits": "20dd27192499f9f42ce507560287d6b25dedb174d5076bbb0b247df65b4e040b",
     "orm": "29ce479be88e26e3c260c056cc2e71c2001be5069a1de0e8c6ef308a4aefd031",
     "code": "9695582a4342042586018028a87e617a9adffe8333083f67a3b4326914a14638",
     "log": "25be6d6b541c96978a501be05720c193444cdda9b29671724676c2673184b1a3",
     "records": "5b2c65b96dd3ba9f796619631e74644d1be58469e92cb2db1c8085c56db054a5",
-    "modules": "c855096249b0705073d329afabd81b5015656eb446144976c43e3ceb30f84877",
+    "modules": "d9f21e78ff3af8ec82413836a76333ce0c2076961ad13f9cc3dc08b3989b95e9",
     "jobs": "c853c98be14913bfc4e739cbcaae82491f034aa509f136a30954ed6d5580f37f",
     "tests": "2a89a69148efcb67fc336da04c927dc2cf5ced4aaec9b0d176aa5f4e2014fbde",
     "psql": "5390eed27f59269f505a3894dcb0282298e7d30fd9e6b11a1d1ae39e65c11e76",
@@ -145,3 +145,30 @@ async def test_the_modules_topic_calls_the_commit_odoos_own_and_welcome():
     assert "someone else's instance" in text
     # no refusal or hedge because a commit comes at the end
     assert "no reason to refuse or hedge" in text
+
+
+# --- ...and that commit takes the whole transaction --------------------------
+#
+# `_button_immediate_function` commits the session's own cursor
+# (odoo/addons/base/models/ir_module.py:638 in 19), so whatever the agent left
+# uncommitted goes in with the module: a write no grant ever covered. Telling
+# an agent to run them without asking made that the easy path. Roll back first.
+
+
+def test_the_instructions_say_to_roll_back_before_install_or_upgrade():
+    text = " ".join(server.INSTRUCTIONS.split())
+    assert "commit the whole transaction" in text
+    assert re.search(r"os_rollback[^.]*before Odoo's own `button_immediate_install`", text)
+
+
+async def test_the_commit_topic_says_install_and_upgrade_take_whatever_is_uncommitted():
+    text = " ".join((await server.os_help("commit"))["text"].split())
+    assert "whole transaction" in text
+    assert "os_rollback first" in text
+
+
+async def test_the_modules_topic_says_to_roll_back_first():
+    text = " ".join((await server.os_help("modules"))["text"].split())
+    assert "commits the session's whole transaction" in text
+    assert "os_rollback first" in text
+    assert "a write no grant covered" in text
