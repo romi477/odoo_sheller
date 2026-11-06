@@ -53,6 +53,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   statement went on after the call was stopped, or turn off
   `standard_conforming_strings`, after which `psql` read later lines differently from
   the guard and a `COMMIT` could end a dry run. Reading `pg_settings` is still allowed.
+- A failed start left **Open session** enabled after a Refresh or a re-probe found no
+  Odoo there, and pressing it sent a start with no database. The key is off until the
+  probe finds an Odoo again, and a start without one says to probe first.
+- A database name typed into the manual field was put back to the probe's default on
+  the next render, and a field cleared to retype one refilled itself. What is typed
+  there stays.
+- The *agents may commit* box jumped back to its old state while the change was out,
+  then forward when the answer came. It shows what was asked until then.
+- A key that locked its card — Probe, Close, the commit switch — lost the focus to
+  the page, and a remote card lost it on every render. The focus goes back to that
+  key when the card is free again, unless it was moved elsewhere meanwhile.
 
 ## [1.13.1] — 2026-11-03
 

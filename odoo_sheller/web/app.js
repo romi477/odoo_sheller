@@ -26,6 +26,9 @@ const state = {
   // forgetting, the commit switch — what it is, and how many are holding it.
   // See whileBusy.
   busy: new Map(),
+  // The control on a Connect card that had the focus when a render took it
+  // away, by card key and selector. See noteCardFocus.
+  cardFocus: null,
   connectMode: 'local',
   builds: [],
   buildsError: null,
@@ -441,6 +444,8 @@ async function request(operation) {
 
 function showScreen(screen) {
   state.screen = screen;
+  // A card's control is not where the focus belongs once the screen has moved.
+  state.cardFocus = null;
   localStorage.setItem('osScreen', screen);
   document.querySelectorAll('.screen').forEach((element) => {
     element.hidden = element.id !== `screen-${screen}`;
@@ -599,6 +604,65 @@ function lockCard(card, work) {
     card.dataset.busy = 'true';
   } else {
     delete card.dataset.busy;
+  }
+}
+
+// The controls on a card that can hold the focus, named by what they are rather
+// than kept as nodes: a remote card is rebuilt on every render, and `inert` on a
+// working card takes the focus of the key that was just pressed.
+const CARD_CONTROLS = [
+  '.start',
+  '.reprobe',
+  '.close-connected',
+  '.forget',
+  '.edit',
+  '.agent-commit input',
+  '.copy-meta',
+  '.databases',
+  '.database-manual',
+];
+
+// Before a render: which control on which card in this list has the focus.
+function noteCardFocus(list) {
+  const active = document.activeElement;
+  const card = active?.closest?.('.card');
+  if (!card || !list.contains(card)) {
+
+    return;
+  }
+  const selector = CARD_CONTROLS.find((candidate) => active.matches(candidate));
+  if (selector) {
+    state.cardFocus = {key: card.dataset.container, selector};
+  }
+}
+
+// After it: the focus goes back to that control as soon as it can take it again.
+// A locked card cannot, so the render that releases the lock is the one that
+// gives it back. Only from nowhere: focus the user has put elsewhere is theirs.
+// A control just made inert still holds the focus until the browser's next
+// update, so in the render that locks the card the focus is on the key that was
+// pressed — nowhere the user put it.
+function restoreCardFocus(list) {
+  const wanted = state.cardFocus;
+  if (!wanted) {
+
+    return;
+  }
+  const active = document.activeElement;
+  if (active && active !== document.body && !active.closest('[inert]')) {
+    state.cardFocus = null;
+
+    return;
+  }
+  const card = list.querySelector(`.card[data-container="${CSS.escape(wanted.key)}"]`);
+  const control = card?.querySelector(wanted.selector);
+  if (!control || control.disabled || control.closest('[inert]')) {
+
+    return;
+  }
+  control.focus();
+  if (document.activeElement === control) {
+    state.cardFocus = null;
   }
 }
 
@@ -1397,6 +1461,7 @@ function renderRemoteCards(kind) {
   const entries = kind.entries();
   // How many are kept, beside the title of the region that keeps them.
   setText(document.querySelector(kind.count), entries.length ? `· ${entries.length}` : '');
+  noteCardFocus(list);
   list.replaceChildren();
   if (!entries.length) {
     const empty = document.createElement('li');
@@ -1537,6 +1602,7 @@ function renderRemoteCards(kind) {
       restoreStartupScroll(card, startup);
     }
   });
+  restoreCardFocus(list);
 }
 
 function setText(element, value) {
@@ -1559,6 +1625,11 @@ function buildContainerCard(name) {
     // The card's click puts a failed start away; this one is a copy, not that.
     event.stopPropagation();
     copyTarget(name);
+  });
+  // Typed into once, the field is the user's: fillPicker stops putting the
+  // default back, even into a field they have just cleared.
+  card.querySelector('.database-manual').addEventListener('input', (event) => {
+    event.target.dataset.touched = 'true';
   });
   card.querySelector('.agent-commit').addEventListener('click', (event) => {
     // A checkbox, not a way into the picker: the card's own click must not
@@ -1631,6 +1702,7 @@ function renderContainers() {
   const rendered = [];
   const aside = [];
   const scrolls = [];
+  noteCardFocus(list);
   state.containers.forEach((container) => {
     let card = cards.get(container.name);
     if (!card) {
@@ -1639,14 +1711,16 @@ function renderContainers() {
     }
     (notATarget(container) ? aside : rendered).push(card);
     // A reused card carries the last render's state, so everything the
-    // template starts hidden or enabled has to be put back explicitly. The
-    // picker is the exception: it is the user's to open and close.
+    // template starts hidden or enabled has to be put back explicitly — the
+    // picker included, which is shown exactly while there is an Odoo to start.
     card.classList.toggle('probing', Boolean(container.probing));
     setText(card.querySelector('.meta'), containerFacts(container));
     // A database to pick exists only where the probe found an Odoo to start.
     const targeted = Boolean(container.probe?.ok && container.probe?.supported);
-    // The switch's tooltip follows it: the warning only while it is on.
-    showAgentCommit(card, Boolean(container.agent_commit));
+    // The switch's tooltip follows it: the warning only while it is on. While a
+    // change is out, the box shows what was asked, not what it is about to stop
+    // being.
+    showAgentCommit(card, Boolean(container.agentCommitWanted ?? container.agent_commit));
     // A version nothing has run on here is let through, so it is not an error:
     // a badge, and the whole sentence on hover.
     const untested = card.querySelector('.untested');
@@ -1694,7 +1768,9 @@ function renderContainers() {
     card.classList.toggle('start-failed', Boolean(startup?.failed));
     lockCard(card, cardWork(container.name, container.probing));
     if (startup) {
-      start.disabled = !startup.failed;
+      // A failed start may be tried again, but only on an Odoo the probe found:
+      // a Refresh blanks the probe, and a re-probe can say there is none now.
+      start.disabled = !startup.failed || !targeted;
       start.classList.toggle('busy', !startup.failed);
       start.setAttribute('aria-busy', startup.failed ? 'false' : 'true');
       start.title = startup.failed
@@ -1754,6 +1830,7 @@ function renderContainers() {
   // card that is not in the document yet is a silent no-op, which left every
   // first render showing the oldest lines instead of the newest.
   scrolls.forEach(([card, startup]) => restoreStartupScroll(card, startup));
+  restoreCardFocus(list);
 }
 
 // One `<details>`, reused, so opening it survives the next probe's render.
@@ -1890,7 +1967,7 @@ function fillPicker(card, container) {
   } else {
     select.hidden = true;
     manual.hidden = false;
-    if (manual.value !== preferred) {
+    if (!manual.dataset.touched && manual.value !== (preferred || '')) {
       manual.value = preferred || '';
     }
   }
@@ -1921,6 +1998,9 @@ async function toggleAgentCommit(name) {
     return;
   }
   const path = `/api/agent-commit/${encodeURIComponent(name)}`;
+  // The lock redraws the card at once; without this the redraw put the old state
+  // back on the box just ticked, which read as a refused click.
+  container.agentCommitWanted = !container.agent_commit;
   await whileBusy(name, 'commit', async () => {
     try {
       const answer = await withAdminRetry(() => (container.agent_commit
@@ -1929,6 +2009,8 @@ async function toggleAgentCommit(name) {
       container.agent_commit = answer.on;
     } catch (error) {
       noticeDialog(`Could not change "agents may commit" on ${name}: ${error.message}`);
+    } finally {
+      delete container.agentCommitWanted;
     }
   });
   // The render the lock ends with has already drawn the answer; this is for a
@@ -2195,6 +2277,14 @@ async function startSession(name) {
   const note = card.querySelector('.probe-note');
   const select = card.querySelector('.databases');
   const manual = card.querySelector('.database-manual');
+  // The odoo-bin to start comes from the probe, and the picker's database is
+  // only true of an Odoo the probe found.
+  if (!container?.probe?.ok || !container.probe.supported) {
+    note.textContent = 'Probe the container first: there is no Odoo here to start yet.';
+    note.classList.add('error');
+
+    return;
+  }
   const database = select.hidden ? manual.value.trim() : select.value;
   if (!database) {
     note.textContent = 'Enter a database name.';

@@ -122,7 +122,8 @@ restart or a config change.
   no actions. The default database comes from `db_name` in the
   container's `odoo.conf`, which in a dev container is almost always the right
   answer. If the database list couldn't be read at all, a free-text field takes
-  its place.
+  its place; what you type there, a cleared field included, is left alone by
+  every later render.
 - Beside the name, past a neutral pipe, a checkbox: **agents may commit**. It
   follows the name wherever that ends; the pipe says it is a setting of the
   container, not more of its name. Off is the usual way — an agent gets the
@@ -131,8 +132,10 @@ restart or a config change.
   this container may commit, to any database in it, until you turn it off; it
   survives restarts and never applies to a remote target. It turns amber,
   gains a **GLOBAL** tag, and for as long as it is on its tooltip is an
-  **ADVANCED · GLOBAL** warning that says exactly that. The box shows what the
-  daemon answered, not the tick a click made before it did. Turning it either way takes the admin key, like writing a
+  **ADVANCED · GLOBAL** warning that says exactly that. While a change is out
+  the card is locked and the box shows what was asked — it does not jump back
+  and then forward again; once the daemon answers, it shows the answer, so a
+  refused change puts the tick back. Turning it either way takes the admin key, like writing a
   card; the desktop app supplies it. Off also takes the right from any agent
   session on the container that holds it, a grant you made by hand included.
 - A card stacks its name above its keys only when the width is really gone —
@@ -164,7 +167,12 @@ restart or a config change.
   a black box. A failed start leaves that well up, with the last lines
   readable right next to the error. Scrolling back in the well to read a
   traceback holds your position even while more lines arrive; a **Refresh**
-  started mid-open leaves the well alone too.
+  started mid-open leaves the well alone too. **Open session** may be pressed
+  again after a failure only while the probe shows an Odoo there: a Refresh
+  blanks the probe, and a re-probe can find none.
+- A key that locks its card — **probe**, **Close**, the commit box — gets the
+  focus back when the card is free again, and so does a key on a remote card,
+  which is rebuilt on every render. Not if you moved the focus meanwhile.
 - The card tracks the specific session it asked for, not just "a session on
   this target" — a container can hold several sessions, and an agent might
   be opening the same database at the same moment. The two don't get crossed.

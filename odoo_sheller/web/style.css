@@ -537,8 +537,8 @@ button.region-toggle:active:not(:disabled) {
 /* Agents may commit on this container: a checkbox on the name line, since it
    belongs to the container and covers every database in it. Muted when off,
    amber when on — amber is the colour of writing here, as on Grant commit.
-   GLOBAL shows only while it is on; off, the title says it. data-on is what the
-   daemon answered, not the tick a click made before it did. A neutral pipe
+   GLOBAL shows only while it is on; off, the title says it. data-on is what was
+   asked while a change is out, then what the daemon answered. A neutral pipe
    parts it from the name, with the name line's own space on either side; it
    follows the name wherever that ends. */
 .agent-commit {
@@ -963,10 +963,10 @@ button.odoosh-save {
   border-top: 1px solid var(--border);
 }
 
-/* Pushed to the far edge of the picker row, away from Start: one is the
-   thing you do here, the other is a note you take with you. Faint until
-   wanted — a framed word there read as a third verb beside Start and probe,
-   and this row holds no verbs. */
+/* Pushed to the far edge of the picker row, away from the database: one is
+   what you choose here, the other is a note you take with you. Faint until
+   wanted — a framed word there read as a third verb beside Open session and
+   Probe, and this row holds no verbs. */
 .copy-meta {
   margin-left: auto;
   align-self: center;

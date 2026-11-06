@@ -198,6 +198,83 @@ def test_the_picker_is_shown_while_the_probe_found_an_odoo(app_js):
     assert "start.disabled = !targeted" in body
 
 
+def test_a_failed_start_does_not_reopen_without_an_odoo(app_js):
+    """After a failed start Open session stayed live whatever the probe said. A
+    Refresh blanks every probe, and a click in that window read the hidden
+    picker's stale database and `container.probe.odoo_bin` off a null probe: a
+    TypeError on the card, and the offline banner with it."""
+    render = _js_function(app_js, "renderContainers")
+    assert "start.disabled = !startup.failed || !targeted;" in render
+    start = _js_function(app_js, "startSession")
+    guard = re.search(
+        r"if \(!container\?\.probe\?\.ok \|\| !container\.probe\.supported\) \{(.*?)\n  \}",
+        start,
+        re.DOTALL,
+    )
+    assert guard is not None
+    assert "return;" in guard.group(1)
+    assert start.index("container?.probe?.ok") < start.index("state.startups.set(")
+
+
+def test_a_typed_database_name_is_left_to_the_user(app_js):
+    """The text field is filled with the default once. After that it is the user's:
+    every render used to put the default back into a field they had just cleared,
+    and trim the space they were typing."""
+    build = _js_function(app_js, "buildContainerCard")
+    assert re.search(
+        r"querySelector\('\.database-manual'\)\.addEventListener\('input', \(event\) => \{\s*"
+        r"event\.target\.dataset\.touched = 'true';",
+        build,
+    )
+    fill = _js_function(app_js, "fillPicker")
+    assert "if (!manual.dataset.touched && manual.value !== (preferred || '')) {" in fill
+
+
+def test_the_commit_switch_shows_what_was_asked_while_the_answer_is_out(app_js):
+    """The lock redraws the card at once, and the redraw put the old state back
+    on the box the user had just ticked: it read as a refused click."""
+    toggle = re.search(r"async function toggleAgentCommit\(.*?\n\}\n", app_js, re.DOTALL).group(0)
+    assert "container.agentCommitWanted = !container.agent_commit;" in toggle
+    assert toggle.index("agentCommitWanted = ") < toggle.index("whileBusy(")
+    assert re.search(r"finally \{\s*delete container\.agentCommitWanted;", toggle)
+    render = _js_function(app_js, "renderContainers")
+    assert "showAgentCommit(card, Boolean(container.agentCommitWanted ?? container.agent_commit));" in render
+
+
+def test_a_card_gives_the_focus_back_to_the_control_that_had_it(app_js):
+    """`inert` takes the focus of whatever it covers, and the key that locked the
+    card is usually the one that has it; a remote card is rebuilt on every render
+    and loses it the same way. The control is remembered by what it is, and the
+    focus goes back to it once it can take it — only from nowhere, never from
+    where the user has put it since."""
+    assert "cardFocus: null," in app_js
+    controls = re.search(r"const CARD_CONTROLS = \[(.*?)\];", app_js, re.DOTALL)
+    assert controls is not None
+    for selector in (".start", ".reprobe", ".close-connected", ".forget", ".edit", ".agent-commit input"):
+        assert f"'{selector}'" in controls.group(1), selector
+    note = _js_function(app_js, "noteCardFocus")
+    assert "CARD_CONTROLS.find(" in note and "state.cardFocus = {key: " in note
+    restore = _js_function(app_js, "restoreCardFocus")
+    assert "active !== document.body" in restore
+    # The browser moves the focus off an inert control only at its next update:
+    # in the render that locks the card, the focus is still on the key pressed,
+    # and that is not the user putting it somewhere.
+    assert "!active.closest('[inert]')" in restore
+    assert "control.closest('[inert]')" in restore and "control.disabled" in restore
+    assert "control.focus();" in restore
+    for name in ("renderContainers", "renderRemoteCards"):
+        body = _js_function(app_js, name)
+        assert body.index("noteCardFocus(list)") < body.index("lockCard(card, "), name
+        assert body.rindex("restoreCardFocus(list)") > body.rindex("lockCard(card, "), name
+    assert "state.cardFocus = null;" in _js_function(app_js, "showScreen")
+
+
+def test_no_comment_describes_the_folding_picker_or_start(app_js):
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert "it is the user's to open and close" not in app_js
+    assert "away from Start" not in css
+
+
 def test_a_render_keeps_the_database_the_user_chose(app_js):
     """The picker is filled by every render now. A render that put the default
     back would throw away a choice made a second ago, and rebuilding the list
