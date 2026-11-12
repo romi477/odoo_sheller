@@ -718,11 +718,12 @@ SSH target answers `psql_not_available`.
 
     {{psql}}(sql, container=, database=)   or   {{psql}}(sql, session_id=)
 
-One call is one transaction, and no `psql` lives between calls. At most 35 seconds.
+One call is one transaction, and no `psql` lives between calls. At most 35 seconds,
+counted from the call, not from when `psql` started.
 
 - The human's switch decides. With *agents may commit* off for that container the
   transaction is read-only and rolls back, and `commit=True` is
-  `commit_not_allowed`: stop and ask, because no tool can turn it on.
+  `commit_not_allowed`: nothing ran. Stop and ask, because no tool can turn it on.
 - With the switch on, `commit=False` writes and rolls back: a dry run. Run that
   first and read what it did. `commit=True` then commits, once every statement
   has passed.
@@ -743,7 +744,9 @@ Refused before anything runs, as `psql_refused` with the word:
 - `SET`, `RESET`, `set_config` and `UPDATE pg_settings`, which is `set_config`
   by another name, because they would lift the read-only flag or the deadline;
   reading `pg_settings` is fine;
-- `DO`, whose body cannot be read;
+- `DO`, `CREATE FUNCTION` and `CREATE PROCEDURE`, whose bodies cannot be read;
+- `ALTER ... SET` on a function, procedure, database, role or the system, which
+  outlives the call, and `LOAD`;
 - `COPY` other than `COPY ... TO STDOUT`;
 - calls that leave the transaction or touch the server, such as `dblink` and
   `pg_terminate_backend`.

@@ -283,8 +283,11 @@ is, even while busy. odoo.sh and SSH targets answer `psql_not_available`.
 | on | `False` | read-write | rollback: the dry run |
 | on | `True` | read-write | `COMMIT`, once every statement has passed |
 
-One call is one transaction, at most 35 seconds, 30 by default. There is no running
-state and nothing to poll: long work belongs in `os_exec`. The answer has `output`,
+One call is one transaction, at most 35 seconds, 30 by default, counted from the
+call rather than from when `psql` started; anything else is `invalid_timeout`. There
+is no running state and nothing to poll: long work belongs in `os_exec`. A call whose
+statements and `COMMIT` or `ROLLBACK` were done when the deadline came is an
+ordinary answer, not `psql_timeout`. The answer has `output`,
 `error`, `mode`, `rolled_back`, `truncated`, `journal` and `committed`, which is
 `null` when `COMMIT` was sent and no answer came back. Then check the data before
 trying again; the same goes for `request_timed_out`. A failed statement is an

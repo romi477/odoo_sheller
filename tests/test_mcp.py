@@ -2569,6 +2569,21 @@ async def test_os_psql_lost_answer_says_unknown(monkeypatch):
     assert "os_history" not in answer["recovery"]
 
 
+@pytest.mark.parametrize("timeout", [0, -1, 120.0])
+async def test_os_psql_timeout_outside_the_ceiling_says_the_ceiling(wired, timeout):
+    calls = _stub_psql_answer(wired)
+    answer = await server.os_psql("select 1", container="odoo17", database="db", timeout=timeout)
+    assert answer["error"] == "invalid_timeout"
+    assert f"{psql.MAX_TIMEOUT:.0f}" in answer["recovery"]
+    assert calls == []
+
+
+async def test_os_psql_takes_the_ceiling_itself(wired):
+    calls = _stub_psql_answer(wired)
+    await server.os_psql("select 1", container="odoo17", database="db", timeout=psql.MAX_TIMEOUT)
+    assert calls[0][-1] == psql.MAX_TIMEOUT
+
+
 def test_os_psql_description_says_exec_first():
     tool = next(t for t in server.mcp._tool_manager.list_tools() if t.name == "os_psql")
     assert "os_exec first" in tool.description
@@ -2580,3 +2595,7 @@ def test_the_worst_psql_deadline_still_answers_inside_the_mcp_wait():
     """A lost answer to a commit is what the ceiling exists to prevent."""
     worst = psql.MAX_TIMEOUT + psql._SIGNAL_TIMEOUT + psql._STOP_TIMEOUT
     assert worst < server.CALL_WAIT
+
+
+def test_the_psql_ceiling_is_the_daemons():
+    assert server.MAX_PSQL_TIMEOUT == psql.MAX_TIMEOUT

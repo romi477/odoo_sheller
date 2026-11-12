@@ -2515,7 +2515,7 @@ def test_psql_runs_and_answers_with_its_journal(psql_client, monkeypatch):
     assert answer["output"] == "x\n"
     assert answer["mode"] == "read_only"
     assert answer["journal"].startswith("/api/journals/psql_")
-    assert calls[0]["timeout"] == 30
+    assert calls[0]["timeout"] == pytest.approx(30, abs=1)
     assert psql_client.get(answer["journal"]).status_code == 200
 
 
@@ -2630,6 +2630,9 @@ def test_psql_commit_without_the_switch_says_who_can_change_it(psql_client, monk
     detail = response.json()["detail"]
     assert detail["error"] == "commit_not_allowed"
     assert "agents may commit" in detail["recovery"]
+    # Nothing ran: an agent must not report a result it never received.
+    assert "did not run" in detail["recovery"]
+    assert "rolls back" not in detail["recovery"]
 
 
 @pytest.mark.parametrize(

@@ -1286,6 +1286,46 @@ async def test_psql_commit_with_switch_off_runs_nothing(tmp_path, transactions):
 
 
 @pytest.mark.asyncio
+async def test_psql_time_spent_finding_the_container_comes_off_the_deadline(tmp_path, monkeypatch):
+    """The MCP side started waiting before `docker inspect` did."""
+    given = []
+
+    async def slow_name(container, runner=None):
+        await asyncio.sleep(0.3)
+
+        return container
+
+    async def fake(target, sql, *, read_only, commit, timeout):
+        given.append(timeout)
+
+        return _psql_outcome()
+
+    monkeypatch.setattr("odoo_sheller.registry.container_name", slow_name)
+    monkeypatch.setattr("odoo_sheller.psql.run_transaction", fake)
+    registry = Registry(journal_root=tmp_path)
+    await registry.run_psql(PSQL_LOCAL, "select 1", False, 5.0)
+    assert given[0] <= 4.75
+
+
+@pytest.mark.asyncio
+async def test_psql_container_lookup_past_the_deadline_runs_nothing(tmp_path, monkeypatch):
+    async def slow_name(container, runner=None):
+        await asyncio.sleep(0.3)
+
+        return container
+
+    async def fake(target, sql, *, read_only, commit, timeout):
+        raise AssertionError("nothing may run past the deadline")
+
+    monkeypatch.setattr("odoo_sheller.registry.container_name", slow_name)
+    monkeypatch.setattr("odoo_sheller.psql.run_transaction", fake)
+    registry = Registry(journal_root=tmp_path)
+    with pytest.raises(PsqlTimedOut) as timed_out:
+        await registry.run_psql(PSQL_LOCAL, "select 1", False, 0.2)
+    assert timed_out.value.committed is False
+
+
+@pytest.mark.asyncio
 async def test_psql_switch_is_matched_by_resolved_name(tmp_path, transactions, monkeypatch):
     _resolve(monkeypatch, {"3f2a": "mig18"})
     registry, _store = _switch_registry(tmp_path, "mig18")

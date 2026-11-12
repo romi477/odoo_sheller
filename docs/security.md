@@ -102,7 +102,9 @@ the container: never through argv, an answer or a journal.
 The text is read first, and that reading is **an accident guard, not a boundary**,
 in the same way that the session keys are:
 
-- It refuses meta-commands, transaction control, `SET`, `DO`, `COPY` to anywhere
+- It refuses meta-commands, transaction control, `SET`, `DO`, `CREATE FUNCTION` and
+  `CREATE PROCEDURE` (whose bodies it cannot read), `ALTER … SET` on a routine, a
+  database, a role or the system (which outlives the call), `LOAD`, `COPY` to anywhere
   but stdout, control characters, `U&"..."` identifiers, an `E''` string continued
   on another line, and calls such as `set_config`, `dblink` and `pg_read_file`, and
   `UPDATE pg_settings`, which a rule turns into `set_config`. Without that last one, a
@@ -111,7 +113,7 @@ in the same way that the session keys are:
   escapes while the guard read them without, and a `COMMIT` hidden in what the guard
   took for a string would end a dry run. It
   reads text as `psql`'s own lexer does, and a live test holds the two together. It does
-  not read the bodies of functions. A function already in the database that uses
+  not read the bodies of functions, which is why it refuses creating one. A function already in the database that uses
   `dblink` can commit on another connection, from a read-only call.
 - `db_user` is often a superuser in a local Postgres image. SQL there can do more
   than this list catches.

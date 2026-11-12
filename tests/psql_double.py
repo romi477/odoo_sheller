@@ -44,6 +44,8 @@ def main() -> int:
     deferred = False
     no_tag = False
     hang_after_commit = False
+    hang_at_commit = False
+    hang_after_rollback = False
     for raw in sys.stdin:
         line = raw.rstrip("\n")
         log.write(line + "\n")
@@ -70,9 +72,13 @@ def main() -> int:
             sys.stderr.write("ERROR:  duplicate key value violates unique constraint\n")
 
             return 3
+        if line.startswith("COMMIT;") and hang_at_commit:
+            time.sleep(60)
         for word, text in (("BEGIN", "BEGIN"), ("ROLLBACK;", "ROLLBACK")):
             if line.startswith(word):
                 out(text)
+        if line.startswith("ROLLBACK;") and hang_after_rollback:
+            time.sleep(60)
         if line.startswith("COMMIT;"):
             out("ROLLBACK" if no_tag else "COMMIT")
         if line.startswith("FAIL"):
@@ -106,6 +112,10 @@ def main() -> int:
             no_tag = True
         if line.startswith("LATEHANG"):
             hang_after_commit = True
+        if line.startswith("COMMITHANG"):
+            hang_at_commit = True
+        if line.startswith("ROLLHANG"):
+            hang_after_rollback = True
         code = re.sub(r"--.*$", "", line).rstrip()
         pending.append(code)
         if code.endswith(";"):

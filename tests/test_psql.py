@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from odoo_sheller import psql as psql_module
 from odoo_sheller.discovery import PROBE_SOURCE
 from odoo_sheller.psql import (
     MAX_OUTPUT,
@@ -101,6 +102,27 @@ from odoo_sheller.transport import DOCKER, ODOOSH, SSH, Target, docker_bin
         (") (", "unclosed parenthesis"),
         ("create function f() returns int begin atomic select 1;", "begin atomic"),
         ("create or replace procedure p() begin atomic select 1;", "begin atomic"),
+        # A function's body is one literal here, so what it calls is never read:
+        # `set_config` in one would lift the server's deadline for the session.
+        (
+            (
+                "create function os_x() returns text language sql"
+                " as $$ select set_config('statement_timeout', '0', false) $$"
+            ),
+            "create function",
+        ),
+        ("create or replace function f() returns int as 'select 1' language sql", "create function"),
+        ("CREATE PROCEDURE p() LANGUAGE sql AS $$ select 1 $$", "create procedure"),
+        ("create function f() returns int set statement_timeout = 0 as $$ select 1 $$", "create function"),
+        ("alter function f() set statement_timeout = 0", "alter function"),
+        ("alter procedure p() set lock_timeout = 0", "alter procedure"),
+        ("alter routine r() set work_mem = '1GB'", "alter routine"),
+        # With commit=True these outlive the call and lift the ceiling for every later one.
+        ("alter database x set statement_timeout = 0", "alter database"),
+        ("ALTER ROLE odoo SET statement_timeout = 0", "alter role"),
+        ("alter user odoo in database x set lock_timeout = 0", "alter user"),
+        ("alter system set statement_timeout = 0", "alter system"),
+        ("load '/tmp/x.so'", "load"),
         ("", "empty"),
         ("  -- only a comment\n", "empty"),
         (";;", "empty"),
@@ -151,7 +173,9 @@ def test_refused(sql, word):
         "select (1)",
         "select '('",
         "select 1)",
-        "create function f() returns int as $$ begin return 1; end $$ language plpgsql",
+        "alter table t alter column c set default 1",
+        "alter database x rename to y",
+        "select load from t",
         "select 1 as €",
         # `1`, then a dollar quote, as psql reads it too: the commit is in the quote.
         "select 1$a$; commit; -- $a$",
@@ -548,10 +572,45 @@ def test_a_commit_that_fails_is_known_not_to_have_happened(double):
     assert "duplicate key" in done["error"]
 
 
-def test_a_deadline_after_the_commit_marker_is_known_to_have_committed(double):
+def test_a_deadline_after_the_commit_marker_is_an_answer_not_a_timeout(double):
+    # Committed, output complete: only `docker exec` was slow to go. A 504 here
+    # would tell the agent to split work that is already done.
+    done = double.run("FORGE out\n;\nLATEHANG;", read_only=False, commit=True, timeout=0.5)
+    assert done["committed"] is True
+    assert done["rolled_back"] is False
+    assert done["output"] == "out\n"
+    assert done["error"] is None
+    assert done["mode"] == "read_write"
+
+
+def test_a_deadline_after_the_rollback_is_an_answer_not_a_timeout(double):
+    done = double.run("FORGE out\n;\nROLLHANG;", timeout=0.5)
+    assert done["committed"] is False
+    assert done["rolled_back"] is True
+    assert done["output"] == "out\n"
+    assert done["error"] is None
+
+
+def test_a_deadline_while_the_commit_is_out_is_still_unknown(double):
     with pytest.raises(PsqlTimedOut) as timed_out:
-        double.run("LATEHANG;", read_only=False, commit=True, timeout=0.5)
-    assert timed_out.value.committed is True
+        double.run("COMMITHANG;", read_only=False, commit=True, timeout=0.5)
+    assert timed_out.value.committed is None
+
+
+def test_the_deadline_counts_from_before_the_spawn(double, monkeypatch):
+    """The MCP side's wait started before `docker exec` did."""
+    real_spawn = psql_module.spawn
+
+    async def slow_spawn(argv):
+        await asyncio.sleep(0.6)
+
+        return await real_spawn(argv)
+
+    monkeypatch.setattr(psql_module, "spawn", slow_spawn)
+    started = time.monotonic()
+    with pytest.raises(PsqlTimedOut):
+        double.run("HANG;", timeout=0.8)
+    assert time.monotonic() - started < 1.2
 
 
 def test_a_marker_without_the_commit_tag_is_not_a_commit(double):

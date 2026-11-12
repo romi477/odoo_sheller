@@ -44,7 +44,14 @@ DATABASE_RE = re.compile(r"\w[\w.-]{0,62}")
 
 # Refused as the first word of a statement. `SET` inside an `UPDATE` and `END`
 # inside a `CASE` are the reason it is only the first word.
-_CONTROL = frozenset({"begin", "start", "commit", "end", "abort", "set", "reset", "do"})
+_CONTROL = frozenset({"begin", "start", "commit", "end", "abort", "set", "reset", "do", "load"})
+# A routine's body is one literal to the reading below, so what it calls is never
+# seen: `set_config` in one lifts the server's deadline for the rest of the
+# session, and so does a routine's own `SET` clause.
+_ROUTINES = frozenset({"function", "procedure", "routine"})
+# `ALTER … SET` on these outlives the call, and with commit=True lifts the
+# ceiling for every later one.
+_SETTINGS_HOLDERS = frozenset({"database", "role", "user", "system"})
 # Refused anywhere as a call. Each leaves the transaction or touches the server;
 # the role in `db_user` is often a superuser in a local Postgres image. Families by
 # prefix, because the whole of `dblink` commits on a connection of its own and new
@@ -252,6 +259,15 @@ def _check_keywords(statement: list[str]) -> None:
         raise PsqlRefused(first)
     if first == "create" and {"function", "procedure"} & set(statement[1:4]) and "begin" in statement:
         raise PsqlRefused("begin atomic")
+    if first == "create" and (kind := next((w for w in statement[1:4] if w in _ROUTINES), None)):
+        raise PsqlRefused(f"create {kind}")
+    if (
+        first == "alter"
+        and rest[:1]
+        and (rest[0] in _ROUTINES or rest[0] in _SETTINGS_HOLDERS)
+        and {"set", "reset"} & set(_top_level(statement))
+    ):
+        raise PsqlRefused(f"alter {rest[0]}")
     if first == "rollback":
         # A savepoint cannot leave the transaction; the rest of `rollback` can.
         if "to" not in rest:
@@ -469,6 +485,8 @@ class _Call:
         self.started = False
         self.past_sql = False
         self.commit_sent = False
+        self.rollback_sent = False
+        self.reaped = False
         self.commit_tag = False
         self.commit_seen = False
         self.truncated = False
@@ -570,6 +588,7 @@ class _Call:
                 await self._write(f"COMMIT;\n\\echo {self.commit_marker.decode()}\n")
             else:
                 await self._write("ROLLBACK;\n")
+                self.rollback_sent = True
         except (BrokenPipeError, ConnectionResetError):
 
             return
@@ -591,6 +610,15 @@ class _Call:
             await asyncio.wait_for(self.proc.wait(), _STOP_TIMEOUT)
         except TimeoutError:
             logger.warning("docker exec for psql %s did not end", self.pid)
+
+    def settled(self) -> bool:
+        """Whether the outcome is known whatever happens to the process now.
+
+        A commit the server answered stays; a transaction told to roll back, or
+        killed before it got there, goes either way.
+        """
+
+        return self.commit_seen or (self.rollback_sent and not self.truncated)
 
     def committed(self) -> bool | None:
         """True on the server's word, False if it never got there or said no."""
@@ -623,7 +651,7 @@ class _Call:
 
         return {
             "output": self.text(),
-            "error": errors if code and not self.truncated else None,
+            "error": errors if code and not self.truncated and not self.reaped else None,
             "committed": committed,
             "rolled_back": committed is False,
             "truncated": self.truncated,
@@ -642,7 +670,13 @@ async def run_transaction(
     nonce: str | None = None,
     signal=None,
 ) -> dict:
-    """One call: one process, one transaction. No path leaves a live process."""
+    """One call: one process, one transaction. No path leaves a live process.
+
+    The deadline counts from here, not from the spawn: the caller's wait has
+    already started, and starting `docker exec` can take seconds.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
     argv = argv or build_command(target, read_only, timeout)
     signal = signal or (
         lambda pid, name: send_signal(target, pid, name, timeout=_SIGNAL_TIMEOUT)
@@ -666,7 +700,7 @@ async def run_transaction(
     # the process has yet to be stopped and its pipes have to keep draining.
     waiting = asyncio.create_task(finished())
     try:
-        done, _pending = await asyncio.wait({waiting}, timeout=timeout)
+        done, _pending = await asyncio.wait({waiting}, timeout=max(deadline - loop.time(), 0))
     finally:
         await call.stop()
         for task in (*tasks, waiting, call.stopping):
@@ -674,7 +708,14 @@ async def run_transaction(
                 task.cancel()
         await asyncio.gather(*tasks, waiting, return_exceptions=True)
     if not done:
-        raise PsqlTimedOut(True if call.commit_seen else None if call.commit_sent else False, call.text())
-    waiting.result()
+        if not call.settled():
+            raise PsqlTimedOut(
+                True if call.commit_seen else None if call.commit_sent else False, call.text()
+            )
+        # The work was over and only `docker exec` was slow to go: an answer, with
+        # nothing to say about the way it was stopped.
+        call.reaped = True
+    else:
+        waiting.result()
 
     return call.outcome()

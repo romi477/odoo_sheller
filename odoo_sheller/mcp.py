@@ -61,6 +61,7 @@ DEFAULT_CLICK_TIMEOUT = 900.0
 # whose write key was only ever in the response we stopped waiting for.
 SESSION_START_CEILING = 90.0
 MAX_TEST_TIMEOUT = 3600.0  # matches the API's own ceiling on RunTestBody
+MAX_PSQL_TIMEOUT = 35.0  # psql.MAX_TIMEOUT; a test keeps the two in step
 # How long one tool call may block. MCP hosts cut a call off at around a
 # minute, and nothing we set on our side changes that — so a long run has to
 # be handed back as "still going" rather than held onto until the host kills
@@ -977,6 +978,16 @@ async def os_psql(
     commit: bool = False,
     timeout: float = 30.0,
 ) -> Any:
+    if not 0 < timeout <= MAX_PSQL_TIMEOUT:
+
+        return {
+            "error": "invalid_timeout",
+            "timeout": timeout,
+            "recovery": (
+                f"pass a timeout between 0 and {MAX_PSQL_TIMEOUT:.0f} seconds; "
+                "longer work is os_exec's"
+            ),
+        }
     answer = await _call(
         "POST",
         "/api/psql",

@@ -544,6 +544,10 @@ class Registry:
         """
         if target.kind != DOCKER:
             raise psql.PsqlNotAvailable(target.kind)
+        # The caller's wait started before `docker inspect` did, so what it took
+        # comes off the deadline.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
         name = await container_name(target.container)
         switch_on = self._switched_on(name)
         read_only = not switch_on
@@ -571,10 +575,13 @@ class Registry:
                 raise psql.PsqlCommitNotAllowed(name)
             if name in self._psql_running:
                 raise psql.PsqlBusy(name)
+            left = deadline - loop.time()
+            if left <= 0:
+                raise psql.PsqlTimedOut(False, "")
             self._psql_running.add(name)
             owned = True
             answer = await psql.run_transaction(
-                target, sql, read_only=read_only, commit=commit, timeout=timeout
+                target, sql, read_only=read_only, commit=commit, timeout=left
             )
         except psql.PsqlError as exc:
             exc.journal_id = journal_id

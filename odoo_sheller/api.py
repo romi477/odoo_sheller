@@ -71,8 +71,9 @@ PSQL_STATUS: dict[type, tuple[int, str]] = {
     psql.PsqlCommitNotAllowed: (
         403,
         (
-            "stop and ask the human to turn on 'agents may commit' for this container; "
-            "no tool can do it. Without it this call runs read-only and rolls back"
+            "this call did not run. Call again with commit=False for a read-only dry "
+            "run, or stop and ask the human to turn on 'agents may commit' for this "
+            "container; no tool can do it"
         ),
     ),
     psql.PsqlNotAvailable: (403, "psql is for local containers; use exec in the session"),
