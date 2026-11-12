@@ -7,6 +7,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.13.3] — 2026-11-12
+
+`os_psql` closed where a function's body or an `ALTER … SET` could lift its
+deadline, its 35 seconds counted from the call, and a finished call answered as
+one. The editor sends code holding a triple-quoted string as typed. Nothing is
+removed from the API or the MCP surface; `os_psql` refuses more than it did.
+
 ### Fixed
 
 - `os_psql` refuses `CREATE FUNCTION`, `CREATE PROCEDURE`, `ALTER … SET` on a
@@ -2064,6 +2071,7 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
+[1.13.3]: https://github.com/romi477/odoo_sheller/compare/v1.13.2...v1.13.3
 [1.13.2]: https://github.com/romi477/odoo_sheller/compare/v1.13.1...v1.13.2
 [1.13.1]: https://github.com/romi477/odoo_sheller/compare/v1.13.0...v1.13.1
 [1.13.0]: https://github.com/romi477/odoo_sheller/compare/v1.12.0...v1.13.0
