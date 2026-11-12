@@ -2970,8 +2970,14 @@ function editInEditor(id, code) {
 
 // The common indentation of the lines that have something on them, taken off
 // every line, as Python's textwrap.dedent does. Lines pasted out of a method body
-// arrive indented, and Python reads that as an IndentationError.
+// arrive indented, and Python reads that as an IndentationError. Not where there
+// is a triple-quoted string: its lines would lose the margin too, and what runs,
+// and what ↑ brings back, would differ from what was typed.
 function dedentCode(code) {
+  if (code.includes('"""') || code.includes("'''")) {
+
+    return code;
+  }
   const lines = code.split('\n');
   let margin = null;
   for (const line of lines) {

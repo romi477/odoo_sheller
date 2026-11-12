@@ -705,6 +705,15 @@ def test_indented_code_is_dedented_before_it_is_sent(app_js):
     assert re.search(r"api\.post\(`/api/sessions/\$\{id\}/exec`, \{code\}", run)
 
 
+def test_code_with_a_triple_quoted_string_is_sent_as_typed(app_js):
+    """Dedenting would take the margin off the lines inside the string too, and
+    send a text that differs from what was typed."""
+    dedent = _js_function(app_js, "dedentCode")
+    guard = "if (code.includes('\"\"\"') || code.includes(\"'''\")) {"
+    assert guard in dedent
+    assert dedent.index(guard) < dedent.index("const lines = code.split")
+
+
 def test_command_w_closes_the_session_in_view(app_js):
     """The same path the button takes, confirmation and all."""
     blocks = [

@@ -385,7 +385,8 @@ newest command brings it back; ↓ at the end of a draft does nothing. Tab
 indents with four spaces, as the indent after a colon does — a real tab beside
 them is a `TabError` in Python — and Shift+Tab takes four back. Code whose
 lines all share an indent, pasted out of a method body, is sent with that
-indent taken off. **taller** / **shorter** doubles the editor's height for the
+indent taken off — unless it holds a triple-quoted string, whose lines would
+lose it too; that is sent as typed. **taller** / **shorter** doubles the editor's height for the
 session (not remembered across a reload).
 
 While a command runs, the editor stays usable for typing the next one, but

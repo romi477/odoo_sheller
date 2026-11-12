@@ -7,6 +7,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- `os_psql` refuses `CREATE FUNCTION`, `CREATE PROCEDURE`, `ALTER … SET` on a
+  routine, a database, a role or the system, and `LOAD`. A function's body is one
+  literal to the guard, so `set_config` inside one went unread and could lift
+  `statement_timeout` for the rest of the call; `ALTER DATABASE … SET` with
+  `commit=True` lifted it for every later call.
+- `os_psql`'s 35 seconds count from the call, not from when `psql` started: the
+  `docker inspect` and the `docker exec` start before it come off the deadline. On a
+  slow Docker a commit could land after the MCP side had stopped waiting, and its
+  answer was lost.
+- A `psql` call whose statements and `COMMIT` or `ROLLBACK` were done when the
+  deadline came, with only `docker exec` slow to exit, is an ordinary answer. It was
+  a `psql_timeout` telling the agent to split work that had committed.
+- `commit_not_allowed` from `os_psql` says the call did not run. It said the call ran
+  read-only and rolled back, and an agent could report a result it never got.
+- `os_psql` checks its `timeout` against the 35-second ceiling and answers
+  `invalid_timeout` with the ceiling, as `os_run_test` does, instead of a raw 422.
+- Code holding a triple-quoted string is sent as typed. Taking a pasted block's
+  common indent off took it off the lines inside the string too.
+
 ## [1.13.2] — 2026-11-06
 
 The editor in a human's session, and the agent's instructions, put right. Text typed
