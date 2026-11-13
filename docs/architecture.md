@@ -308,10 +308,12 @@ agent seven lines of its own `logging` handler to scrape the log back out of
 the process, because nothing in the response suggested a log existed. The
 HTTP API always answers with the lines; the MCP server is where the decision
 about tokens belongs, so `os_exec` sends a count by default and the lines
-only when asked. The
-drain wait is paid only when lines actually arrived: `exec` is the hot path,
-a trivial command finishes in well under a millisecond, and waiting out the
-drain unconditionally would cost more than the command.
+only when asked. Every
+`exec` waits out the drain, lines or none: `docker exec` relays stdout and
+stderr on their own, so a line Odoo logged just before answering can arrive
+after the answer, and a command that seemed to log nothing had. Only a read
+(`os_source`, `read_only`) skips it, since it logs nothing anyone asked for and
+comes many to a question.
 
 Odoo's runner rolls back the session's own cursor before it tests if that
 cursor is mid-transaction (`odoo/tests/shell.py`), to avoid a lock. Across
@@ -351,7 +353,9 @@ the container — sending `SIGINT` to the local `docker exec` client does
 nothing to the shell it's driving. So the bootstrap reports its own
 in-container PID in the `hello` frame, and an interrupt is a separate call:
 `docker exec <container> kill -INT <pid>`. A kill is the same shape with
-`-KILL`.
+`-KILL`. Neither is sent once the session is dead or closed: the pid belonged
+to a process that is gone, and the container may since have handed it to
+another. An interrupt there is `410`; a kill only tidies up.
 
 The bootstrap replaces the handler Odoo's shell installs (`shell.py:77`,
 every `SIGINT` a `KeyboardInterrupt`) with one that raises only while a

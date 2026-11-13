@@ -8,7 +8,7 @@ import secrets
 import tempfile
 import time
 import uuid
-from dataclasses import replace
+from dataclasses import replace as with_fields
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -280,7 +280,7 @@ class Registry:
         else:
             target = await self._odoosh_target(card["build"], card["host"], card["stage"])
 
-        return replace(target, card_id=card["id"])
+        return with_fields(target, card_id=card["id"])
 
     async def _ssh_target(self, card: dict) -> Target:
         """A server someone wrote a card for: parse it, probe it, then open it.

@@ -1348,7 +1348,9 @@ def _os_answer(namespace, env, frame):
 
 
 def _os_main(namespace):
-    frames = os.fdopen(os.dup(1), "w", encoding="utf-8")
+    # A lone surrogate (a filename from a volume that is not UTF-8, by way of
+    # `os.listdir`) is not encodable; strict, it ended this loop and the session.
+    frames = os.fdopen(os.dup(1), "w", encoding="utf-8", errors="backslashreplace")
     os.dup2(2, 1)  # anything else writing to fd 1 now lands in stderr
     commands = os.fdopen(int(os.environ.get("OS_CMD_FD", "3")), "r", encoding="utf-8")
     env = namespace["env"]

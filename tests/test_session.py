@@ -1210,12 +1210,12 @@ async def test_exec_returns_the_stderr_written_while_it_ran(tmp_path):
     await session.close()
 
 
-async def test_exec_stderr_is_empty_and_costs_nothing_when_odoo_said_nothing(tmp_path):
-    """A quiet command must not pay the drain wait: exec is the hot path."""
+async def test_a_quiet_read_costs_nothing(tmp_path):
+    """A read is os_source's, many to a question, and logs nothing anyone asked for."""
     session = await make_session(tmp_path)
     await session.start()
     started = time.monotonic()
-    result = await session.execute("1")
+    result = await session.execute("1", read_only=True)
     elapsed = time.monotonic() - started
     assert result["stderr"] == []
     assert result["stderr_truncated"] is False
@@ -2563,3 +2563,106 @@ async def test_a_failed_restore_keeps_the_error_that_came_with_it(tmp_path):
     leaked = [record for record in journal_records(tmp_path)
               if record["kind"] == "clickbot_restore_failed"]
     assert leaked[0]["cause"]["type"] == "KeyboardInterrupt"
+
+
+WIDE_RESULT_FAKE = r"""
+import json, sys
+sys.stdout.write(json.dumps({"t":"hello","protocol":1,"odoo":"19.0","python":"3.12.0",
+                             "db":"db","uid":1,"pid":4242}) + "\n")
+sys.stdout.flush()
+for line in sys.stdin:
+    frame = json.loads(line)
+    if frame["t"] == "close":
+        sys.stdout.write(json.dumps({"t":"bye","id":frame["id"]}) + "\n")
+        sys.stdout.flush()
+        break
+    sys.stdout.write(json.dumps({"t":"result","id":frame["id"],
+                                 "stdout":"ж" * 1000000, "stdout_truncated":True,
+                                 "result":"'ok'","result_truncated":False,"error":None,
+                                 "duration":0.01}, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+"""
+
+
+async def test_a_clipped_stdout_of_wide_characters_comes_back_whole(tmp_path):
+    """A million Cyrillic characters is inside the bootstrap's clip and two
+    million bytes on the pipe."""
+    session = await make_session(tmp_path, script=WIDE_RESULT_FAKE)
+    await session.start()
+    try:
+        result = await session.execute("x")
+        assert result["error"] is None
+        assert len(result["stdout"]) == 1_000_000
+        assert result["result"] == "'ok'"
+    finally:
+        await session.kill()
+
+
+LOG_THEN_RESULT_FAKE = r"""
+import json, sys
+sys.stdout.write(json.dumps({"t":"hello","protocol":1,"odoo":"19.0","python":"3.12.0",
+                             "db":"db","uid":1,"pid":4242}) + "\n")
+sys.stdout.flush()
+for line in sys.stdin:
+    frame = json.loads(line)
+    if frame["t"] == "close":
+        sys.stdout.write(json.dumps({"t":"bye","id":frame["id"]}) + "\n")
+        sys.stdout.flush()
+        break
+    # `docker exec` relays the two streams on their own, so the frame can reach
+    # the daemon before the line that was logged ahead of it.
+    sys.stdout.write(json.dumps({"t":"result","id":frame["id"],"stdout":"",
+                                 "stdout_truncated":False,"result":None,
+                                 "result_truncated":False,"error":None,
+                                 "duration":0.0}) + "\n")
+    sys.stdout.flush()
+    sys.stderr.write("WARNING db odoo.x: logged %d\n" % frame["id"])
+    sys.stderr.flush()
+"""
+
+
+async def test_a_line_logged_just_before_the_answer_comes_with_it(tmp_path):
+    """Seen by the journal and missed by the answer, an agent concludes nothing
+    was logged."""
+    session = await make_session(tmp_path, script=LOG_THEN_RESULT_FAKE)
+    await session.start()
+    try:
+        for _ in range(30):
+            result = await session.execute("_logger.warning('x')")
+            assert len(result["stderr"]) == 1, result["stderr"]
+    finally:
+        await session.kill()
+
+
+async def test_kill_on_a_dead_session_signals_nothing(tmp_path, monkeypatch):
+    """Its pid belonged to a process that is gone; by now it may be another one's."""
+    signals = []
+
+    async def fake_signal(target, pid, name):
+        signals.append(name)
+
+    monkeypatch.setattr("odoo_sheller.session.send_signal", fake_signal)
+    session = await make_session(tmp_path)
+    await session.start()
+    with pytest.raises(SessionDead):
+        await session.execute("DIE")
+    assert session.state is SessionState.DEAD
+    await session.kill()
+    assert signals == []
+
+
+async def test_interrupt_on_a_dead_session_is_refused_and_signals_nothing(tmp_path, monkeypatch):
+    signals = []
+
+    async def fake_signal(target, pid, name):
+        signals.append(name)
+
+    monkeypatch.setattr("odoo_sheller.session.send_signal", fake_signal)
+    session = await make_session(tmp_path)
+    await session.start()
+    with pytest.raises(SessionDead):
+        await session.execute("DIE")
+    with pytest.raises(SessionDead):
+        await session.interrupt()
+    assert signals == []
+    await session.kill()

@@ -1689,6 +1689,21 @@ async def test_os_source_clips_a_long_read_and_says_how_to_narrow_it(wired):
     assert "first" in out["recovery"] and "last" in out["recovery"]
 
 
+async def test_os_source_says_too_large_when_the_session_clipped_the_read(wired):
+    wired.session.source_payload = {"path": "web", "directory": True, "entries": []}
+    original = wired.session.execute
+
+    async def clipped(code, timeout=300.0, read_only=False):
+        answer = await original(code, timeout, read_only)
+
+        return {**answer, "result": answer["result"][:50], "result_truncated": True}
+
+    wired.session.execute = clipped
+    out = await server.os_source(path="web")
+    assert out["error"] == "too_large"
+    assert "first=" in out["recovery"] and "subdirectory" in out["recovery"]
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
@@ -1760,6 +1775,49 @@ def test_the_source_snippet_actually_reads_with_stubs(monkeypatch, tmp_path):
 
     past_the_end = run(path="module/thing.py", first=45, last=9999)
     assert past_the_end["last"] == 50, "clamped to what the file has"
+
+
+def test_the_source_snippet_clips_before_the_session_does(monkeypatch, tmp_path):
+    """The session clips a result at 100,000 characters, and a clipped JSON
+    string is no payload at all: `sale.order` and `web` are both larger."""
+    import sys
+    import types
+
+    big = tmp_path / "big.py"
+    big.write_text("\n".join("x" * 70 for _ in range(5000)), encoding="utf-8")
+    folder = tmp_path / "mod"
+    (folder / "static").mkdir(parents=True)
+    (folder / "__manifest__.py").write_text("{}", encoding="utf-8")
+    for n in range(server.MAX_LISTING + 50):
+        (folder / "static" / f"f{n:04}.js").write_text("x", encoding="utf-8")
+    where = {"path": big}
+    tools = types.ModuleType("odoo.tools")
+    tools.file_open = lambda path, *a, **kw: open(where["path"], encoding="utf-8")  # noqa: SIM115
+    tools.file_path = lambda path, *a, **kw: str(where["path"])
+    odoo = types.ModuleType("odoo")
+    odoo.tools = tools
+    monkeypatch.setitem(sys.modules, "odoo", odoo)
+    monkeypatch.setitem(sys.modules, "odoo.tools", tools)
+
+    def run(path):
+        code = server._source_snippet(path, None, None, None, None)
+        namespace: dict = {}
+        tree = ast.parse(code)
+        tail = ast.Expression(tree.body.pop().value)
+        ast.fix_missing_locations(tail)
+        exec(compile(tree, "<snippet>", "exec"), namespace)  # noqa: S102
+        value = eval(compile(tail, "<snippet>", "eval"), namespace)
+        assert len(repr(value)) < 100_000
+
+        return json.loads(value)
+
+    read = run("mod/big.py")
+    assert len(read["text"]) > server.MAX_SOURCE, "one over, so the clip says so"
+    assert read["total_lines"] == 5000
+    where["path"] = folder
+    listing = run("mod")
+    assert len(listing["entries"]) > server.MAX_LISTING
+    assert listing["files"] == server.MAX_LISTING + 51
 
 
 def test_a_method_read_lists_only_the_modules_that_define_it():

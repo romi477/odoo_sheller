@@ -7,12 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-## [1.13.3] — 2026-11-12
+## [1.13.3] — 2026-11-13
 
 `os_psql` closed where a function's body or an `ALTER … SET` could lift its
 deadline, its 35 seconds counted from the call, and a finished call answered as
-one. The editor sends code holding a triple-quoted string as typed. Nothing is
-removed from the API or the MCP surface; `os_psql` refuses more than it did.
+one. The editor sends code holding a triple-quoted string as typed. A large output
+or a stray surrogate no longer loses a result or a session, `os_source` reads large
+classes and modules, and a dead session's pid is never signalled. Nothing is removed
+from the API or the MCP surface; `os_psql` refuses more than it did.
 
 ### Fixed
 
@@ -34,6 +36,21 @@ removed from the API or the MCP surface; `os_psql` refuses more than it did.
   `invalid_timeout` with the ceiling, as `os_run_test` does, instead of a raw 422.
 - Code holding a triple-quoted string is sent as typed. Taking a pasted block's
   common indent off took it off the lines inside the string too.
+- A command whose output is inside the bootstrap's clip no longer overruns the
+  daemon's line limit. The clip counts characters and the limit counted bytes, so a
+  million Cyrillic characters, or a million short lines, came back as
+  `FrameTooLarge` with the output, the result and the traceback lost.
+- `os_source` on a large class (`sale.order`) or a large module (`web`) answers with
+  the first part and `truncated: true`. It said "the read produced no payload",
+  because the session had clipped the JSON it returned in half.
+- A lone surrogate in a command's output, such as a filename from a volume that is
+  not UTF-8, no longer kills the session. It is sent as a backslash escape.
+- Kill and interrupt no longer signal the pid of a session that is already dead or
+  closed; the container may have given that pid to another process. Interrupt there
+  answers `410`.
+- `exec` waits for Odoo's log after every command that may write, not only when a
+  line has already arrived. `docker exec` can deliver the answer before a line logged
+  just ahead of it, and the answer then said nothing was logged.
 
 ## [1.13.2] — 2026-11-06
 

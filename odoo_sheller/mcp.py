@@ -546,6 +546,17 @@ async def os_source(
                 "in the registry; os_help('code') has the rules"
             ),
         }
+    if result.get("result_truncated"):
+        # What the snippet clips should never get here; an entry list of long
+        # paths still could, and half a literal is no payload.
+
+        return {
+            "error": "too_large",
+            "recovery": (
+                "narrow it with first= and last=, read one method by model= and "
+                "method=, or ask for a subdirectory"
+            ),
+        }
     try:
         # The session hands back the repr of the JSON string the snippet
         # returned, which is exactly one literal.
@@ -577,7 +588,7 @@ def _clip_listing(payload: dict) -> dict:
         payload["entries"] = entries[:MAX_LISTING]
         payload["truncated"] = True
         payload["recovery"] = (
-            f"{len(entries)} files: ask for a subdirectory, e.g. "
+            f"{payload.get('files') or len(entries)} files: ask for a subdirectory, e.g. "
             f"path='{payload.get('path')}/models'"
         )
     else:
@@ -703,6 +714,13 @@ def _source_snippet(path, model, method, first, last, module=None) -> str:
         '    _os_ns.pop("_os_read", None)\n'
         "    import json\n"
         + body
+        # Clipped here, one past what this server keeps so its own clip still
+        # says so: the session clips a result at 100,000 characters, and a
+        # clipped JSON string is no payload at all.
+        + f'    if len(payload.get("text") or "") > {MAX_SOURCE}:\n'
+        + f'        payload["text"] = payload["text"][:{MAX_SOURCE + 1}]\n'
+        + f'    if len(payload.get("entries") or ()) > {MAX_LISTING}:\n'
+        + f'        payload["entries"] = payload["entries"][:{MAX_LISTING + 1}]\n'
         + "    return json.dumps(payload)\n"
         "\n"
         "_os_read()"

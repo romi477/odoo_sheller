@@ -164,6 +164,26 @@ def test_unknown_frame_type_is_answered_not_fatal():
     assert out[2]["result"] == "'alive'"
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        "print('\\udcff')",
+        "print(b'caf\\xe9'.decode('utf-8', 'surrogateescape'))",
+        "raise ValueError('\\udcff')",
+    ],
+)
+def test_a_lone_surrogate_is_answered_and_the_session_goes_on(code):
+    """A filename from a volume that is not UTF-8 comes back from `os.listdir`
+    holding one; strict UTF-8 on the frame pipe ended the loop, and the session."""
+    out, _, _ = run_bootstrap([
+        {"t": "exec", "id": 1, "code": code},
+        {"t": "exec", "id": 2, "code": "'alive'"},
+    ])
+    results = {frame["id"]: frame for frame in out if frame["t"] == "result"}
+    assert set(results) == {1, 2}
+    assert results[2]["result"] == "'alive'"
+
+
 def test_large_output_is_truncated_with_a_flag():
     out, _, _ = run_bootstrap([{"t": "exec", "id": 1, "code": "print('x' * 2_000_000)"}])
     assert out[1]["stdout_truncated"] is True

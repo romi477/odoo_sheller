@@ -520,9 +520,12 @@ class Session:
     async def kill(self) -> None:
         self._closing = True
         was_dead = self._state is SessionState.DEAD
+        was_over = was_dead or self._state is SessionState.CLOSED
         self._fail_pending_waiters("session is closed")
         pid = (self.hello or {}).get("pid")
-        if pid:
+        # The pid of a process that is gone: by now the container may have handed
+        # it to another one, an Odoo worker or the server itself.
+        if pid and not was_over:
             with contextlib.suppress(Exception):
                 await send_signal(self.target, pid, "KILL")
         with contextlib.suppress(ProcessLookupError):
@@ -725,6 +728,9 @@ class Session:
         return bool(self.allow_commit)
 
     async def interrupt(self) -> None:
+        if self._state in (SessionState.DEAD, SessionState.CLOSED):
+            # Its pid may belong to another process by now.
+            raise SessionDead(f"session is {self._state.value}")
         pid = (self.hello or {}).get("pid")
         if not pid:
             raise SessionNotReady("no pid yet")
@@ -758,11 +764,11 @@ class Session:
                 exec_frame(request_id, code), timeout,
                 account="read" if read_only else "exec",
             )
-            if window.total:
-                # Only when Odoo actually said something. exec is the hot
-                # path — a trivial command runs in under a millisecond, and
-                # waiting out the drain on every one of them would cost more
-                # than the whole command.
+            if window.total or not read_only:
+                # `docker exec` relays stdout and stderr on their own, so a line
+                # Odoo logged before answering can reach us after the answer,
+                # with nothing collected yet to say it is coming. Only a read
+                # (os_source) skips the wait: it logs nothing anyone asked for.
                 await asyncio.sleep(STDERR_DRAIN)
         finally:
             self._stderr_collectors.remove(window)

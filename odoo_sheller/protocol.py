@@ -13,7 +13,10 @@ PROTOCOL_VERSION = 1
 # readline dies, the session stays busy forever and SIGINT is a no-op.
 MAX_STDOUT = 1_000_000
 MAX_RESULT = 100_000
-FRAME_LINE_LIMIT = MAX_STDOUT + MAX_RESULT + 65_536
+# The clips count characters and `readline` counts bytes: a character is up to
+# four bytes of UTF-8, and a control character six of JSON escape (`\u0001`).
+_WORST_BYTES_PER_CHAR = 6
+FRAME_LINE_LIMIT = _WORST_BYTES_PER_CHAR * (MAX_STDOUT + MAX_RESULT) + 65_536
 
 
 class ProtocolError(Exception):

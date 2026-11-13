@@ -74,3 +74,15 @@ def test_run_spec_names_a_click_run_by_its_module():
         {"module": "web", "test_class": "WebSuite", "test_method": "test_unit_desktop",
          "params": "@my"}
     ) == "web.WebSuite.test_unit_desktop[@my]"
+
+
+@pytest.mark.parametrize("char", ["ж", "\U0001d538", "\x01", "\n", '"'])
+def test_a_frame_clipped_by_characters_still_fits_the_line_limit(char):
+    """The bootstrap clips characters; `readline` counts bytes. A character can be
+    four bytes of UTF-8, and a control character six of JSON escape."""
+    frame = {
+        "t": "result", "id": 1, "stdout": char * protocol.MAX_STDOUT,
+        "stdout_truncated": True, "result": char * protocol.MAX_RESULT,
+        "result_truncated": True, "error": None, "duration": 0.01,
+    }  # fmt: skip
+    assert len(protocol.encode_frame(frame).encode("utf-8")) <= protocol.FRAME_LINE_LIMIT
