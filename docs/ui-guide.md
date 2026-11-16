@@ -99,11 +99,12 @@ container did. Probing happens automatically
 when the screen loads, and each card also has its own probe button for after a
 restart or a config change.
 
-- A container that already has a session shows a `connected · <database>`
-  badge and offers **Close session** next to **Open session** — a *second*
-  session on the same container, against another database, is entirely
-  normal and allowed. Once there are several the badge counts them
-  (`connected · 2 sessions`) and the key reads **Close 2 sessions**: a card
+- A container that already has a session shows a `connected` badge and offers
+  **Close session** next to **Open session** — a *second* session on the same
+  container, against another database, is entirely normal and allowed. Once
+  there are several the badge counts them (`connected · 2`) and the key reads
+  **Close 2 sessions**. The badge never names a database: a long name pushed
+  the card's keys onto two lines, so the names are in its tooltip. A card
   here stands for a target, not for one session, so it closes all of them.
   Uncommitted work is discarded, and the question is asked once for the
   batch rather than once per session.

@@ -693,13 +693,17 @@ async function closeSessionsForTarget(key) {
   ));
 }
 
+// Short on purpose: a database name has no fixed width, and a long one pushed
+// the card's keys onto two lines. The names are on hover, in connectedTitle.
 function connectedLabel(records) {
-  if (records.length > 1) {
 
-    return `connected · ${records.length} sessions`;
-  }
+  return records.length > 1 ? `connected · ${records.length}` : 'connected';
+}
 
-  return `connected · ${records[0].info.database || ''}`.trim();
+function connectedTitle(records) {
+  const names = records.map((record) => record.info.database || '?').join(', ');
+
+  return records.length > 1 ? `${records.length} sessions: ${names}` : `Session on ${names}`;
 }
 
 function closeLabel(records) {
@@ -1534,6 +1538,7 @@ function renderRemoteCards(kind) {
     if (open.length) {
       connected.hidden = false;
       connected.textContent = connectedLabel(open);
+      connected.title = connectedTitle(open);
       close.hidden = false;
       close.textContent = closeLabel(open);
       close.title = open.length > 1
@@ -1756,6 +1761,7 @@ function renderContainers() {
     close.hidden = !open.length;
     if (open.length) {
       setText(badge, connectedLabel(open));
+      badge.title = connectedTitle(open);
       setText(close, closeLabel(open));
       close.title = open.length > 1
         ? 'Close every session on this container. Uncommitted work is discarded.'

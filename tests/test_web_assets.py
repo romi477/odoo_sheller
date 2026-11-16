@@ -992,6 +992,13 @@ def test_container_facts_sit_together_below_the_name():
     assert "margin: 0" in inner.group(1)
 
 
+def test_a_badge_never_wraps():
+    """A badge broken over two lines took the card's keys with it."""
+    rule = re.search(r"\n\.badge \{([^}]*)\}", (WEB / "style.css").read_text(encoding="utf-8"))
+    assert rule is not None
+    assert "white-space: nowrap" in rule.group(1)
+
+
 def test_connected_card_and_ready_badge_use_cyan_not_green():
     css = (WEB / "style.css").read_text(encoding="utf-8")
     # Every card has the cyan edge now, connected or not; the badge says which.
@@ -2653,11 +2660,19 @@ def test_closing_from_a_card_closes_every_session_on_that_target(app_js):
 
 
 def test_a_card_says_how_many_sessions_it_holds(app_js):
-    """`connected · acme_dev` for one; a count once there are several."""
+    """`connected` for one, `connected · 2` for two; the databases in the tooltip.
+
+    A database name in the badge pushed the card's keys onto two lines once it
+    ran long, so the badge stays short and the names move to its title.
+    """
     badge = re.search(r"function connectedLabel\(.*?\n\}", app_js, re.DOTALL)
     assert badge is not None
-    assert "sessions`" in badge.group(0)
-    assert "info.database" in badge.group(0), "one session still names its database"
+    assert "info.database" not in badge.group(0), "a database name has no fixed width"
+    assert "`connected · ${records.length}`" in badge.group(0)
+    assert "'connected'" in badge.group(0)
+    title = re.search(r"function connectedTitle\(.*?\n\}", app_js, re.DOTALL)
+    assert title is not None
+    assert "info.database" in title.group(0), "the names are kept, on hover"
     key = re.search(r"function closeLabel\(.*?\n\}", app_js, re.DOTALL)
     assert key is not None
     assert "sessions`" in key.group(0)
@@ -2667,6 +2682,7 @@ def test_a_card_says_how_many_sessions_it_holds(app_js):
         body = re.search(rf"function {render}\(.*?\n\}}", app_js, re.DOTALL)
         assert body is not None
         assert "connectedLabel(" in body.group(0), render
+        assert "connectedTitle(" in body.group(0), render
         assert "closeLabel(" in body.group(0), render
 
 

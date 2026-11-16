@@ -28,6 +28,10 @@ shows the entry for Codex too, and colours its snippets.
 
 ### Fixed
 
+- A card's badge reads `connected`, or `connected · 2` for several sessions, and
+  never wraps; the databases are in its tooltip. A long database name in the
+  badge pushed the card's keys onto two lines.
+
 - `os_psql` refuses `CREATE FUNCTION`, `CREATE PROCEDURE`, `ALTER … SET` on a
   routine, a database, a role or the system, and `LOAD`. A function's body is one
   literal to the guard, so `set_config` inside one went unread and could lift

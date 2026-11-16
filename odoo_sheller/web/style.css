@@ -677,6 +677,7 @@ button.region-toggle:active:not(:disabled) {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.2;
+  white-space: nowrap;
 }
 
 .badge.ready,
