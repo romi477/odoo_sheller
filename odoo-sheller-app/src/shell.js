@@ -163,7 +163,18 @@ function settingsSection(section) {
     const body = document.createElement("div");
     body.className = "snippet-body";
     const pre = document.createElement("pre");
-    pre.textContent = block.text;
+    // Spans with textContent, never markup: a path is the user's and could
+    // hold anything, and a pasted entry must be the one shown.
+    for (const [kind, part] of highlight(block.text, block.lang)) {
+      if (!kind) {
+        pre.append(part);
+        continue;
+      }
+      const span = document.createElement("span");
+      span.className = `tok-${kind}`;
+      span.textContent = part;
+      pre.append(span);
+    }
     const copy = document.createElement("button");
     copy.type = "button";
     copy.className = "copy";

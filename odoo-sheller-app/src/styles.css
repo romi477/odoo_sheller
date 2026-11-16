@@ -6,6 +6,7 @@
   --muted: oklch(0.67 0.04 290);
   --cyan: oklch(0.72 0.09 205);
   --amber: oklch(0.72 0.12 62);
+  --green: oklch(0.64 0.11 155);
   /* The daemon's UI names its own colours the same way; these are copied
      rather than shared, because a stylesheet does not cross an iframe
      boundary. */
@@ -436,6 +437,34 @@ button.quiet {
      full. Wrapping it beats a second scrollbar inside a dialog. */
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* The UI editor's palette, so a path reads the same in both windows: strings
+   green (red is for errors), keys the editor's variable-2 cyan, a TOML table
+   amber like the editor's meta. Punctuation steps back. */
+.tok-key {
+  color: color-mix(in oklch, var(--cyan) 70%, var(--muted));
+}
+
+.tok-string {
+  color: var(--green);
+}
+
+.tok-section {
+  color: var(--amber);
+}
+
+.tok-literal {
+  color: var(--cyan);
+}
+
+.tok-punct {
+  color: var(--muted-low);
+}
+
+.tok-comment {
+  color: var(--muted-low);
+  font-style: italic;
 }
 
 /* An icon standing on the text it copies: no outline, no fill, no label. The

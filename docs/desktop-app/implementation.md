@@ -273,8 +273,9 @@ Done when:
 The MCP binary lives at `Contents/Resources/odoo-sheller-mcp/odoo-sheller-mcp`
 (decision 5). **Settings… → MCP** in the application menu — not a button in
 the web UI, which is a remote origin with no Tauri IPC — renders the entry
-with that path filled in, in both shapes (`mcpServers` for Claude Desktop,
-Claude Code and Cursor; `context_servers` for Zed), lists where those files
+with that path filled in, in every shape (`mcpServers` for Claude Desktop,
+Claude Code and Cursor; a `[mcp_servers.odoo-sheller]` TOML table for Codex;
+`context_servers` for Zed), lists where those files
 live, and puts the `mcpServers` form on the clipboard. Under `tauri dev` the
 command is `uv --directory <checkout> run python -m odoo_sheller.mcp` instead.
 
@@ -282,7 +283,10 @@ It is drawn by the shell page, not by a native alert. An alert renders its
 text proportionally, which collapses the indentation of a JSON block, and it
 has one button. The page gives each form a monospace block and its own
 **Copy**; Rust still decides what the entry is and puts the first form on the
-clipboard when the item is opened.
+clipboard when the item is opened. Each block names its grammar (`json`,
+`toml`, `ssh`), and `src/highlight.js` colours it with the web editor's palette —
+three small tokenizers rather than a library, whose tokens join back into the
+text exactly, drawn as `textContent` spans so a path can never become markup.
 
 **It writes nothing** (decision 11). No merge, no backup, no atomic rename —
 there is no write path in the code at all. Agent configs hold servers we know

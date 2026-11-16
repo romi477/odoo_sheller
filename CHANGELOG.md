@@ -14,7 +14,17 @@ deadline, its 35 seconds counted from the call, and a finished call answered as
 one. The editor sends code holding a triple-quoted string as typed. A large output
 or a stray surrogate no longer loses a result or a session, `os_source` reads large
 classes and modules, and a dead session's pid is never signalled. Nothing is removed
-from the API or the MCP surface; `os_psql` refuses more than it did.
+from the API or the MCP surface; `os_psql` refuses more than it did. Settings → MCP
+shows the entry for Codex too, and colours its snippets.
+
+### Added
+
+- Settings → MCP in the app shows the entry for Codex — the CLI, the app and the
+  IDE extension — as the TOML table `~/.codex/config.toml` expects, and lists that
+  file among the places agents keep their config. The README and the agent guide
+  say the same.
+- The snippets in Settings are coloured — keys, strings, a TOML table, ssh_config
+  keywords — in the web editor's palette. What is copied is unchanged.
 
 ### Fixed
 

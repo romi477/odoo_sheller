@@ -579,7 +579,16 @@ Claude Desktop starts the server itself, from
 reads `~/.claude.json`, Cursor `~/.cursor/mcp.json`, Zed
 `~/.config/zed/settings.json` — the same `command`/`args` entry, under
 `context_servers` rather than `mcpServers`, and `args` is required there even
-when empty.
+when empty. Codex (CLI, app and IDE extension share one file) reads
+`~/.codex/config.toml`, where the entry is a TOML table:
+
+```toml
+[mcp_servers.odoo-sheller]
+command = "/Users/<you>/.odoo-sheller/bin/odoo-sheller-mcp"
+args = []
+```
+
+`codex mcp add odoo-sheller -- <command>` writes the same table.
 
 The command can be spelled four ways. **From the installed app**, which needs
 nothing else on the machine:

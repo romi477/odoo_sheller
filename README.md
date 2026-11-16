@@ -344,7 +344,14 @@ host starts it: Claude Desktop from
 `~/Library/Application Support/Claude/claude_desktop_config.json`, Claude Code
 from `~/.claude.json`, Cursor from `~/.cursor/mcp.json`, Zed from
 `~/.config/zed/settings.json` — the same entry, under `context_servers`
-instead of `mcpServers`.
+instead of `mcpServers`. Codex — the CLI, the app and the IDE extension alike —
+reads it from `~/.codex/config.toml`, as TOML:
+
+```toml
+[mcp_servers.odoo-sheller]
+command = "/Users/<you>/.odoo-sheller/bin/odoo-sheller-mcp"
+args = []
+```
 
 Three ways to name the command, by how much the machine has to have on it.
 

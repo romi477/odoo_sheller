@@ -24,6 +24,9 @@ pub struct Block {
     pub label: String,
     pub hint: Option<String>,
     pub text: String,
+    /// Which grammar the sheet colours it with: "json", "toml" or "ssh".
+    /// Colour only — the text is copied as it is whatever this says.
+    pub lang: &'static str,
 }
 
 /// One section of Settings. The prose lives here rather than in the markup
@@ -112,6 +115,7 @@ pub fn ssh() -> Section {
             label: "~/.ssh/config".into(),
             hint: Some("— odoo.sh builds".into()),
             text: "Host *.odoo.com\n    StrictHostKeyChecking accept-new\n".into(),
+            lang: "ssh",
         }],
         note: Some(
             "`accept-new` takes the key of a host it has never seen and records \
@@ -159,6 +163,7 @@ mod tests {
         let section = ssh();
         let block = &section.blocks[0];
         assert!(block.text.starts_with("Host *.odoo.com\n"));
+        assert_eq!(block.lang, "ssh");
         assert!(block.text.contains("    StrictHostKeyChecking accept-new"));
         // Indented, because OpenSSH reads a keyword as belonging to the Host
         // above it either way, and the indentation is what says so to a reader.

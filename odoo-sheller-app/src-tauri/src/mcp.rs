@@ -61,6 +61,7 @@ impl Launch {
 
     /// The entry under its parent key. `mcpServers` for Claude Desktop,
     /// Claude Code and Cursor; Zed calls the same shape `context_servers`.
+    /// Codex reads TOML: `toml_snippet`.
     pub fn snippet(&self, parent_key: &str) -> String {
         let mut servers = Map::new();
         servers.insert(SERVER_ID.into(), self.entry());
@@ -69,6 +70,19 @@ impl Launch {
 
         serde_json::to_string_pretty(&Value::Object(root))
             .unwrap_or_else(|err| format!("could not render the snippet: {err}"))
+    }
+
+    /// The same entry as Codex reads it: TOML, one table per server. A JSON
+    /// string is a valid TOML basic string — the escapes are the same — so
+    /// no TOML writer is needed for two keys.
+    pub fn toml_snippet(&self) -> String {
+        let quote = |text: &str| Value::String(text.into()).to_string();
+        let args: Vec<String> = self.args.iter().map(|arg| quote(arg)).collect();
+        format!(
+            "[mcp_servers.{SERVER_ID}]\ncommand = {}\nargs = [{}]",
+            quote(&self.command),
+            args.join(", "),
+        )
     }
 }
 
@@ -80,6 +94,7 @@ pub const LOCATIONS: &[(&str, &str)] = &[
     ),
     ("Claude Code", "~/.claude.json  (or .mcp.json in a project)"),
     ("Cursor", "~/.cursor/mcp.json"),
+    ("Codex", "~/.codex/config.toml"),
     ("Zed", "~/.config/zed/settings.json"),
 ];
 
@@ -101,11 +116,19 @@ pub fn section(launch: &Launch) -> Section {
                 label: "Claude Desktop, Claude Code, Cursor".into(),
                 hint: None,
                 text: launch.snippet("mcpServers"),
+                lang: "json",
+            },
+            Block {
+                label: "Codex".into(),
+                hint: Some("— the same entry in TOML; the CLI, the app and the IDE extension share it".into()),
+                text: launch.toml_snippet(),
+                lang: "toml",
             },
             Block {
                 label: "Zed".into(),
                 hint: Some("— the same entry, another parent key".into()),
                 text: launch.snippet("context_servers"),
+                lang: "json",
             },
         ],
         note: linked.then(|| {
@@ -173,6 +196,21 @@ mod tests {
     }
 
     #[test]
+    fn codex_gets_the_same_entry_as_toml() {
+        let launch = Launch::from_checkout(Path::new("/opt/homebrew/bin/uv"), Path::new("/my \"repo\""));
+        assert_eq!(
+            launch.toml_snippet(),
+            "[mcp_servers.odoo-sheller]\n\
+             command = \"/opt/homebrew/bin/uv\"\n\
+             args = [\"--directory\", \"/my \\\"repo\\\"\", \"run\", \"python\", \"-m\", \"odoo_sheller.mcp\"]",
+        );
+        assert_eq!(
+            bundled().toml_snippet().lines().last().unwrap(),
+            "args = []",
+        );
+    }
+
+    #[test]
     fn only_a_bare_executable_can_be_linked_to() {
         assert_eq!(
             bundled().single_command().unwrap(),
@@ -200,7 +238,10 @@ mod tests {
     fn the_section_carries_both_snippets_and_every_location() {
         let dialog = section(&bundled());
         assert!(dialog.blocks[0].text.contains("mcpServers"));
-        assert!(dialog.blocks[1].text.contains("context_servers"));
+        assert!(dialog.blocks[1].text.contains("[mcp_servers.odoo-sheller]"));
+        assert!(dialog.blocks[2].text.contains("context_servers"));
+        let langs: Vec<&str> = dialog.blocks.iter().map(|block| block.lang).collect();
+        assert_eq!(langs, ["json", "toml", "json"], "each block names its grammar for the colours");
         assert_eq!(dialog.locations.len(), LOCATIONS.len());
         for (label, path) in LOCATIONS {
             let found = dialog
