@@ -58,13 +58,16 @@ def _is_config(path):
 
 
 def _skipped(path, name):
-    if name.startswith(".") or name in SEARCH_SKIP:
+    # Hidden directories are caches and VCS — but a devcontainer keeps its
+    # config in one.
+    if (name.startswith(".") and name != ".devcontainer") or name in SEARCH_SKIP:
         return True
-    # An addon, or Odoo's own package: thousands of files, no odoo-bin.
-    for marker in ("__manifest__.py", "__openerp__.py", "release.py"):
+    # An addon: thousands of files between them, and no odoo-bin.
+    for marker in ("__manifest__.py", "__openerp__.py"):
         if os.path.exists(os.path.join(path, marker)):
             return True
-    return False
+    # Odoo's own package; any other directory may have a release.py of its own.
+    return name == "odoo" and os.path.isfile(os.path.join(path, "release.py"))
 
 
 def search(roots, depth=SEARCH_DEPTH, budget=SEARCH_BUDGET):

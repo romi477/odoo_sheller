@@ -680,7 +680,7 @@ user, and a relative path is read against that process's cwd; then a walk from t
 starts in the container's WorkingDir, where a dev compose file mounts its
 checkout — and `/workspace`, `/home`, `/opt`, `/srv`, `/mnt`, `/app`, `/code`,
 `/odoo`. The walk is four levels deep, steps over addons, Odoo's own package,
-hidden directories and system trees, and stops after 1.5s; a file named
+hidden directories but `.devcontainer`, and system trees, and stops after 1.5s; a file named
 `odoo-bin` counts only with `odoo/release.py` beside it, a config only with an
 `[options]` section, and the config nearest the checkout wins — taken from
 the walk only when the walk found odoo-bin too; one found otherwise takes a

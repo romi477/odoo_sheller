@@ -295,3 +295,27 @@ def test_a_standard_odoo_bin_takes_a_config_beside_it_or_one_up(locate, tmp_path
         standard=[str(standard)], configs=[], roots=[], proc=str(tmp_path / "proc"),
     )
     assert found == (str(standard), str(up))
+
+
+def test_a_devcontainer_s_config_is_found(locate, tmp_path):
+    """The case all this is for keeps its config in .devcontainer."""
+    workspace = tmp_path / "workspace"
+    odoo_bin = checkout(workspace / "odoo")
+    conf = workspace / ".devcontainer" / "odoo.conf"
+    conf.parent.mkdir()
+    conf.write_text("[options]\ndb_host = postgres\n", encoding="utf-8")
+    (workspace / ".git").mkdir()
+    (workspace / ".git" / "x.conf").write_text("[options]\n", encoding="utf-8")
+    found = locate["locate"](
+        standard=[], configs=[], roots=[str(workspace)], proc=str(tmp_path / "proc"),
+    )
+    assert found == (str(odoo_bin), str(conf))
+
+
+def test_a_project_with_a_release_script_of_its_own_is_walked(locate, tmp_path):
+    """Only Odoo's own package is passed over — a directory named odoo."""
+    project = tmp_path / "project"
+    odoo_bin = checkout(project)
+    (project / "release.py").write_text("print('ship it')\n", encoding="utf-8")
+    found, _ = locate["search"]([str(tmp_path)])
+    assert found == str(odoo_bin)
