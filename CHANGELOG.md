@@ -7,6 +7,41 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.13.4] — 2026-11-19
+
+A container that keeps Odoo somewhere of its own — a dev container with the
+checkout under `/workspace` — is found on Connect, and its session starts with
+the config the probe listed databases from. The *not verified* line for Odoo 13
+and 14 is a warning, not an error. Nothing is removed from the API or the MCP
+surface; `POST /api/sessions` takes an optional `config` beside `odoo_bin`.
+
+### Added
+
+- odoo-bin and its config are found outside the usual paths, by one locator
+  (`locate.py`) that the probe, the test listing and `os_psql` share: the usual
+  paths first, then the command line of an Odoo running in the container — its
+  binary and its `-c` — then a short walk from the working directory and
+  `/workspace`, `/home`, `/opt`, `/srv`, `/mnt`, `/app`, `/code`, `/odoo`: four
+  levels, past addons, Odoo's own package and system trees, 1.5s at most.
+  `.devcontainer` is read. odoo-bin counts only with `odoo/release.py` beside
+  it, a config only with an `[options]` section; the walk's configs are taken
+  only when the walk found odoo-bin too, so an odoo-bin found otherwise never
+  takes another instance's config from across the disk.
+  `ODOO_SHELLER_SEARCH_ROOTS`, set in the container, replaces the roots.
+- The config is `ODOO_RC` first, then the running server's `-c` (a relative one
+  read against that process's directory), then `/etc/odoo/odoo.conf` and the
+  other usual paths.
+
+### Fixed
+
+- A local session is launched with `-c <config>`. Odoo by itself reads only
+  `ODOO_RC` and `~/.odoorc`, so a config the probe had read went unread by the
+  session. The config travels with `odoo_bin` — from the browser, from the probe
+  when an open leaves `odoo_bin` out, from the journal for a replacement — and
+  is never looked up again at launch. A session's `os_psql` uses the same one.
+- The *Odoo 13 · not verified* line on a card is amber. In red it read as a
+  card that would not open, on a card that opens.
+
 ## [1.13.3] — 2026-11-13
 
 `os_psql` closed where a function's body or an `ALTER … SET` could lift its
@@ -2107,6 +2142,7 @@ explicit, confirmed act.
 - Deferred: outgoing HTTP tracing, `changed` record diffing, synchronous
   `with_delay`, and live streaming of output while a command runs.
 
+[1.13.4]: https://github.com/romi477/odoo_sheller/compare/v1.13.3...v1.13.4
 [1.13.3]: https://github.com/romi477/odoo_sheller/compare/v1.13.2...v1.13.3
 [1.13.2]: https://github.com/romi477/odoo_sheller/compare/v1.13.1...v1.13.2
 [1.13.1]: https://github.com/romi477/odoo_sheller/compare/v1.13.0...v1.13.1
