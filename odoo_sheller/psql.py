@@ -15,6 +15,7 @@ import logging
 import re
 import secrets
 
+from odoo_sheller.locate import LOCATE_SOURCE
 from odoo_sheller.transport import DOCKER, Target, docker_bin, send_signal, spawn
 
 logger = logging.getLogger(__name__)
@@ -336,8 +337,8 @@ PID_PREFIX = "OSPSQL-PID "
 # Runs in the container: stdlib only, and nothing in its argv is a secret. It
 # goes in argv rather than on stdin, unlike the probe, because stdin stays open
 # for `psql`. `execve` keeps the pid, so the one printed is the one to signal.
-# The config's rules are the probe's, and a test keeps the candidates in step.
-RUNNER_SOURCE = r'''
+# Odoo and its config are found as the probe finds them: the same source.
+RUNNER_SOURCE = LOCATE_SOURCE + r'''
 import configparser, os, shutil, sys
 
 def missing(what):
@@ -348,20 +349,7 @@ psql = shutil.which("psql")
 if not psql:
     missing("psql")
 
-odoo_bin = None
-for path in [shutil.which("odoo-bin"), "/opt/odoo/odoo-bin", "/usr/bin/odoo",
-             "/odoo/odoo-bin", "/mnt/odoo/odoo-bin", "/usr/lib/python3/dist-packages/odoo-bin"]:
-    if path and os.path.exists(path):
-        odoo_bin = path
-        break
-
-config = None
-for path in [os.environ.get("ODOO_RC"), "/etc/odoo/odoo.conf", "/etc/odoo.conf",
-             "/opt/odoo.conf", os.path.join(os.path.dirname(odoo_bin or ""), "odoo.conf"),
-             os.path.expanduser("~/.odoorc")]:
-    if path and os.path.exists(path):
-        config = path
-        break
+odoo_bin, config = locate()
 if not config:
     missing("odoo config")
 

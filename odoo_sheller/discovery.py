@@ -6,6 +6,7 @@ import json
 import re
 
 from odoo_sheller import js_tests
+from odoo_sheller.locate import LOCATE_SOURCE
 from odoo_sheller.recipe import Access, Launch
 from odoo_sheller.transport import SSH_OPTS, docker_bin, ssh_destination
 
@@ -35,19 +36,14 @@ SUPPORTED_MAJORS = (15, 16, 17, 18, 19, 20)
 UNTESTED_MAJORS = (13, 14)
 MODULE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-PROBE_SOURCE = r'''
+PROBE_SOURCE = LOCATE_SOURCE + r'''
 import configparser, json, os, re, shutil, sys
 
 result = {"ok": False, "odoo_bin": None, "odoo_version": None, "odoo_major": None,
           "python": "%d.%d.%d" % sys.version_info[:3], "config": None,
           "db_name": None, "databases": [], "error": None}
 
-candidates = [shutil.which("odoo-bin"), "/opt/odoo/odoo-bin", "/usr/bin/odoo",
-              "/odoo/odoo-bin", "/mnt/odoo/odoo-bin", "/usr/lib/python3/dist-packages/odoo-bin"]
-for path in candidates:
-    if path and os.path.exists(path):
-        result["odoo_bin"] = path
-        break
+result["odoo_bin"], result["config"] = locate()
 
 if not result["odoo_bin"]:
     result["error"] = "odoo-bin not found"
@@ -73,13 +69,6 @@ if release:
             result["odoo_major"] = int(parts[0])
         except ValueError:
             result["odoo_major"] = None
-
-for path in [os.environ.get("ODOO_RC"), "/etc/odoo/odoo.conf", "/etc/odoo.conf",
-             "/opt/odoo.conf", os.path.join(os.path.dirname(result["odoo_bin"]), "odoo.conf"),
-             os.path.expanduser("~/.odoorc")]:
-    if path and os.path.exists(path):
-        result["config"] = path
-        break
 
 # Odoo writes "False" into the config for unset values; treat that as unset.
 def clean(value):
@@ -116,7 +105,7 @@ result["ok"] = True
 print(json.dumps(result))
 '''
 
-LIST_TESTS_SOURCE = r'''
+LIST_TESTS_SOURCE = LOCATE_SOURCE + r'''
 import ast, configparser, json, os, re, shutil, sys
 
 result = {"ok": False, "module": None, "path": None, "classes": [],
@@ -134,24 +123,9 @@ if len(sys.argv) < 2 or not sys.argv[1]:
 module = sys.argv[1]
 result["module"] = module
 
-odoo_bin = None
-candidates = [shutil.which("odoo-bin"), "/opt/odoo/odoo-bin", "/usr/bin/odoo",
-              "/odoo/odoo-bin", "/mnt/odoo/odoo-bin",
-              "/usr/lib/python3/dist-packages/odoo-bin"]
-for path in candidates:
-    if path and os.path.exists(path):
-        odoo_bin = path
-        break
+odoo_bin, config = locate()
 if not odoo_bin:
     fail("odoo_bin_not_found", "odoo-bin not found")
-
-config = None
-for path in [os.environ.get("ODOO_RC"), "/etc/odoo/odoo.conf", "/etc/odoo.conf",
-             "/opt/odoo.conf", os.path.join(os.path.dirname(odoo_bin), "odoo.conf"),
-             os.path.expanduser("~/.odoorc")]:
-    if path and os.path.exists(path):
-        config = path
-        break
 
 def clean(value):
     if value is None or value in ("False", "false", ""):

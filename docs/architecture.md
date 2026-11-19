@@ -130,7 +130,7 @@ the same in all six. The rest of
 ## Starting a session
 
 ```bash
-docker exec -i <container> sh -c 'exec 3<&0; exec <odoo-bin> shell -d <db> --no-http <<"OSBOOT"
+docker exec -i <container> sh -c 'cfg=$(python3 -c <locate>); exec 3<&0; exec <odoo-bin> shell ${cfg:+-c "$cfg"} -d <db> --no-http <<"OSBOOT"
 <bootstrap source>
 OSBOOT'
 ```
@@ -668,6 +668,23 @@ containers; a one-shot probe inside a chosen container reports the `odoo-bin`
 path, Odoo and Python versions, the config file location, and the database
 list (read via `psycopg2`, which any Odoo container already has installed —
 nothing extra to add). The probe process exits the moment it has answered.
+
+**Where odoo-bin and its config are** is asked by one piece of code,
+`locate.py`'s `LOCATE_SOURCE`, at the head of every script sent into a
+container — the probe, the test listing, os_psql's runner — and in the launch
+line itself, so no two of them can disagree. Cheapest first, a later step only
+when the earlier found nothing: the usual paths (PATH, the official image's,
+Debian's); the command line of an Odoo running there, read from `/proc`, which
+names its `-c` as well; then a walk from the working directory — `docker exec`
+starts in the container's WorkingDir, where a dev compose file mounts its
+checkout — and `/workspace`, `/home`, `/opt`, `/srv`, `/mnt`, `/app`, `/code`,
+`/odoo`. The walk is four levels deep, steps over addons, Odoo's own package,
+hidden directories and system trees, and stops after 1.5s; a file named
+`odoo-bin` counts only with `odoo/release.py` beside it, a config only with an
+`[options]` section, and the config nearest the checkout wins.
+`ODOO_SHELLER_SEARCH_ROOTS`, set in the container, replaces the roots. Odoo on
+its own reads only `ODOO_RC` and `~/.odoorc`, so the launch hands the config
+found over with `-c`; with none found there is no `-c`, as before.
 A major outside `SUPPORTED_MAJORS` (15 through 20) and `UNTESTED_MAJORS` (13 and
 14) is refused right here, with a specific message naming what would work,
 rather than accepted and left to fail on the first real command. 13 and 14 are

@@ -21,6 +21,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+from odoo_sheller.locate import LOCATE_SOURCE
 from odoo_sheller.names import check_ssh_name
 from odoo_sheller.paths import bootstrap_path
 from odoo_sheller.protocol import FRAME_LINE_LIMIT
@@ -156,9 +157,22 @@ def _script(target: Target, source: str) -> str:
         # choice that does not exist: the build has exactly one database.
         launch = "odoo-bin shell"
     else:
+        # Odoo by itself reads only ODOO_RC and ~/.odoorc, so a config that
+        # lives anywhere else — a dev container's /workspace/odoo.conf — is
+        # handed over with -c: the one the probe listed databases from, found
+        # by the same code. Looked up here, inside the container and before
+        # the pipe moves to fd 3, rather than carried from the probe through
+        # every caller. None found is no -c, as before.
+        locate = shlex.quote(LOCATE_SOURCE + "\nprint(locate()[1] or '')\n")
         launch = (
-            f"{shlex.quote(target.odoo_bin)} shell "
+            f"{shlex.quote(target.odoo_bin)} shell ${{cfg:+-c \"$cfg\"}} "
             f"-d {shlex.quote(target.database)} --no-http"
+        )
+
+        return (
+            f"cfg=$(python3 -c {locate} </dev/null 2>/dev/null); "
+            f'exec 3<&0; exec {launch} <<"{HEREDOC_MARKER}"\n'
+            f"{source}\n{HEREDOC_MARKER}\n"
         )
 
     return (

@@ -214,7 +214,9 @@ def _fake_psql(tmp_path, body=None):
 
 
 def _run_runner(tmp_path, bin_dir, config=None, read_only="1"):
-    env = {"PATH": str(bin_dir), "HOME": str(tmp_path)}
+    # The walk for a config stays inside tmp_path, not this machine's /opt.
+    env = {"PATH": str(bin_dir), "HOME": str(tmp_path),
+           "ODOO_SHELLER_SEARCH_ROOTS": str(tmp_path / "nowhere")}
     if config is not None:
         path = tmp_path / "odoo.conf"
         path.write_text(config, encoding="utf-8")

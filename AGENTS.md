@@ -53,6 +53,7 @@ the same HTTP/WS API — there must never be a second API.
 |---|---|
 | `protocol.py` | frame encode/decode |
 | `discovery.py` | list containers, probe one for odoo-bin / version / config / databases |
+| `locate.py` | where odoo-bin and its config are, asked inside the container by every script sent there |
 | `transport.py` | spawn process for a target, expose pipes, signal, kill |
 | `bootstrap.py` | the loop that runs *inside* the container |
 | `session.py` | one live session: state, request serialization, commit/rollback/close/interrupt |
@@ -100,7 +101,7 @@ Facts it relies on (verified against Odoo 19):
 Startup command shape:
 
 ```bash
-docker exec -i <container> sh -c 'exec 3<&0; exec <odoo-bin> shell -d <db> --no-http <<"OSBOOT"
+docker exec -i <container> sh -c 'cfg=$(python3 -c <locate>); exec 3<&0; exec <odoo-bin> shell ${cfg:+-c "$cfg"} -d <db> --no-http <<"OSBOOT"
 <bootstrap source>
 OSBOOT'
 ```
@@ -193,8 +194,11 @@ starting ──(hello)──> ready ──(exec)──> busy ──(result)─�
 Local targets are discovered live, not configured. `docker ps` lists running
 containers; a one-shot probe inside a chosen container reports odoo-bin path,
 Odoo version, Python version, config file location, and database list (via
-`psycopg2`, which any Odoo container has). Then the user picks a database and
-connects. Last used target is remembered in `localStorage`.
+`psycopg2`, which any Odoo container has). Where odoo-bin and the config are is
+`locate.py`, shared by every script sent into a container and by the launch,
+which passes the config with `-c`: the usual paths, then a running Odoo's
+command line, then a short bounded walk from the working directory and
+`/workspace`-style roots. Then the user picks a database and connects. Last used target is remembered in `localStorage`.
 
 Remote targets are *entered*, as cards a human wrote down, and kept by the
 daemon in `~/.odoo-sheller/targets.json`. An odoo.sh build is a build id and a
