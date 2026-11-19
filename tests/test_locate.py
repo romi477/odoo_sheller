@@ -211,3 +211,31 @@ def test_the_probe_finds_a_checkout_in_the_working_directory(tmp_path):
 def test_every_script_in_the_container_finds_odoo_the_same_way(source):
     assert discovery.LOCATE_SOURCE in source
     assert "locate()" in source
+
+
+def test_a_standard_odoo_bin_never_takes_a_config_from_a_stranger(locate, tmp_path):
+    """With odoo-bin in a usual place, a .conf found by walking /mnt is some
+    other instance's: its databases listed, its host dialled."""
+    standard = tmp_path / "usr" / "bin" / "odoo"
+    standard.parent.mkdir(parents=True)
+    standard.write_text("", encoding="utf-8")
+    elsewhere = tmp_path / "mnt" / "backup"
+    elsewhere.mkdir(parents=True)
+    (elsewhere / "other.conf").write_text("[options]\ndb_host = prod\n", encoding="utf-8")
+    found = locate["locate"](
+        standard=[str(standard)], configs=[], roots=[str(tmp_path / "mnt")],
+        proc=str(tmp_path / "proc"),
+    )
+    assert found == (str(standard), None)
+
+
+def test_a_standard_odoo_bin_takes_a_config_beside_it_or_one_up(locate, tmp_path):
+    standard = tmp_path / "opt" / "odoo" / "odoo-bin"
+    standard.parent.mkdir(parents=True)
+    standard.write_text("", encoding="utf-8")
+    up = tmp_path / "opt" / "server.conf"
+    up.write_text("[options]\n", encoding="utf-8")
+    found = locate["locate"](
+        standard=[str(standard)], configs=[], roots=[], proc=str(tmp_path / "proc"),
+    )
+    assert found == (str(standard), str(up))

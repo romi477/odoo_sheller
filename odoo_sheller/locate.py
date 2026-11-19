@@ -20,7 +20,9 @@ nothing:
 
 A file named odoo-bin counts from the walk only with `odoo/release.py` beside
 it. A config counts only with an `[options]` section, and the one nearest the
-checkout wins.
+checkout wins. Walked configs are taken only when the same walk found odoo-bin;
+an odoo-bin found otherwise takes a config beside it or one level up, never
+one from across the disk, which belongs to another instance.
 """
 
 LOCATE_SOURCE = r'''
@@ -146,6 +148,22 @@ def running(proc="/proc"):
     return None, None
 
 
+def _beside(odoo_bin):
+    """Configs in odoo-bin's directory and the one above it."""
+    here = os.path.dirname(odoo_bin)
+    found = []
+    for directory in (here, os.path.dirname(here)):
+        try:
+            names = sorted(os.listdir(directory))
+        except OSError:
+            continue
+        for name in names:
+            path = os.path.join(directory, name)
+            if (name.endswith(".conf") or name == ".odoorc") and _is_config(path):
+                found.append(path)
+    return found
+
+
 def _roots():
     named = os.environ.get("ODOO_SHELLER_SEARCH_ROOTS")
     candidates = named.split(os.pathsep) if named else [os.getcwd()] + SEARCH_ROOTS
@@ -178,16 +196,20 @@ def locate(standard=None, configs=None, roots=None, proc="/proc"):
     for path in configs + [live_config] + near + home:
         if path and os.path.isfile(path):
             return odoo_bin, path
-    if found is None:
-        found = search(_roots() if roots is None else roots)
-    if not found[1]:
+    if odoo_bin is None:
+        return None, None
+    # Only the walk that found this odoo-bin may offer configs from its tree.
+    # An odoo-bin found any other way takes one beside it or a level up, never
+    # a .conf from across the disk: that is another instance's.
+    candidates = found[1] if found is not None else _beside(odoo_bin)
+    if not candidates:
         return odoo_bin, None
-    here = os.path.dirname(odoo_bin) if odoo_bin else None
-    parent = os.path.dirname(here) if here else None
+    here = os.path.dirname(odoo_bin)
+    parent = os.path.dirname(here)
 
     def nearness(path):
         where = os.path.dirname(path)
         return 0 if where == here else 1 if where == parent else 2
 
-    return odoo_bin, sorted(found[1], key=nearness)[0]
+    return odoo_bin, sorted(candidates, key=nearness)[0]
 '''

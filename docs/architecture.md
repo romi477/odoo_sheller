@@ -681,7 +681,9 @@ checkout — and `/workspace`, `/home`, `/opt`, `/srv`, `/mnt`, `/app`, `/code`,
 `/odoo`. The walk is four levels deep, steps over addons, Odoo's own package,
 hidden directories and system trees, and stops after 1.5s; a file named
 `odoo-bin` counts only with `odoo/release.py` beside it, a config only with an
-`[options]` section, and the config nearest the checkout wins.
+`[options]` section, and the config nearest the checkout wins — taken from
+the walk only when the walk found odoo-bin too; one found otherwise takes a
+config beside it or a level up, never another instance's from across the disk.
 `ODOO_SHELLER_SEARCH_ROOTS`, set in the container, replaces the roots. Odoo on
 its own reads only `ODOO_RC` and `~/.odoorc`, so the launch hands the config
 over with `-c`; with none there is no `-c`, as before. It is the probe's config,
