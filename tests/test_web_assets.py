@@ -3283,6 +3283,17 @@ def test_the_untested_badge_says_why_on_hover_and_is_not_an_error(app_js):
     ).group(0)
 
 
+def test_the_untested_line_is_amber_a_warning_not_an_error():
+    """Red is what a failed probe says. In red, `Odoo 13 · not verified` read as
+    a card that would not open, on a card that opens."""
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    rule = re.search(r"\n\.card-facts \.untested \{([^}]*)\}", css)
+    assert rule is not None
+    assert "color: var(--amber)" in rule.group(1)
+    assert "--red" not in rule.group(1)
+    assert ".badge.untested" not in css, "a line under the facts, not a badge"
+
+
 def test_the_untested_badge_names_the_version_that_is_not_verified(app_js):
     """"untested" read as "the probe was not run" on a card whose probe had just
     passed. The badge says what it is about — the Odoo version — and that it is
@@ -3298,14 +3309,6 @@ def test_the_untested_badge_names_the_version_that_is_not_verified(app_js):
     page = _page()
     assert ">untested<" not in page
     assert page.count('<p class="untested" hidden>not verified</p>') == 3
-
-
-def test_the_untested_line_is_red_under_the_facts():
-    css = (WEB / "style.css").read_text(encoding="utf-8")
-    rule = re.search(r"\.card-facts \.untested\s*\{([^}]*)\}", css)
-    assert rule is not None
-    assert "color: var(--red)" in rule.group(1)
-    assert ".badge.untested" not in css
 
 
 # --- servers reached by ssh ----------------------------------------------------

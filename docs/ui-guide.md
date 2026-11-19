@@ -283,7 +283,7 @@ never a dialog in the middle of typing.
 A card's **Probe** runs the recipe once and says who it landed as, where, which Python and
 Odoo, and whether the config is readable by that user.
 A card shows `user@host:port`, who it runs as, the stage, and, for Odoo 13
-and 14, a red *Odoo 13 · not verified* line under the facts — the version is the one this
+and 14, an amber *Odoo 13 · not verified* line under the facts — the version is the one this
 tool was not run against, not a verdict on the probe, which has passed. A line, not a
 badge: a badge this wide left the others no room. **edit** puts it back in the form; **×** removes it. Both are disabled
 while a session is open on it. Opening one waits the same way an odoo.sh build

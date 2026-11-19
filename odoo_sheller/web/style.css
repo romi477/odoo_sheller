@@ -634,7 +634,7 @@ button.region-toggle:active:not(:disabled) {
    The whole sentence is the line's title. */
 .card-facts .untested {
   margin: 2px 0 0;
-  color: var(--red);
+  color: var(--amber);
   font-size: 12px;
 }
 
