@@ -536,6 +536,16 @@ def test_open_passes_the_client_token_through(client):
     assert client.registry.open_kwargs["client_token"] == "tab-7"
 
 
+def test_open_passes_the_probed_config_through(client):
+    response = client.post(
+        "/api/sessions",
+        json={"container": "c", "database": "db", "odoo_bin": "/w/odoo-bin",
+              "config": "/w/odoo.conf"},
+    )
+    assert response.status_code == 200
+    assert client.registry.open_kwargs["config"] == "/w/odoo.conf"
+
+
 def test_session_history_unknown_session_is_404(client):
     assert client.get("/api/sessions/nope/history").status_code == 404
 
@@ -561,6 +571,7 @@ def test_session_history_reads_a_closed_journal(tmp_path):
             "container": "integra19",
             "database": "integra_db_19",
             "odoo_bin": None,
+            "config": None,
             "target_kind": "docker",
             "host": None,
         },

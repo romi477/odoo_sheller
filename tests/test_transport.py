@@ -407,14 +407,11 @@ async def test_the_shim_really_does_close_the_descriptor(shims):
 # --- the config a local container holds goes to Odoo with -c ------------------
 
 
-def _recording_checkout(root):
-    """A checkout whose odoo-bin writes down the arguments it was given."""
-    root.mkdir(parents=True)
-    (root / "odoo").mkdir()
-    (root / "odoo" / "release.py").write_text("version_info = (19, 0)\n", encoding="utf-8")
-    odoo_bin = root / "odoo-bin"
+def _recording_bin(tmp_path):
+    """An odoo-bin that writes down the arguments it was given."""
+    odoo_bin = tmp_path / "odoo-bin"
     odoo_bin.write_text(
-        f'#!/bin/sh\nprintf "%s\\n" "$@" > "{root / "args"}"\ncat > /dev/null\n',
+        f'#!/bin/sh\nprintf "%s\\n" "$@" > "{tmp_path / "args"}"\ncat > /dev/null\n',
         encoding="utf-8",
     )
     odoo_bin.chmod(0o755)
@@ -422,36 +419,34 @@ def _recording_checkout(root):
     return odoo_bin
 
 
-def _launch(tmp_path, workspace, odoo_bin):
-    import os
+def _launch(tmp_path, config):
     import subprocess
 
-    script = build_command(
-        Target(container="c", database="db", odoo_bin=str(odoo_bin)), "pass"
-    )[6]
+    odoo_bin = _recording_bin(tmp_path)
+    target = Target(container="c", database="db", odoo_bin=str(odoo_bin), config=config)
     subprocess.run(
-        ["sh", "-c", script], input="", text=True, cwd=workspace, timeout=30, check=True,
-        env={"PATH": f"{os.path.dirname(sys.executable)}:/usr/bin:/bin",
-             "HOME": str(tmp_path), "ODOO_SHELLER_SEARCH_ROOTS": str(workspace)},
+        ["sh", "-c", build_command(target, "pass")[6]], input="", text=True,
+        timeout=30, check=True,
     )
 
-    return (odoo_bin.parent / "args").read_text(encoding="utf-8").splitlines()
+    return (tmp_path / "args").read_text(encoding="utf-8").splitlines()
 
 
-def test_a_local_launch_hands_odoo_the_config_the_container_holds(tmp_path):
+def test_a_local_launch_hands_odoo_the_config_the_probe_found(tmp_path):
     """Without -c, Odoo reads only ODOO_RC and ~/.odoorc: a dev container's
     /workspace/odoo.conf, which the probe listed databases from, went unread
     and the session dialled localhost."""
-    workspace = tmp_path / "workspace"
-    odoo_bin = _recording_checkout(workspace / "odoo")
-    conf = workspace / "odoo.conf"
-    conf.write_text("[options]\ndb_host = postgres\n", encoding="utf-8")
-    args = _launch(tmp_path, workspace, odoo_bin)
-    assert args[:3] == ["shell", "-c", str(conf)]
-    assert args[3:] == ["-d", "db", "--no-http"]
+    assert _launch(tmp_path, "/work space/odoo.conf") == [
+        "shell", "-c", "/work space/odoo.conf", "-d", "db", "--no-http",
+    ]
 
 
 def test_a_local_launch_without_a_config_passes_none(tmp_path):
-    workspace = tmp_path / "workspace"
-    odoo_bin = _recording_checkout(workspace / "odoo")
-    assert _launch(tmp_path, workspace, odoo_bin) == ["shell", "-d", "db", "--no-http"]
+    assert _launch(tmp_path, None) == ["shell", "-d", "db", "--no-http"]
+
+
+def test_the_launch_looks_nothing_up_of_its_own():
+    """One lookup, the probe's: the launch must not reach a different answer."""
+    script = build_command(TARGET, "pass")[6]
+    assert "python3" not in script
+    assert script.startswith("exec 3<&0; exec ")

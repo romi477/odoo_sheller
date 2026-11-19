@@ -130,7 +130,7 @@ the same in all six. The rest of
 ## Starting a session
 
 ```bash
-docker exec -i <container> sh -c 'cfg=$(python3 -c <locate>); exec 3<&0; exec <odoo-bin> shell ${cfg:+-c "$cfg"} -d <db> --no-http <<"OSBOOT"
+docker exec -i <container> sh -c 'exec 3<&0; exec <odoo-bin> shell [-c <config>] -d <db> --no-http <<"OSBOOT"
 <bootstrap source>
 OSBOOT'
 ```
@@ -671,8 +671,8 @@ nothing extra to add). The probe process exits the moment it has answered.
 
 **Where odoo-bin and its config are** is asked by one piece of code,
 `locate.py`'s `LOCATE_SOURCE`, at the head of every script sent into a
-container — the probe, the test listing, os_psql's runner — and in the launch
-line itself, so no two of them can disagree. Cheapest first, a later step only
+container — the probe, the test listing, os_psql's runner — so no two of them
+can disagree. Cheapest first, a later step only
 when the earlier found nothing: the usual paths (PATH, the official image's,
 Debian's); the command line of an Odoo running there, read from `/proc`, which
 names its `-c` as well; then a walk from the working directory — `docker exec`
@@ -684,7 +684,12 @@ hidden directories and system trees, and stops after 1.5s; a file named
 `[options]` section, and the config nearest the checkout wins.
 `ODOO_SHELLER_SEARCH_ROOTS`, set in the container, replaces the roots. Odoo on
 its own reads only `ODOO_RC` and `~/.odoorc`, so the launch hands the config
-found over with `-c`; with none found there is no `-c`, as before.
+over with `-c`; with none there is no `-c`, as before. It is the probe's config,
+carried with `odoo_bin` — the browser sends both, an open without `odoo_bin`
+probes for both, a replacement takes both from the journal — and never looked
+up again at launch: a second lookup could time out or land elsewhere, and Odoo
+would dial localhost with nothing to say why. A session's `os_psql` gets the
+same path; a call by container alone looks for one as the probe does.
 A major outside `SUPPORTED_MAJORS` (15 through 20) and `UNTESTED_MAJORS` (13 and
 14) is refused right here, with a specific message naming what would work,
 rather than accepted and left to fail on the first real command. 13 and 14 are

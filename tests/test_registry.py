@@ -652,6 +652,58 @@ async def test_a_missing_choice_is_named(tmp_path, monkeypatch, given, missing):
 
 
 @pytest.mark.asyncio
+# --- the config the probe found is the one the launch uses ------------------
+
+
+@pytest.mark.asyncio
+async def test_the_probe_s_config_goes_into_the_target(tmp_path, monkeypatch):
+    """Looked up once, by the probe that listed the databases. A second lookup
+    at launch could time out or land elsewhere, and Odoo then dialled
+    localhost with nothing to say why."""
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _local_probe(monkeypatch, captured, config="/workspace/odoo.conf")
+
+    registry = Registry(journal_root=tmp_path)
+    await registry.open(container="dev20", database="db")
+
+    assert captured["target"].config == "/workspace/odoo.conf"
+    assert "-c /workspace/odoo.conf" in captured["argv"][-1]
+
+
+@pytest.mark.asyncio
+async def test_a_given_config_is_taken_as_given(tmp_path, monkeypatch):
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _local_probe(monkeypatch, captured)
+
+    registry = Registry(journal_root=tmp_path)
+    await registry.open(
+        container="dev20", database="db", odoo_bin="/w/odoo-bin", config="/w/odoo.conf"
+    )
+
+    assert "probed" not in captured
+    assert captured["target"].config == "/w/odoo.conf"
+
+
+@pytest.mark.asyncio
+async def test_a_replacement_keeps_the_config_of_the_session_it_replaces(tmp_path, monkeypatch):
+    captured = {}
+    _stub_spawn_and_session(monkeypatch, captured)
+    _local_probe(monkeypatch, captured)
+    registry = Registry(journal_root=tmp_path)
+    journal = Journal(journal_path(tmp_path, "old2", "dev20", "db", datetime.now(UTC)))
+    journal.write(
+        "session_open", container="dev20", database="db", odoo_bin="/w/odoo/odoo-bin",
+        config="/w/odoo.conf", target_kind="docker", odoo="20.0",
+    )
+
+    await registry.open(replace="old2")
+
+    assert "probed" not in captured
+    assert captured["target"].config == "/w/odoo.conf"
+
+
 async def test_replacing_a_lost_session_stays_local_only(tmp_path, monkeypatch):
     """A journal records the identity slot but not how to reach it again over
     SSH. Rather than rebuild a docker target from an odoo.sh one, say so — an

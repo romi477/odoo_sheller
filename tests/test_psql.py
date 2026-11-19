@@ -213,7 +213,7 @@ def _fake_psql(tmp_path, body=None):
     return bin_dir, log
 
 
-def _run_runner(tmp_path, bin_dir, config=None, read_only="1"):
+def _run_runner(tmp_path, bin_dir, config=None, read_only="1", given=None):
     # The walk for a config stays inside tmp_path, not this machine's /opt.
     env = {"PATH": str(bin_dir), "HOME": str(tmp_path),
            "ODOO_SHELLER_SEARCH_ROOTS": str(tmp_path / "nowhere")}
@@ -223,7 +223,8 @@ def _run_runner(tmp_path, bin_dir, config=None, read_only="1"):
         env["ODOO_RC"] = str(path)
 
     return subprocess.run(
-        [sys.executable, "-I", "-c", RUNNER_SOURCE, "somedb", read_only, "32000", "15000", "32000"],
+        [sys.executable, "-I", "-c", RUNNER_SOURCE, "somedb", read_only, "32000", "15000", "32000",
+         *([given] if given is not None else [])],
         env=env,
         capture_output=True,
         text=True,
@@ -352,8 +353,23 @@ def test_build_command_for_docker():
     argv = build_command(target, read_only=True, timeout=30)
     assert argv[:6] == [docker_bin(), "exec", "-i", "odoo17", "python3", "-c"]
     assert argv[6] == RUNNER_SOURCE
-    assert argv[7:] == ["somedb", "1", "32000", "15000", "32000"]
+    assert argv[7:] == ["somedb", "1", "32000", "15000", "32000", ""]
     assert build_command(target, read_only=False, timeout=30)[8] == "0"
+
+
+def test_build_command_hands_over_the_session_s_config():
+    """A session's psql reads the config its launch was given, not a second
+    lookup that could land on another."""
+    target = Target(kind=DOCKER, container="dev20", database="db", config="/w/odoo.conf")
+    assert build_command(target, read_only=True, timeout=30)[-1] == "/w/odoo.conf"
+
+
+def test_runner_takes_the_config_it_is_given(tmp_path):
+    bin_dir, log = _fake_psql(tmp_path)
+    given = tmp_path / "given.conf"
+    given.write_text("[options]\ndb_host = postgres\n", encoding="utf-8")
+    _run_runner(tmp_path, bin_dir, "[options]\ndb_host = elsewhere\n", given=str(given))
+    assert "PGHOST=postgres" in log.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(

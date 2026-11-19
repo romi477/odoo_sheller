@@ -101,7 +101,7 @@ Facts it relies on (verified against Odoo 19):
 Startup command shape:
 
 ```bash
-docker exec -i <container> sh -c 'cfg=$(python3 -c <locate>); exec 3<&0; exec <odoo-bin> shell ${cfg:+-c "$cfg"} -d <db> --no-http <<"OSBOOT"
+docker exec -i <container> sh -c 'exec 3<&0; exec <odoo-bin> shell [-c <config>] -d <db> --no-http <<"OSBOOT"
 <bootstrap source>
 OSBOOT'
 ```
@@ -195,8 +195,8 @@ Local targets are discovered live, not configured. `docker ps` lists running
 containers; a one-shot probe inside a chosen container reports odoo-bin path,
 Odoo version, Python version, config file location, and database list (via
 `psycopg2`, which any Odoo container has). Where odoo-bin and the config are is
-`locate.py`, shared by every script sent into a container and by the launch,
-which passes the config with `-c`: the usual paths, then a running Odoo's
+`locate.py`, shared by every script sent into a container; the probe's config
+travels with `odoo_bin` to the launch, which passes it with `-c`. The lookup: the usual paths, then a running Odoo's
 command line, then a short bounded walk from the working directory and
 `/workspace`-style roots. Then the user picks a database and connects. Last used target is remembered in `localStorage`.
 

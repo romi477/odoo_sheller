@@ -245,7 +245,8 @@ class Registry:
         return target_from_records(past.iter_records())
 
     async def _docker_target(
-        self, container: str | None, database: str | None, odoo_bin: str | None
+        self, container: str | None, database: str | None, odoo_bin: str | None,
+        config: str | None = None,
     ) -> Target:
         """A local container, with odoo-bin found rather than asked for.
 
@@ -254,7 +255,8 @@ class Registry:
         `http_422` and probe every running container to learn one path. The
         probe here is the same one Connect runs, so it also refuses an
         unsupported version before anything is spawned. A caller that already
-        knows the path skips it.
+        knows the path skips it, and passes the config it found with it: the
+        launch takes the probe's config and never looks for one of its own.
         """
         for name, value in (("container", container), ("database", database)):
             if not value:
@@ -266,8 +268,9 @@ class Registry:
                     found.get("error") or f"no usable Odoo in container {container}"
                 )
             odoo_bin = found["odoo_bin"]
+            config = found.get("config")
 
-        return Target(container=container, database=database, odoo_bin=odoo_bin)
+        return Target(container=container, database=database, odoo_bin=odoo_bin, config=config)
 
     async def _remote_target(self, target_id: str) -> Target:
         """A target a human wrote down, opened by the id of its card."""
@@ -338,6 +341,7 @@ class Registry:
         container: str | None = None,
         database: str | None = None,
         odoo_bin: str | None = None,
+        config: str | None = None,
         owner: dict | None = None,
         allow_commit: bool | None = None,
         replace: str | None = None,
@@ -382,11 +386,13 @@ class Registry:
                 )
             container = container or previous["container"]
             database = database or previous["database"]
-            odoo_bin = odoo_bin or previous["odoo_bin"]
+            if not odoo_bin:
+                odoo_bin = previous["odoo_bin"]
+                config = config or previous.get("config")
         if target_id:
             target = await self._remote_target(target_id)
         else:
-            target = await self._docker_target(container, database, odoo_bin)
+            target = await self._docker_target(container, database, odoo_bin, config)
         switch: dict = {}
         docker_name = None
         if target.kind == DOCKER:

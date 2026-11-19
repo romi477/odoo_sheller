@@ -349,7 +349,9 @@ psql = shutil.which("psql")
 if not psql:
     missing("psql")
 
-odoo_bin, config = locate()
+# A session's own config, as its launch was given it; a call by container
+# alone looks for one the way the probe does.
+config = sys.argv[6] if len(sys.argv) > 6 and sys.argv[6] else locate()[1]
 if not config:
     missing("odoo config")
 
@@ -406,6 +408,7 @@ def build_command(target: Target, read_only: bool, timeout: float) -> list[str]:
     return [
         docker_bin(), "exec", "-i", target.container, "python3", "-c", RUNNER_SOURCE,
         target.database, "1" if read_only else "0", server_ms, lock_ms, server_ms,
+        target.config or "",
     ]  # fmt: skip
 
 

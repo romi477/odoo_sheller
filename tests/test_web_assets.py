@@ -4384,3 +4384,9 @@ def test_the_result_of_a_cell_is_lilac_not_the_green_of_the_editor_strings():
     assert rule is not None
     assert "color: var(--result)" in rule.group(1)
     assert "--green" not in rule.group(1)
+
+
+def test_a_session_opens_with_the_config_the_probe_found(app_js):
+    """The probe looked it up once; the launch passes that one with -c."""
+    assert "config: container.probe.config" in app_js
+    assert "config: probe.config" in app_js

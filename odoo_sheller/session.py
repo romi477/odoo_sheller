@@ -483,6 +483,7 @@ class Session:
             container=self.target.name,
             database=self.target.database,
             odoo_bin=self.target.odoo_bin,
+            config=self.target.config,
             # `kind` is the record's own type, so the target's goes under its
             # own name. Without it a journal cannot say whether reopening the
             # same target is even a thing a caller may do.

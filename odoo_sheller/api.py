@@ -184,6 +184,8 @@ class OpenBody(BaseModel):
     container: str | None = None
     database: str | None = None
     odoo_bin: str | None = None
+    # The config the probe found beside odoo_bin; the launch passes it with -c.
+    config: str | None = None
     owner: Owner | None = None
     allow_commit: bool | None = None
     replace: str | None = None
@@ -1025,6 +1027,7 @@ def create_app(registry: Registry | None = None) -> FastAPI:
                 container=body.container,
                 database=body.database,
                 odoo_bin=body.odoo_bin,
+                config=body.config,
                 owner=body.owner.model_dump() if body.owner else None,
                 allow_commit=allow_commit,
                 replace=body.replace,

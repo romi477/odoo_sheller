@@ -21,7 +21,6 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-from odoo_sheller.locate import LOCATE_SOURCE
 from odoo_sheller.names import check_ssh_name
 from odoo_sheller.paths import bootstrap_path
 from odoo_sheller.protocol import FRAME_LINE_LIMIT
@@ -105,6 +104,12 @@ class Target:
     # text and can be renamed under a live session; its id is neither, so this
     # is what a screen matches a session to its card by.
     card_id: str | None = None
+    # The local kind only: the config the probe found, handed to Odoo with -c.
+    # Odoo by itself reads only ODOO_RC and ~/.odoorc, so a dev container's
+    # /workspace/odoo.conf would go unread. Found once, by the probe that
+    # listed the databases, and never looked up again at launch: a second
+    # lookup could land elsewhere, or nowhere, and Odoo dial localhost.
+    config: str | None = None
 
     @property
     def name(self) -> str | None:
@@ -157,22 +162,10 @@ def _script(target: Target, source: str) -> str:
         # choice that does not exist: the build has exactly one database.
         launch = "odoo-bin shell"
     else:
-        # Odoo by itself reads only ODOO_RC and ~/.odoorc, so a config that
-        # lives anywhere else — a dev container's /workspace/odoo.conf — is
-        # handed over with -c: the one the probe listed databases from, found
-        # by the same code. Looked up here, inside the container and before
-        # the pipe moves to fd 3, rather than carried from the probe through
-        # every caller. None found is no -c, as before.
-        locate = shlex.quote(LOCATE_SOURCE + "\nprint(locate()[1] or '')\n")
+        config = f"-c {shlex.quote(target.config)} " if target.config else ""
         launch = (
-            f"{shlex.quote(target.odoo_bin)} shell ${{cfg:+-c \"$cfg\"}} "
+            f"{shlex.quote(target.odoo_bin)} shell {config}"
             f"-d {shlex.quote(target.database)} --no-http"
-        )
-
-        return (
-            f"cfg=$(python3 -c {locate} </dev/null 2>/dev/null); "
-            f'exec 3<&0; exec {launch} <<"{HEREDOC_MARKER}"\n'
-            f"{source}\n{HEREDOC_MARKER}\n"
         )
 
     return (

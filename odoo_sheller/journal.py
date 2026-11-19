@@ -493,6 +493,7 @@ def target_from_records(records: list[dict]) -> dict | None:
         "container": opened["container"],
         "database": opened["database"],
         "odoo_bin": opened.get("odoo_bin"),
+        "config": opened.get("config"),
         "target_kind": opened.get("target_kind") or "docker",
         "host": opened.get("host"),
     }

@@ -2325,6 +2325,7 @@ async function startSession(name) {
       container: name,
       database,
       odoo_bin: container.probe.odoo_bin,
+      config: container.probe.config,
       client_token: token,
     }));
     const opening = state.startups.get(name);
@@ -3735,6 +3736,7 @@ async function duplicateSession(id) {
         container: record.info.container,
         database: record.info.database,
         odoo_bin: probe.odoo_bin,
+        config: probe.config,
       };
     }
     const info = await request(() => api.post('/api/sessions', opening));
