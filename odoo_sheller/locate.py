@@ -44,8 +44,7 @@ def _standard_bins():
 
 
 def _standard_configs():
-    return [os.environ.get("ODOO_RC"), "/etc/odoo/odoo.conf", "/etc/odoo.conf",
-            "/opt/odoo.conf"]
+    return ["/etc/odoo/odoo.conf", "/etc/odoo.conf", "/opt/odoo.conf"]
 
 
 def _is_config(path):
@@ -114,7 +113,13 @@ def search(roots, depth=SEARCH_DEPTH, budget=SEARCH_BUDGET):
 
 
 def running(proc="/proc"):
-    """odoo-bin and its config, from the command line of an Odoo running here."""
+    """odoo-bin and its config, from the command line of an Odoo running here.
+
+    An argument counts only when it is a file named odoo-bin or odoo: in
+    `gosu odoo …`, `su odoo` or `chown -R odoo /data` the word is a user, and
+    the scan goes on past it. Relative paths, the config's included, are the
+    process's own, read against its cwd.
+    """
     try:
         pids = [name for name in os.listdir(proc) if name.isdigit()]
     except OSError:
@@ -125,16 +130,23 @@ def running(proc="/proc"):
                 raw = handle.read()
         except OSError:
             continue
+        try:
+            cwd = os.readlink(os.path.join(proc, pid, "cwd"))
+        except OSError:
+            cwd = None
+
+        def absolute(path):
+            if os.path.isabs(path):
+                return path
+            return os.path.normpath(os.path.join(cwd, path)) if cwd else None
+
         args = [part.decode("utf-8", "replace") for part in raw.split(b"\0") if part]
         for index, arg in enumerate(args):
             if os.path.basename(arg) not in ("odoo-bin", "odoo"):
                 continue
-            binary = arg
-            if not os.path.isabs(binary):
-                try:
-                    binary = os.path.join(os.readlink(os.path.join(proc, pid, "cwd")), binary)
-                except OSError:
-                    continue
+            binary = absolute(arg)
+            if not binary or not os.path.isfile(binary):
+                continue
             config = None
             rest = args[index + 1:]
             for position, option in enumerate(rest):
@@ -144,7 +156,7 @@ def running(proc="/proc"):
                 if option.startswith("--config="):
                     config = option[len("--config="):]
                     break
-            return binary, config
+            return binary, absolute(config) if config else None
     return None, None
 
 
@@ -185,7 +197,7 @@ def locate(standard=None, configs=None, roots=None, proc="/proc"):
             odoo_bin = path
             break
     live_bin, live_config = running(proc)
-    if odoo_bin is None and live_bin and os.path.isfile(live_bin):
+    if odoo_bin is None and live_bin:
         odoo_bin = live_bin
     found = None
     if odoo_bin is None:
@@ -193,7 +205,9 @@ def locate(standard=None, configs=None, roots=None, proc="/proc"):
         odoo_bin = found[0]
     near = [os.path.join(os.path.dirname(odoo_bin), "odoo.conf")] if odoo_bin else []
     home = [os.path.expanduser("~/.odoorc")] if default else []
-    for path in configs + [live_config] + near + home:
+    # What Odoo itself reads first, then what the server running beside the
+    # shell was started with, then the image's usual places.
+    for path in [os.environ.get("ODOO_RC"), live_config] + configs + near + home:
         if path and os.path.isfile(path):
             return odoo_bin, path
     if odoo_bin is None:

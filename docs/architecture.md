@@ -675,7 +675,8 @@ container — the probe, the test listing, os_psql's runner — so no two of the
 can disagree. Cheapest first, a later step only
 when the earlier found nothing: the usual paths (PATH, the official image's,
 Debian's); the command line of an Odoo running there, read from `/proc`, which
-names its `-c` as well; then a walk from the working directory — `docker exec`
+names its `-c` as well — an argument counts only as a file, so `gosu odoo` is a
+user, and a relative path is read against that process's cwd; then a walk from the working directory — `docker exec`
 starts in the container's WorkingDir, where a dev compose file mounts its
 checkout — and `/workspace`, `/home`, `/opt`, `/srv`, `/mnt`, `/app`, `/code`,
 `/odoo`. The walk is four levels deep, steps over addons, Odoo's own package,
@@ -684,7 +685,8 @@ hidden directories and system trees, and stops after 1.5s; a file named
 `[options]` section, and the config nearest the checkout wins — taken from
 the walk only when the walk found odoo-bin too; one found otherwise takes a
 config beside it or a level up, never another instance's from across the disk.
-`ODOO_SHELLER_SEARCH_ROOTS`, set in the container, replaces the roots. Odoo on
+The config is `ODOO_RC` first, as Odoo reads it, then the running server's `-c`,
+then the image's usual places. `ODOO_SHELLER_SEARCH_ROOTS`, set in the container, replaces the roots. Odoo on
 its own reads only `ODOO_RC` and `~/.odoorc`, so the launch hands the config
 over with `-c`; with none there is no `-c`, as before. It is the probe's config,
 carried with `odoo_bin` — the browser sends both, an open without `odoo_bin`

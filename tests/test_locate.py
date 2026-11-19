@@ -87,22 +87,78 @@ def test_the_search_reports_configs_with_an_options_section(locate, tmp_path):
     assert configs == [str(good)]
 
 
+def _process(proc, pid, *args, cwd=None):
+    (proc / str(pid)).mkdir(parents=True)
+    (proc / str(pid) / "cmdline").write_bytes(b"".join(str(a).encode() + b"\0" for a in args))
+    if cwd is not None:
+        (proc / str(pid) / "cwd").symlink_to(cwd)
+
+
 def test_a_running_odoo_names_its_binary_and_config(locate, tmp_path):
     proc = tmp_path / "proc"
-    (proc / "1").mkdir(parents=True)
-    (proc / "1" / "cmdline").write_bytes(b"/bin/sh\0-c\0while sleep 1000; do :; done\0")
-    (proc / "77").mkdir()
-    (proc / "77" / "cmdline").write_bytes(
-        b"python3\0/workspace/odoo/odoo-bin\0-c\0/workspace/odoo.conf\0--dev=all\0"
-    )
-    assert locate["running"](str(proc)) == ("/workspace/odoo/odoo-bin", "/workspace/odoo.conf")
+    odoo_bin = checkout(tmp_path / "workspace" / "odoo")
+    _process(proc, 1, "/bin/sh", "-c", "while sleep 1000; do :; done")
+    _process(proc, 77, "python3", odoo_bin, "-c", "/workspace/odoo.conf", "--dev=all")
+    assert locate["running"](str(proc)) == (str(odoo_bin), "/workspace/odoo.conf")
 
 
-@pytest.mark.parametrize("flag", [[b"--config=/w/o.conf"], [b"--config", b"/w/o.conf"]])
+@pytest.mark.parametrize("flag", [["--config=/w/o.conf"], ["--config", "/w/o.conf"]])
 def test_a_running_odoo_config_flag_in_either_spelling(locate, tmp_path, flag):
-    (tmp_path / "9").mkdir()
-    (tmp_path / "9" / "cmdline").write_bytes(b"\0".join([b"/w/odoo-bin", *flag]) + b"\0")
-    assert locate["running"](str(tmp_path)) == ("/w/odoo-bin", "/w/o.conf")
+    odoo_bin = checkout(tmp_path / "w")
+    _process(tmp_path / "proc", 9, odoo_bin, *flag)
+    assert locate["running"](str(tmp_path / "proc")) == (str(odoo_bin), "/w/o.conf")
+
+
+def test_a_user_named_odoo_is_not_the_binary(locate, tmp_path):
+    """`gosu odoo …`, `su odoo`, `chown -R odoo /data`: the word is a user, and
+    the scan has to go on to the argument, or the process, that is Odoo."""
+    proc = tmp_path / "proc"
+    odoo_bin = checkout(tmp_path / "opt" / "odoo")
+    _process(proc, 1, "su", "odoo", cwd=tmp_path)
+    _process(proc, 2, "chown", "-R", "odoo", "/data", cwd=tmp_path)
+    _process(proc, 3, "gosu", "odoo", odoo_bin, "-c", "/x.conf", cwd=tmp_path)
+    assert locate["running"](str(proc)) == (str(odoo_bin), "/x.conf")
+
+
+def test_a_relative_config_is_the_process_s_own(locate, tmp_path):
+    """`cd /srv/odoo && ./odoo-bin -c odoo.conf`: relative to where it ran,
+    not to where docker exec happens to start."""
+    srv = tmp_path / "srv"
+    odoo_bin = checkout(srv)
+    _process(tmp_path / "proc", 5, "./odoo-bin", "-c", "odoo.conf", cwd=srv)
+    assert locate["running"](str(tmp_path / "proc")) == (str(odoo_bin), str(srv / "odoo.conf"))
+
+
+def test_the_running_server_s_config_beats_the_image_s(locate, tmp_path, monkeypatch):
+    """The image ships /etc/odoo/odoo.conf; compose runs `-c custom.conf`. The
+    shell belongs beside the server, with its addons and its database."""
+    monkeypatch.delenv("ODOO_RC", raising=False)
+    shipped = tmp_path / "etc" / "odoo.conf"
+    shipped.parent.mkdir()
+    shipped.write_text("[options]\n", encoding="utf-8")
+    custom = tmp_path / "etc" / "custom.conf"
+    custom.write_text("[options]\n", encoding="utf-8")
+    odoo_bin = checkout(tmp_path / "opt" / "odoo")
+    _process(tmp_path / "proc", 4, odoo_bin, "-c", custom)
+    found = locate["locate"](
+        standard=[str(odoo_bin)], configs=[str(shipped)], roots=[], proc=str(tmp_path / "proc"),
+    )
+    assert found == (str(odoo_bin), str(custom))
+
+
+def test_odoo_rc_beats_the_running_server(locate, tmp_path, monkeypatch):
+    """What Odoo itself would read first."""
+    rc = tmp_path / "rc.conf"
+    rc.write_text("[options]\n", encoding="utf-8")
+    monkeypatch.setenv("ODOO_RC", str(rc))
+    custom = tmp_path / "custom.conf"
+    custom.write_text("[options]\n", encoding="utf-8")
+    odoo_bin = checkout(tmp_path / "opt" / "odoo")
+    _process(tmp_path / "proc", 4, odoo_bin, "-c", custom)
+    found = locate["locate"](
+        standard=[str(odoo_bin)], configs=[], roots=[], proc=str(tmp_path / "proc"),
+    )
+    assert found == (str(odoo_bin), str(rc))
 
 
 def test_no_proc_is_no_running_odoo(locate, tmp_path):
