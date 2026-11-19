@@ -1233,6 +1233,45 @@ async def test_exec_stderr_excludes_lines_from_before_the_call(tmp_path):
     await session.close()
 
 
+async def _feed_status_when_ready(tmp_path, run):
+    """What a watcher fetching the feed on the `ready` event would read.
+
+    The page reloads history the moment `ready` arrives and gets no further
+    event for that command, so whatever the journal says then is what the
+    cell keeps.
+    """
+    seen = []
+
+    def watch(event):
+        if event.get("kind") == "state" and event.get("state") == "ready":
+            asyncio.get_running_loop().call_soon(
+                lambda: seen.append(
+                    feed_from_records(list(journal.iter_records()))["entries"][-1]["status"]
+                )
+            )
+
+    session = await make_session(tmp_path, on_event=watch)
+    journal = session.journal
+    await session.start()
+    await asyncio.sleep(0)  # the snapshot start's own `ready` queued
+    seen.clear()
+    await run(session)
+    await asyncio.sleep(0.1)
+    await session.close()
+
+    return seen
+
+
+async def test_a_command_is_journalled_done_by_the_time_the_session_is_ready(tmp_path):
+    seen = await _feed_status_when_ready(tmp_path, lambda session: session.execute("1"))
+    assert seen == ["done"]
+
+
+async def test_a_test_run_is_journalled_done_by_the_time_the_session_is_ready(tmp_path):
+    seen = await _feed_status_when_ready(tmp_path, lambda session: session.run_test("sale"))
+    assert seen == ["done"]
+
+
 async def test_a_handover_remembers_whose_pending_work_it_carries(tmp_path):
     """The rule was documented and the agent promised to check it by hand.
     Making it a field is what stops the next one committing someone's work."""

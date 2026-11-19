@@ -760,16 +760,15 @@ class Session:
         window = _StderrWindow(EXEC_STDERR_LIMIT)
         self._stderr_collectors.append(window)
         try:
+            # `docker exec` relays stdout and stderr on their own, so a line
+            # Odoo logged before answering can reach us after the answer, with
+            # nothing collected yet to say it is coming. Only a read
+            # (os_source) skips the wait: it logs nothing anyone asked for.
             result = await self._request(
                 exec_frame(request_id, code), timeout,
                 account="read" if read_only else "exec",
+                drain=lambda: bool(window.total) or not read_only,
             )
-            if window.total or not read_only:
-                # `docker exec` relays stdout and stderr on their own, so a line
-                # Odoo logged before answering can reach us after the answer,
-                # with nothing collected yet to say it is coming. Only a read
-                # (os_source) skips the wait: it logs nothing anyone asked for.
-                await asyncio.sleep(STDERR_DRAIN)
         finally:
             self._stderr_collectors.remove(window)
         result = {
@@ -873,9 +872,9 @@ class Session:
         try:
             # Booked, shown and abandoned as a run whatever its frame.
             result = await self._request(
-                frame_for(request_id), timeout, account="run_test", activity="run_test"
+                frame_for(request_id), timeout, account="run_test", activity="run_test",
+                drain=lambda: True,  # let the reader catch up on the tail
             )
-            await asyncio.sleep(STDERR_DRAIN)  # let the reader catch up on the tail
         except TimeoutError:
             # Past its ceiling, and still running and logging in the
             # container: the window and the parsers stay on until
@@ -1014,14 +1013,20 @@ class Session:
 
     async def _request(
         self, frame: dict, timeout: float, account: str | None = None,
-        activity: str | None = None,
+        activity: str | None = None, drain=False,
     ) -> dict:
         """Send one frame and wait for its answer.
 
         `account` is how a late answer is booked if this one is abandoned —
         the frame type unless the caller says otherwise; see
         `_settle_abandoned`. `activity` is what the session says it is doing,
-        the frame type by default.
+        the frame type by default. `drain`, a callable asked once the answer
+        is in, says whether to wait `STDERR_DRAIN` for the log tail.
+
+        That wait happens here, still busy, so that a caller journals its
+        result before anything can yield: `ready` is when a watcher reloads
+        the feed, and gets no other event for this command. A result written
+        after the drain left the cell `running` for good.
         """
         self._ensure_acceptable(frame.get("t", ""))
 
@@ -1040,7 +1045,11 @@ class Session:
         abandoned = False
         try:
 
-            return await asyncio.wait_for(waiter, timeout)
+            answer = await asyncio.wait_for(waiter, timeout)
+            if drain and drain():
+                await asyncio.sleep(STDERR_DRAIN)
+
+            return answer
         except TimeoutError:
             abandoned = True
             self._abandoned_id = frame.get("id")

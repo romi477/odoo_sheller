@@ -28,6 +28,11 @@ shows the entry for Codex too, and colours its snippets.
 
 ### Fixed
 
+- A command someone else ran no longer stays `running` in the feed of a session
+  you watch. The session went `ready` before the result was journalled — while
+  the log tail drained — and the page, reloading the feed on `ready`, read the
+  command as still in flight and got no later event to correct it.
+
 - A card's badge reads `connected`, or `connected · 2` for several sessions, and
   never wraps; the databases are in its tooltip. A long database name in the
   badge pushed the card's keys onto two lines.
