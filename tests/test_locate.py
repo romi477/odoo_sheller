@@ -6,6 +6,8 @@ namespace and its functions are called against a tree under tmp_path.
 """
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 
@@ -13,6 +15,19 @@ import pytest
 
 from odoo_sheller import discovery
 from odoo_sheller.psql import RUNNER_SOURCE
+
+# The usual places on the machine running these tests; one there would be
+# found first, and a test about the walk would read this machine instead.
+STANDARD = ("/opt/odoo/odoo-bin", "/usr/bin/odoo", "/odoo/odoo-bin", "/mnt/odoo/odoo-bin",
+            "/usr/lib/python3/dist-packages/odoo-bin", "/etc/odoo/odoo.conf",
+            "/etc/odoo.conf", "/opt/odoo.conf")
+
+
+@pytest.fixture(autouse=True)
+def _no_odoo_rc(monkeypatch):
+    """locate() reads ODOO_RC first, as Odoo does; a developer's own must not
+    decide these tests."""
+    monkeypatch.delenv("ODOO_RC", raising=False)
 
 
 @pytest.fixture
@@ -238,6 +253,10 @@ def test_the_roots_can_be_named_in_the_environment(locate, tmp_path, monkeypatch
     assert found == (str(odoo_bin), None)
 
 
+@pytest.mark.skipif(
+    any(os.path.exists(path) for path in STANDARD) or shutil.which("odoo-bin"),
+    reason="this machine has an Odoo of its own in a usual place",
+)
 def test_the_probe_finds_a_checkout_in_the_working_directory(tmp_path):
     """docker exec starts in the container's WorkingDir — /workspace in a
     compose file that keeps the checkout there."""
